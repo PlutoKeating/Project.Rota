@@ -30,16 +30,24 @@
 
 ```
 ┌─────────────────────────────────────────────┐
-│ 界面层  src/client   React + Tailwind        │
+│ 界面层  src/client   9 个页面，hash 路由      │
 ├─────────────────────────────────────────────┤
-│ 接口层  src/worker/api  Hono 路由 / 鉴权      │
+│ 接口层  src/worker/api  Hono 子路由           │
+│    terms / people / courses / tasks          │
+│    schedule / fairness / imports / admin     │
+│    auth（占位） / export                      │
 ├─────────────────────────────────────────────┤
 │ 领域层  src/worker/domain                    │
-│    time.ts    校历网格、周次展开              │
-│    assign.ts  硬过滤 + 公平打分 + 贪心        │
-│    （待建）availability.ts / ledger.ts       │
+│    time.ts         校历网格、周次展开         │
+│    availability.ts 课表 − 请假 − 跨部门       │
+│    assign.ts       加权打分 + 稳定性 tie-break│
+│    ledger.ts       公平账本、窗口、重算        │
+│    scheduler.ts    试排 / 分配 / 自动排        │
 ├─────────────────────────────────────────────┤
-│ 存储层  src/worker/db   D1 查询               │
+│ 解析层  src/worker/import  xlsx / CSV / ICS   │
+│ 模型层  src/worker/llm     供应商网关          │
+├─────────────────────────────────────────────┤
+│ 存储层  D1（SQL）/ R2（原件）/ KV（配置）      │
 ├─────────────────────────────────────────────┤
 │ 本体层  schema/rota.yaml → migrations/*.sql  │
 └─────────────────────────────────────────────┘
@@ -75,6 +83,8 @@ GET /api/terms       → Worker → Hono → D1
 
 **关键点**：模型解析结果**永不直接落库**，必须先经过 `needs_review`。课表错一格，后面所有排班都是错的。
 
+已实现：`src/worker/import/parse.ts`（SheetJS 读 xlsx/csv，自研 VEVENT 读 ics）、`vision.ts`（截图走视觉模型）、`api/imports.ts`（上传 → R2 → 解析 → 确认 → 落库）。确认页允许改解析结果后再落库。
+
 ### 5.2 排班
 
 ```
@@ -84,8 +94,10 @@ GET /api/terms       → Worker → Hono → D1
   → 打分排序（assign.ts）
   → 贪心分配：候选最少的班次优先排，避免"好排的排完、难排的没人"
   → 写 Assignment + reason，更新 FairnessStat
-  → 导出 / 通知
+  → 导出 CSV
 ```
+
+已实现：`domain/scheduler.ts` 的 `previewShift` / `assignShift` / `autoAssignTask` / `unassign`。试排只读；分配用 D1 batch 把 assignment、班次状态、账本、审计一次写入。
 
 ### 5.3 公平结转
 
@@ -158,7 +170,10 @@ wrangler deploy     # 或 pnpm deploy
 
 ## 12. 已知风险
 
-1. **课表解析**是最大不确定性：教务导出的 Excel 格式各校不同，视觉模型也可能读错。缓解：先做"解析 → 人工确认"两步，不追求全自动。
-2. **时区**：目前固定 `+08:00`。若出现跨时区成员，需要把 `timezone` 用起来（表里已留字段）。
-3. **并发排班**：两个管理员同时排同一时段可能重复占人。缓解：分配走单条 SQL 事务 + 唯一键兜底。
-4. **公平的口径争议**：权重是拍出来的，必须允许管理员调参并留痕。
+1. **课表解析**是最大不确定性。已支持中文表头别名、无表头列序猜测、单双周与周段；不支持 GBK 编码、Excel 合并单元格向下填充、非 WEEKLY 的重复规则。缓解：解析结果一律先过人工确认。
+2. **时区**：固定 `+08:00`（表里留了 `timezone` 字段，尚未使用）。ICS 的 TZID 被忽略。
+3. **并发排班**：两人同时排同一班次，靠 `assignment(shift_id, person_id)` 唯一键与「人数已满」检查兜底；跨班次的"同一人同一时刻"没有数据库级约束，靠试排时的占用检查，极端并发下仍有窗口。
+4. **导入 apply 非整单事务**：按 meeting 分批写，中途失败可能留下部分课程（状态仍为 `needs_review`，可重试）。
+5. **公平口径**：权重是拍出来的，后台可调，改动会写审计。
+6. **本机无法运行 workerd**：`pnpm dev` 在 Android/proot 下起不来，验证依赖 46 个测试（含真实 SQL 的端到端）。
+7. **通知**：只做 CSV 导出，邮件/短信未实现。
