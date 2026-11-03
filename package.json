@@ -8,13 +8,12 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "deploy": "pnpm check && vite build && pnpm db:remote && wrangler deploy",
+    "deploy": "pnpm check && vite build && wrangler deploy",
     "typecheck": "tsc -p tsconfig.worker.json --noEmit && tsc -p tsconfig.client.json --noEmit",
-    "test": "vitest run",
-    "db:local": "wrangler d1 migrations apply rota --local",
-    "db:remote": "wrangler d1 migrations apply rota --remote",
+    "test": "vitest run && node --test storage/server.test.mjs",
     "gen": "bash scripts/gen.sh",
-    "check": "pnpm typecheck && pnpm test"
+    "check": "pnpm typecheck && pnpm test",
+    "data:dev": "node --env-file=.env storage/server.mjs"
   },
   "dependencies": {
     "hono": "^4.6.14",

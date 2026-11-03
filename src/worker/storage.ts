@@ -5,15 +5,17 @@ import { HttpError } from "./lib/core";
 export function fileStore(env: Env) {
   if (env.FILES) return env.FILES;
   async function request(method: string, key: string, body?: ArrayBuffer, contentType?: string) {
-    if (!env.STORAGE_URL || !env.STORAGE_AUTHORIZATION) throw new HttpError(503, "unavailable", "文件存储尚未配置");
-    const base = new URL(env.STORAGE_URL);
-    if (base.protocol !== "https:") throw new HttpError(503, "unavailable", "文件存储必须使用 HTTPS");
+    const endpoint = env.DATA_SERVICE_URL ?? env.STORAGE_URL;
+    const authorization = env.DATA_SERVICE_AUTHORIZATION ?? env.STORAGE_AUTHORIZATION;
+    if (!endpoint || !authorization) throw new HttpError(503, "unavailable", "文件存储尚未配置");
+    const base = new URL(endpoint);
+    if (base.protocol !== "https:" && !(env.APP_ENV === "development" && ["localhost", "127.0.0.1"].includes(base.hostname))) throw new HttpError(503, "unavailable", "文件存储必须使用 HTTPS");
     const url = new URL(base.href.replace(/\/$/, "") + "/" + key.split("/").map(encodeURIComponent).join("/"));
     let res: Response;
     try {
       // workerd only supports follow/manual; inspect redirects without forwarding credentials.
       res = await fetch(url, { method, body, redirect: "manual", signal: AbortSignal.timeout(30_000),
-        headers: { Authorization: env.STORAGE_AUTHORIZATION, "Content-Type": contentType ?? "application/octet-stream" } });
+        headers: { Authorization: authorization, "Content-Type": contentType ?? "application/octet-stream" } });
     } catch {
       throw new HttpError(502, "storage_error", "文件存储连接失败，请稍后重试");
     }

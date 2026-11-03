@@ -8,11 +8,11 @@
 
 - `src/client`：React 19、Tailwind 4、hash 路由，九个业务页面。登录门禁先请求 `/api/auth/me`；会话失效后回到登录页。
 - `src/worker/api`：Hono 接口、权限、输入校验与审计。
-- `src/worker/domain`：时间展开、可用性、评分及排班/账本服务。纯评分与时间函数不依赖运行时；排班和可用性服务直接使用 D1。这与早期“所有领域代码不依赖 D1”的设计不同，以实际源码为准。
+- `src/worker/domain`：时间展开、可用性、评分及排班/账本服务。纯评分与时间函数不依赖运行时；排班和可用性服务使用 D1 兼容 SQL 接口访问 ECS SQLite。这与早期“所有领域代码不依赖 D1”的设计不同，以实际源码为准。
 - `src/worker/import`：Excel/CSV/ICS 与视觉识别。识别结果必须先人工确认。
 - `src/worker/llm`：OpenAI-compatible、Anthropic、Google 与 Workers AI 网关。配置每次从数据库读取，后台更新立即生效；不存在进程缓存。
 - `src/worker/storage.ts`：通用 HTTPS 文件存储适配器。生产使用独立存储服务；测试或其他部署可提供 R2 兼容绑定。
-- D1 保存业务、管理员、会话和授权流程；KV 保存应用设置与配置版本。文件服务地址和凭据仅通过 Worker Secrets 注入。
+- ECS 独立数据服务保存业务、管理员、会话、授权流程、应用设置及原件；SQLite WAL 提供事务与持久化。Worker 不绑定 D1/KV/R2。数据服务地址和凭据仅通过 Worker Secrets 注入。详见 [数据服务架构](../storage/docs/ARCHITECTURE.md)。
 
 `schema/rota.yaml` 定义领域模型，`0001_init.sql` 是初始生成结果。后续迁移增量维护：`0002_auth.sql` 定义运行时认证存储，`0003_assignment_guards.sql` 提供事务约束，`0004_admin_guard.sql` 防止停用最后一个所有者。不得改写已部署迁移。
 
@@ -22,11 +22,11 @@
 
 ## 4. 认证与权限
 
-身份来源为 `https://id.plutokeating.beer/` 的公开 OIDC 协议。使用 `oauth4webapi` 实现授权码 + PKCE S256、state、nonce、发现文档和 JWKS 验签，校验 issuer/audience/有效期。授权流程保存在 D1，10 分钟有效，回调原子消费一次，并绑定浏览器 HttpOnly Cookie。
+身份来源为 `https://id.plutokeating.beer/` 的公开 OIDC 协议。使用 `oauth4webapi` 实现授权码 + PKCE S256、state、nonce、发现文档和 JWKS 验签，校验 issuer/audience/有效期。授权流程保存在 ECS SQLite，10 分钟有效，回调原子消费一次，并绑定浏览器 HttpOnly Cookie。
 
 验证成功后只允许 `admin_user` 中启用的 subject 登录，不自动注册管理员、不以“第一个登录的人”为所有者。初始所有者通过私有部署操作加入数据库。后续由所有者在设置页维护名单。
 
-会话为随机 opaque token，D1 只保存 SHA-256 摘要，8 小时有效。`__Host-` Cookie 为 HttpOnly、Secure、SameSite=Lax、Path=/。每次请求查询管理员启用状态与角色，退出删除服务端会话，角色变更撤销该账号全部会话。
+会话为随机 opaque token，SQLite 只保存 SHA-256 摘要，8 小时有效。`__Host-` Cookie 为 HttpOnly、Secure、SameSite=Lax、Path=/。每次请求查询管理员启用状态与角色，退出删除服务端会话，角色变更撤销该账号全部会话。
 
 - `admin`：业务数据读写与导出。
 - `owner`：另可访问配置、供应商、审计和管理员授权。
@@ -37,13 +37,13 @@
 
 ## 5. 导入与文件存储
 
-上传（上限 5 MiB）→ HTTPS 文件服务保存原件 → D1 导入任务 → 解析 → `needs_review` → 人工修改和确认 → 单个 D1 batch 提交所有课程、规则、选课、格子、任务状态与审计。
+上传（上限 5 MiB）→ HTTPS 文件服务保存原件 → SQLite 导入任务 → 解析 → `needs_review` → 人工修改和确认 → 单个 SQL batch 提交所有课程、规则、选课、格子、任务状态与审计。
 
 先完成全单校验与 SQL 计划，再开始写入，因此后续课程冲突不留下前半份导入。一次确认限制 1–100 门课程；重复的课程/教师组合要求先合并。共享课程仍有其他选课人时禁止 replace。
 
 截图识别若所有课程时段均不合法，会重试一次，再失败则明确报告解析失败，不能把全部丢弃的课程当作成功。单节课的起止节次必须相同。
 
-文件服务提供带认证的 PUT/DELETE；出站必须 HTTPS、使用 workerd 支持的 manual 模式拒绝重定向、30 秒超时，删除不存在的对象视为成功。文件服务与 D1 不构成分布式事务；上传后数据库创建失败会尽力清理原件，删除失败允许重试。
+文件服务提供带认证的 PUT/DELETE；出站必须 HTTPS、使用 workerd 支持的 manual 模式拒绝重定向、30 秒超时，删除不存在的对象视为成功。文件服务与 SQLite 不构成分布式事务；上传后数据库创建失败会尽力清理原件，删除失败允许重试。
 
 单次调课通过 occurrence 修改目标格子，停课使用 cancelled；全体选课人同步生效。重算 occurrence 会覆盖单次调整。
 
@@ -59,9 +59,9 @@
 
 ## 7. 部署与验证
 
-Cloudflare Worker 同时部署前端与 API，D1/KV/Workers AI 绑定见 `wrangler.jsonc`。GitHub Actions 执行检查和构建；Workers Builds 连接 GitHub main 自动发布。部署命令先迁移 D1 再发布 Worker。具体步骤见 [QUICK_START.md](QUICK_START.md)。
+Cloudflare Worker 同时部署前端与 API，Workers AI 绑定见 `wrangler.jsonc`。GitHub Actions 执行检查和构建，可通过受限 SSH 更新 ECS 数据容器；Workers Builds 连接 GitHub main 自动发布 Worker。SQLite 迁移由数据容器启动时执行。具体步骤见 [QUICK_START.md](QUICK_START.md)。
 
-私有文件存储的容器、持久卷、凭据、隧道与备份由私有运维记录管理，公开仓库只说明存储协议。
+私有数据存储的容器、持久卷、凭据、隧道与备份由私有运维记录管理，公开仓库只说明存储协议。
 
 ## 8. 已知边界
 

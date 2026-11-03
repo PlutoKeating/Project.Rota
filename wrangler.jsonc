@@ -15,20 +15,6 @@
   "observability": {
     "enabled": true
   },
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "rota",
-      "database_id": "47d60d93-6c07-4cef-b00f-c9f75616faef",
-      "migrations_dir": "migrations"
-    }
-  ],
-  "kv_namespaces": [
-    {
-      "binding": "CONFIG",
-      "id": "ee190d35e33244cbac6e51dc3ed5baba"
-    }
-  ],
   "vars": {
     "APP_ENV": "production",
     "OIDC_ISSUER": "https://id.plutokeating.beer/",

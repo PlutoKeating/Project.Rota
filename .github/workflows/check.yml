@@ -17,3 +17,24 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm build
+  deploy-data:
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ECS_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: rota-data-production
+      cancel-in-progress: false
+    steps:
+      - name: Deploy data service through a restricted SSH command
+        env:
+          ECS_HOST: ${{ secrets.ECS_HOST }}
+          ECS_PORT: ${{ secrets.ECS_PORT }}
+          ECS_USER: ${{ secrets.ECS_USER }}
+          ECS_DEPLOY_KEY: ${{ secrets.ECS_DEPLOY_KEY }}
+          ECS_KNOWN_HOSTS: ${{ secrets.ECS_KNOWN_HOSTS }}
+        run: |
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$ECS_DEPLOY_KEY" > ~/.ssh/rota_deploy
+          printf '%s\n' "$ECS_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/rota_deploy -p "$ECS_PORT" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$ECS_USER@$ECS_HOST" deploy-rota

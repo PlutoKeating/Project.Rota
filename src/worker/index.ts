@@ -14,6 +14,8 @@ import type { Env } from "./env";
 import { getCurrentUser, requireSameOrigin } from "./auth";
 import { HttpError } from "./lib/core";
 
+import { remoteData } from "./remote-data";
+
 const app = new Hono<{ Bindings: Env }>();
 
 app.onError((err, c) => {
@@ -22,6 +24,11 @@ app.onError((err, c) => {
   }
   console.error("[unhandled]", err);
   return c.json({ error: { code: "internal", message: "服务器内部错误" } }, 500);
+});
+
+app.use("/api/*", async (c, next) => {
+  if (c.env.DATA_SERVICE_URL) c.env = { ...c.env, ...remoteData(c.env) };
+  await next();
 });
 
 app.get("/api/health", async (c) => {

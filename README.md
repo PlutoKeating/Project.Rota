@@ -36,7 +36,8 @@ GitHub Actions 检查提交，Cloudflare Workers Builds 连接仓库后自动构
 ```bash
 pnpm install
 cp .dev.vars.example .dev.vars
-pnpm db:local     # 建本地 D1
+cp .env.example .env
+pnpm data:dev     # 独立终端运行 SQLite / 设置 / 文件服务
 pnpm dev          # http://localhost:5173（普通 Linux/macOS）
 ```
 
@@ -57,15 +58,15 @@ pnpm dev          # http://localhost:5173（普通 Linux/macOS）
 flowchart TB
     A[React 19 + Tailwind 4<br/>src/client] -->|/api/*| B[Hono<br/>src/worker/api]
     B --> C[领域层<br/>availability / assign / ledger / scheduler]
-    C --> E[(D1 / SQLite)]
+    C --> E[HTTPS 数据服务 / ECS SQLite]
     B --> F[HTTPS 文件服务<br/>课表原件]
-    B --> G[(KV<br/>settings / 配置版本)]
+    B --> E
     C --> H[LLM 网关<br/>OpenAI / Anthropic / Google]
     I[schema/rota.yaml] -->|LinkML| J[migrations/*.sql]
     J --> E
 ```
 
-**本体层**定义业务数据，纯评分函数处理普通对象，排班与可用性服务使用 D1，**接口层**负责权限、拼装与审计。测试在 Node.js 24 的真实 SQLite 上执行。
+**本体层**定义业务数据，纯评分函数处理普通对象，排班与可用性服务通过 HTTPS 访问 ECS SQLite，**接口层**负责权限、拼装与审计。测试在 Node.js 24 的真实 SQLite 上执行。
 
 ## 文档
 
@@ -99,6 +100,7 @@ src/worker/api/       Hono 路由
 src/worker/import/    Excel / CSV / ICS / 截图解析
 src/worker/llm/       模型网关
 src/client/           React 界面
+storage/              ECS 数据服务、在线备份与容器镜像
 test/                 单测 + 真实 SQL 的集成测试
 ```
 

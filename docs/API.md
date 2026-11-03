@@ -24,7 +24,7 @@
 | `GET` | `/terms/:id/periods` | 节次 |
 | `GET` | `/terms/:id/slots?week=&weekday=` | 格子（可按周过滤） |
 
-`POST /terms` 接收 `CreateTermInput`，返回 `TermDetail`。生成格子数 = `weekCount × 7 × periods.length`，最多 30 周（D1 batch 分批，每批 ≤ 100 条语句）。
+`POST /terms` 接收 `CreateTermInput`，返回 `TermDetail`。生成格子数 = `weekCount × 7 × periods.length`，最多 30 周（SQL batch 分批，每批 ≤ 100 条语句）。
 
 ## 人员与组织
 
@@ -142,7 +142,7 @@
 | `PUT` | `/admin/settings` | 覆盖写 |
 | `GET` | `/admin/llm-providers` | 列表（密钥只回名字） |
 | `POST` | `/admin/llm-providers` | 新增 |
-| `PATCH` | `/admin/llm-providers/:id` | 改配置，写 KV 版本号即时生效 |
+| `PATCH` | `/admin/llm-providers/:id` | 改配置，写 SQLite 设置版本号即时生效 |
 | `DELETE` | `/admin/llm-providers/:id` | 删除 |
 | `POST` | `/admin/llm-providers/:id/test` | 发一条最小请求探测 |
 | `GET` | `/admin/audit?limit=` | 审计 |
@@ -171,3 +171,7 @@
 ## 健康检查
 
 `GET /health`，实现见 `src/worker/index.ts`。
+
+## 数据持久化
+
+所有业务、身份会话、设置和原件均在 ECS 数据服务持久化，浏览器 API 契约不变。内部 SQL / 文件协议仅供 Worker，见 [数据服务架构](../storage/docs/ARCHITECTURE.md)。

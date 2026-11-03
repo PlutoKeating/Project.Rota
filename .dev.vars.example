@@ -3,8 +3,8 @@ APP_ENV=development
 AUTH_DEV_BYPASS=true
 # Optional confidential OIDC client; public PKCE clients leave this empty.
 OIDC_CLIENT_SECRET=
-# Generic HTTPS file store. Real endpoint and credentials are Worker Secrets.
-STORAGE_URL=
-STORAGE_AUTHORIZATION=
+# Local data service; use a private HTTPS endpoint and strong credential in production.
+DATA_SERVICE_URL=http://127.0.0.1:8080
+DATA_SERVICE_AUTHORIZATION=Bearer local-development-only-change-me
 # External model provider key, if used instead of Workers AI.
 LLM_API_KEY=

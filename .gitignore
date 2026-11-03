@@ -27,3 +27,9 @@ __pycache__/
 # 日志
 *.log
 pnpm-debug.log*
+
+# Local persistent data service
+.data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

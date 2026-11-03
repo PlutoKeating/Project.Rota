@@ -1,5 +1,8 @@
 export interface Env {
+  /** Internal SQL compatibility interface; production is backed by the ECS data service. */
   DB: D1Database;
+  DATA_SERVICE_URL?: string;
+  DATA_SERVICE_AUTHORIZATION?: string;
   FILES?: R2Bucket;
   STORAGE_URL?: string;
   STORAGE_AUTHORIZATION?: string;

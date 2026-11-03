@@ -1,70 +1,53 @@
 # 上手与部署
 
-## 环境
+## 环境与本地运行
 
-Node.js 24+（真实 SQL 测试使用 `node:sqlite`），Corepack，项目固定版本 pnpm。Python 仅用于 LinkML 模型生成。
+Node.js 24+、Corepack、项目固定版本 pnpm；Python 仅用于 LinkML 生成。
 
 ```bash
 corepack enable
 pnpm install --frozen-lockfile
+cp .env.example .env
 cp .dev.vars.example .dev.vars
-pnpm db:local
-pnpm dev
+pnpm data:dev   # 第一个终端：SQLite / 设置 / 文件
+pnpm dev        # 第二个终端：http://localhost:5173
 ```
 
-打开 `http://localhost:5173`。本地 `.dev.vars` 同时设置 `APP_ENV=development` 与 `AUTH_DEV_BYPASS=true` 才会使用本地管理员；不要把这两个设置上传生产。Android/proot 中 workerd 可能受 mmap 限制，不能据此认定普通 Linux 环境也无法运行。
-
-本地文件导入需要配置可用的 HTTPS 文件服务（见下文）。`.dev.vars` 与 `.env` 均忽略，不提交。
+本地 `.dev.vars` 同时设置 `APP_ENV=development` 与 `AUTH_DEV_BYPASS=true` 才使用本地管理员。生产不允许绕过。两个文件中的数据服务凭据须一致；真实环境文件与 `.data/` 均不提交。生产数据库与原件全部在 ECS，不依赖 D1、KV 或 R2。
 
 ## 验证
 
-```bash
-pnpm check       # Worker/Client 类型检查与自动化测试
-pnpm build       # Worker 与静态资源
-```
-
-测试包含实际 SQLite 的业务流程、并发排班、导入失败回滚、OIDC 验签与攻击输入、会话撤销、CSRF、权限和文件存储错误。
-
-## 业务流程
-
-登录后依次创建学期与节次、人员与组织成员、课程、任务与班次，试排并确认分配，在公平页查看历史分配，导出 CSV。课表也可上传 Excel/CSV/ICS/截图，先确认解析结果再应用。截图识别需在设置里启用视觉模型，可使用 Workers AI 或配置外部供应商的 Worker Secret。
+`pnpm check` 执行类型检查、业务/认证集成测试与独立数据服务测试；`pnpm build` 构建 Worker 与前端。
 
 ## 新部署
 
-1. 使用自己的 Cloudflare 账户创建 D1、KV，并替换 `wrangler.jsonc` 中对应账户和资源标识；设置 Worker 名称和公开 `APP_ORIGIN`。
-2. 在身份提供方登记授权码 + PKCE 客户端，精确回调地址为 `APP_ORIGIN + /api/auth/callback`。issuer 必须与发现文档完全一致（包括末尾 `/`）。本项目使用公共客户端，不需要客户端密码；机密客户端可设置 `OIDC_CLIENT_SECRET`。
-3. 初始化数据库，并通过私有 SQL 文件插入已核验 OIDC subject 的 `admin_user`，role 为 owner、enabled 为 1。不要把真实身份信息放进迁移或仓库。
-4. 配置文件存储，设置 Secrets，部署。
+1. 按 [数据服务部署](../storage/docs/QUICK_START.md) 创建独立容器、持久目录、HTTPS 入口和备份。启动自动运行 SQLite 迁移。
+2. 修改 `wrangler.jsonc` 的账户、Worker 名称和 APP_ORIGIN，保留 Workers AI 绑定（用于默认截图模型）。不创建 D1/KV/R2。
+3. 向身份服务登记授权码 + PKCE 客户端；回调精确为 `APP_ORIGIN + /api/auth/callback`，issuer 包括发现文档中的末尾 `/`。公共客户端无需密码；机密客户端可设置 `OIDC_CLIENT_SECRET`。
+4. 通过私有操作核验 OIDC subject，插入 `admin_user` 为启用 owner。不要把真实身份或账号清单提交仓库。
+5. 设置 Worker Secrets 并部署：
 
 ```bash
-pnpm exec wrangler d1 create rota
-pnpm exec wrangler kv namespace create CONFIG
-pnpm db:remote
-# 按自己的部署资源修改 wrangler.jsonc 后：
-pnpm exec wrangler secret put STORAGE_URL
-pnpm exec wrangler secret put STORAGE_AUTHORIZATION
+pnpm exec wrangler secret put DATA_SERVICE_URL
+pnpm exec wrangler secret put DATA_SERVICE_AUTHORIZATION
 pnpm deploy
 ```
 
-`pnpm deploy` 执行 check、build、远程迁移、Worker 发布。生产资源由服务端提供，不需要 R2。
+DATA_SERVICE_URL 是私有 HTTPS 基础 URL；DATA_SERVICE_AUTHORIZATION 是完整 Authorization 头，必须与容器 DATA_AUTHORIZATION 一致。凭据仅供 Worker 到数据服务，不能发送浏览器。`pnpm deploy` 执行检查、构建和发布；数据库迁移由数据服务启动执行。
 
-## 文件存储协议
+## 自动部署
 
-`STORAGE_URL` 为 HTTPS 基础 URL，`STORAGE_AUTHORIZATION` 为完整 Authorization 头值，两者都使用 Worker Secrets，不发送给浏览器。适配器访问 `<base>/imports/<id>/<encoded-filename>`：PUT 二进制，DELETE 原件。服务必须验证凭据、禁止目录列表、限制单文件 5 MiB，并提供持久化与备份。可使用标准 Nginx WebDAV PUT/DELETE 或等效服务。
+Cloudflare Worker → Settings → Builds → Connect，连接 GitHub main。构建命令 `pnpm run check && pnpm run build`，部署命令 `pnpm exec wrangler deploy`，Node 24；安装命令 `corepack enable && pnpm install --frozen-lockfile`。构建令牌仅需 Worker 发布权限，不需要 D1。Wrangler OAuth 不一定允许配置 Builds；此时需控制台连接。不要复制 OAuth token 到 CI。
 
-私有生产地址、容器端口、SSH 信息和密钥不在此文档记录。
+GitHub Validate 检查与构建通过后，可通过受限 SSH 部署数据容器：设置仓库变量 `ECS_DEPLOY_ENABLED=true`，以及 Secrets `ECS_HOST`、`ECS_PORT`、`ECS_USER`、`ECS_DEPLOY_KEY`、`ECS_KNOWN_HOSTS`。服务器上的专用公钥必须配置 forced command 和 restrict；命令只更新本项目，执行备份、构建、启动及健康检查。私有脚本与实际主机信息不提交。PR 不运行部署。部署服务和 Worker 的协议/迁移须向后兼容，避免两个流水线先后顺序造成中断。
 
-## GitHub 自动部署
+推送后分别核对 GitHub 与 Cloudflare Builds 成功记录，再验证健康、匿名 401、登录及业务操作。手动部署成功不等于自动部署已验证。
 
-1. GitHub 创建公开 `Project.Rota`，push 经检查的提交。
-2. Cloudflare Worker → Settings → Builds → Connect，选择仓库和 `main`。
-3. 构建命令：`pnpm run check && pnpm run build`。
-4. 部署命令：`pnpm run db:remote && pnpm exec wrangler deploy`。
-5. 构建镜像 Node 版本设为 24，使用 package.json 中的 pnpm 版本；如自动安装不识别 Corepack，安装命令设 `corepack enable && pnpm install --frozen-lockfile`。
-6. 为构建令牌授予此 Worker 发布与 D1 迁移所需权限。运行时 Secrets 留在 Worker，不写进构建日志或 GitHub。
-7. 推送后核对 GitHub Validate 与 Cloudflare Builds 的成功记录，再检查 `/api/health`、匿名业务接口 401、登录跳转和实际业务操作。
+## 业务与回滚
 
-Wrangler OAuth 登录权限不一定包含 Workers Builds 配置权限，配置 API 返回 403 时需要控制台连接或具有该权限的用户 API token。不要把 Wrangler 的 OAuth token 复制到 CI。
+登录后创建学期、人员和组织成员、课程、任务/班次，再试排与确认，查看公平账本、导出 CSV。导入课表先人工确认再应用。截图识别需启用视觉模型。
+
+Worker 可回滚版本；数据容器可回滚镜像，但迁移不会自动撤销。重大迁移前保存 SQLite 在线快照及原件，并测试恢复。实际操作与凭据留在私有记录。
 
 ## 模型生成
 
@@ -74,8 +57,4 @@ python3 -m venv .venv
 LINKML_BIN=.venv/bin/linkml bash scripts/gen.sh
 ```
 
-`0001_init.sql` 已部署后不得改写；领域模型变更必须另建增量迁移。认证运行时存储与数据库约束使用独立迁移，不由领域本体生成器覆盖。
-
-## 回滚
-
-Worker 可回滚到上一个版本，但数据库迁移不会随 Worker 回滚。迁移须兼容先前版本，重大变更前导出备份。文件存储独立备份；不要删除持久卷。具体生产操作与账号信息留在私有运维记录。
+已部署迁移不得改写，领域变更另建增量迁移，认证运行时表与约束不能由生成器覆盖。

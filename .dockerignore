@@ -1,0 +1,6 @@
+**
+!storage/
+!storage/server.mjs
+!storage/backup.mjs
+!migrations/
+!migrations/*.sql
