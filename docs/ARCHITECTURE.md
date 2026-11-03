@@ -1,179 +1,68 @@
 # 架构
 
-> 先读 [`ONTOLOGY.md`](./ONTOLOGY.md) 了解数据模型；这里讲系统怎么跑起来。
+## 1. 范围
 
-## 1. 定位与非目标
+单校区学生组织的排班系统：课表导入与确认、可用性计算、人工/自动分配、公平统计及 CSV 导出。v1 不做教务排课、跨校多租户、全局最优求解、原生 App 或邮件/短信通知。
 
-**定位**：一个学生组织内部的排班系统。读入课表 → 计算可用性 → 给"活"排人 → 记账保公平。
+## 2. 组件与边界
 
-**非目标**（v1 明确不做）：
+- `src/client`：React 19、Tailwind 4、hash 路由，九个业务页面。登录门禁先请求 `/api/auth/me`；会话失效后回到登录页。
+- `src/worker/api`：Hono 接口、权限、输入校验与审计。
+- `src/worker/domain`：时间展开、可用性、评分及排班/账本服务。纯评分与时间函数不依赖运行时；排班和可用性服务直接使用 D1。这与早期“所有领域代码不依赖 D1”的设计不同，以实际源码为准。
+- `src/worker/import`：Excel/CSV/ICS 与视觉识别。识别结果必须先人工确认。
+- `src/worker/llm`：OpenAI-compatible、Anthropic、Google 与 Workers AI 网关。配置每次从数据库读取，后台更新立即生效；不存在进程缓存。
+- `src/worker/storage.ts`：通用 HTTPS 文件存储适配器。生产使用独立存储服务；测试或其他部署可提供 R2 兼容绑定。
+- D1 保存业务、管理员、会话和授权流程；KV 保存应用设置与配置版本。文件服务地址和凭据仅通过 Worker Secrets 注入。
 
-- 通用排课系统（不改教务课表，只读）
-- 跨校多租户 SaaS
-- 全局最优求解（不用 CP-SAT，见 ADR-004）
-- 原生 App（响应式 Web 即可）
+`schema/rota.yaml` 定义领域模型，`0001_init.sql` 是初始生成结果。后续迁移增量维护：`0002_auth.sql` 定义运行时认证存储，`0003_assignment_guards.sql` 提供事务约束，`0004_admin_guard.sql` 防止停用最后一个所有者。不得改写已部署迁移。
 
-## 2. 技术选型
+## 3. 请求路径
 
-| 层 | 选择 | 理由 |
-| --- | --- | --- |
-| 运行时 | Cloudflare Workers | 全 Serverless，一个 Worker 同时出前端与 API，无服务器运维 |
-| 前端 | React 19 + Tailwind CSS 4 | 响应式，手机/桌面同一套布局 |
-| API | Hono | 轻、类型友好、Workers 原生 |
-| 数据库 | D1（SQLite） | 与 Workers 同源，<300 人量级完全够用 |
-| 文件 | R2 | 课表 Excel / 截图原文件 |
-| 配置缓存 | KV | 模型供应商配置的版本号与热更新 |
-| Schema | LinkML | 一份源生成 DDL / JSON Schema / ER 图 |
-| 构建 | Vite 7 + `@cloudflare/vite-plugin` | 官方推荐的 Workers + SPA 一体化构建 |
+`/api/*` 先进入 Worker，其余路径由静态资源 SPA fallback 处理。公开 API 仅健康检查与认证入口；业务 API、原始导入数据、导出都要求登录。API 响应禁止缓存。
 
-## 3. 分层
+## 4. 认证与权限
 
-```
-┌─────────────────────────────────────────────┐
-│ 界面层  src/client   9 个页面，hash 路由      │
-├─────────────────────────────────────────────┤
-│ 接口层  src/worker/api  Hono 子路由           │
-│    terms / people / courses / tasks          │
-│    schedule / fairness / imports / admin     │
-│    auth（占位） / export                      │
-├─────────────────────────────────────────────┤
-│ 领域层  src/worker/domain                    │
-│    time.ts         校历网格、周次展开         │
-│    availability.ts 课表 − 请假 − 跨部门       │
-│    assign.ts       加权打分 + 稳定性 tie-break│
-│    ledger.ts       公平账本、窗口、重算        │
-│    scheduler.ts    试排 / 分配 / 自动排        │
-├─────────────────────────────────────────────┤
-│ 解析层  src/worker/import  xlsx / CSV / ICS   │
-│ 模型层  src/worker/llm     供应商网关          │
-├─────────────────────────────────────────────┤
-│ 存储层  D1（SQL）/ R2（原件）/ KV（配置）      │
-├─────────────────────────────────────────────┤
-│ 本体层  schema/rota.yaml → migrations/*.sql  │
-└─────────────────────────────────────────────┘
-```
+身份来源为 `https://id.plutokeating.beer/` 的公开 OIDC 协议。使用 `oauth4webapi` 实现授权码 + PKCE S256、state、nonce、发现文档和 JWKS 验签，校验 issuer/audience/有效期。授权流程保存在 D1，10 分钟有效，回调原子消费一次，并绑定浏览器 HttpOnly Cookie。
 
-**约束**：领域层不 import 任何 Hono / D1 类型，只吃普通对象。这样打分逻辑可以在 Node 里跑单元测试，也可以整体替换成求解器。
+验证成功后只允许 `admin_user` 中启用的 subject 登录，不自动注册管理员、不以“第一个登录的人”为所有者。初始所有者通过私有部署操作加入数据库。后续由所有者在设置页维护名单。
 
-## 4. 请求路径
+会话为随机 opaque token，D1 只保存 SHA-256 摘要，8 小时有效。`__Host-` Cookie 为 HttpOnly、Secure、SameSite=Lax、Path=/。每次请求查询管理员启用状态与角色，退出删除服务端会话，角色变更撤销该账号全部会话。
 
-`wrangler.jsonc` 里 `assets.run_worker_first: ["/api/*"]`：
+- `admin`：业务数据读写与导出。
+- `owner`：另可访问配置、供应商、审计和管理员授权。
+- 非 GET/HEAD/OPTIONS 请求必须携带与 `APP_ORIGIN` 完全一致的 Origin。
+- 本地绕过需同时设置 `APP_ENV=development|test` 与 `AUTH_DEV_BYPASS=true`；生产环境即使误设绕过开关也不放行。
 
-```
-GET /                → 静态资源（SPA fallback → index.html）
-GET /api/health      → Worker → Hono
-GET /api/terms       → Worker → Hono → D1
-```
+公开仓库只记录标准客户端接口；身份服务的内部实现、账号清单、运维信息和真实秘密不得写入。
 
-除 `/api/*` 外都交给 assets，Worker 不参与前端路由，避免 SPA 的 404 处理与 API 抢路径。
+## 5. 导入与文件存储
 
-## 5. 三条主流程
+上传（上限 5 MiB）→ HTTPS 文件服务保存原件 → D1 导入任务 → 解析 → `needs_review` → 人工修改和确认 → 单个 D1 batch 提交所有课程、规则、选课、格子、任务状态与审计。
 
-### 5.1 课表导入
+先完成全单校验与 SQL 计划，再开始写入，因此后续课程冲突不留下前半份导入。一次确认限制 1–100 门课程；重复的课程/教师组合要求先合并。共享课程仍有其他选课人时禁止 replace。
 
-```
-上传(Excel/CSV/ICS/截图)
-  → R2 存原件
-  → ImportJob(status=parsing)
-  → 解析：结构化格式走解析器；截图 / 非固定格式走视觉模型
-  → ImportJob(status=needs_review, parsed_json=…)
-  → 管理员在界面逐条确认
-  → 落 Course / CourseMeeting，展开 CourseOccurrence
-```
+文件服务提供带认证的 PUT/DELETE；出站必须 HTTPS、拒绝重定向、30 秒超时，删除不存在的对象视为成功。文件服务与 D1 不构成分布式事务；上传后数据库创建失败会尽力清理原件，删除失败允许重试。
 
-**关键点**：模型解析结果**永不直接落库**，必须先经过 `needs_review`。课表错一格，后面所有排班都是错的。
+## 6. 排班
 
-已实现：`src/worker/import/parse.ts`（SheetJS 读 xlsx/csv，自研 VEVENT 读 ics）、`vision.ts`（截图走视觉模型）、`api/imports.ts`（上传 → R2 → 解析 → 确认 → 落库）。确认页允许改解析结果后再落库。
+候选从有效任期的部门成员选取，排除课表、请假、跨部门占用、缺少技能与冷却期成员。请假与已排班按绝对时间检查，覆盖节次之外的任务。300 人查询使用 JSON 数组绑定，避免超出 D1 SQL 参数上限。
 
-### 5.2 排班
+评分包含公平缺口、饥饿补偿、偏好、优先级和近期惩罚。同分以班次/人员稳定哈希打破。历史分配从 assignment 查询，跨周、跨月累计，冷却以目标班次时间和历史班次时间计算。自动排班优先处理候选少的班次，并填满人数；返回成功人次与未填席位数。
 
-```
-部门选任务与时段
-  → 生成 Shift（一次性直接建；周期任务由 ShiftPattern 展开）
-  → 硬过滤：课表占用 / 请假 / 跨部门已排 / 角色技能 / 冷却
-  → 打分排序（assign.ts）
-  → 贪心分配：候选最少的班次优先排，避免"好排的排完、难排的没人"
-  → 写 Assignment + reason，更新 FairnessStat
-  → 导出 CSV
-```
+分配、账本与审计在单个 batch 内写入。数据库触发器在实际插入时再检查班次容量、关闭状态和同一人跨班次重叠，避免两个管理员同时确认造成超员或双重占用。
 
-已实现：`domain/scheduler.ts` 的 `previewShift` / `assignShift` / `autoAssignTask` / `unassign`。试排只读；分配用 D1 batch 把 assignment、班次状态、账本、审计一次写入。
+公平统计按周展示次数和分钟；API 的 `carryOver` 从之前窗口的有效分配计算，不把历史计数错误地在每周清零。重算采用单事务，避免先清空后部分重建。
 
-### 5.3 公平结转
+## 7. 部署与验证
 
-每次分配后更新 `fairness_stat`。窗口滚动时把 `shift_count` 折算进 `carry_over`，新窗口从结转值起算。重算必须幂等（按 `(person, org, window_key)` upsert）。
+Cloudflare Worker 同时部署前端与 API，D1/KV/Workers AI 绑定见 `wrangler.jsonc`。GitHub Actions 执行检查和构建；Workers Builds 连接 GitHub main 自动发布。部署命令先迁移 D1 再发布 Worker。具体步骤见 [QUICK_START.md](QUICK_START.md)。
 
-## 6. 目录结构
+私有文件存储的容器、持久卷、凭据、隧道与备份由私有运维记录管理，公开仓库只说明存储协议。
 
-```
-Project.Rota/
-├── AGENTS.md              # Agent 开发规范
-├── README.md
-├── schema/rota.yaml       # 唯一 schema 源
-├── migrations/            # 由 schema 生成，勿手改
-├── docs/                  # 架构 / 本体 / API / 上手
-├── scripts/gen.sh         # LinkML → DDL / ER / JSON Schema
-├── src/worker/            # Hono API + 领域逻辑
-├── src/client/            # React 界面
-└── test/                  # 领域层单测
-```
+## 8. 已知边界
 
-## 7. 鉴权
-
-- 身份来源：`https://id.plutokeating.beer`（OIDC）。
-- 只有 `admin_user` 表里的 subject 能登录后台；`role=owner` 可改模型配置与账号。
-- 会话：HttpOnly + Secure + SameSite=Lax 的签名 Cookie，短期有效。
-- 所有写接口要求 `role in (owner, admin)`，并记 `audit_event`。
-
-> 当前代码尚未实现 OIDC 流程，`/api/*` 处于开放状态。上线前必须先补鉴权（见 API.md 的"待实现"）。
-
-## 8. 模型网关
-
-`llm_provider` 表存供应商配置（`kind` / `base_url` / `model` / `api_key_secret`），密钥放 Worker Secret，表里只存名字。
-
-热更新的做法：
-
-1. 后台改配置 → 写 D1 → `CONFIG.put("llm:version", Date.now())`。
-2. 调用时读 KV 版本号，与进程内缓存比对，变了就重新加载。
-3. 不需要重新部署 Worker。
-
-调用统一走 OpenAI-compatible 协议；`cloudflare_ai` 走 Workers AI 绑定，不需要外部 key。
-
-## 9. 部署
-
-```bash
-pnpm build          # 前端 + Worker
-wrangler deploy     # 或 pnpm deploy
-```
-
-环境变量与绑定在 `wrangler.jsonc`；密钥用 `wrangler secret put`，不进仓库。
-
-## 10. 容量与边界
-
-- 目标规模：**单校区 <300 人**，一个学期 20 周。
-- `slot` 行数：20 × 7 × 12 ≈ 1.7k / 学期，十年也就几万行。
-- `assignment` 量级：每周几十到几百条，一年万级。
-- D1 单库容量与并发上限见 Cloudflare 官方 limits，本项目远低于阈值。
-- 真正的瓶颈不是数据量，是**冲突检测的查询次数**：一次排班要按人 × 时段查占用，必须批量查（一条 SQL 取整个窗口的占用），不能 N+1。
-
-## 11. 决策记录
-
-| 编号 | 决策 | 备选 | 理由 |
-| --- | --- | --- | --- |
-| ADR-001 | Cloudflare Worker 单体 | 前后端分离 / VPS | 用户指定；无运维、免费额度足够 |
-| ADR-002 | LinkML 生成 DDL | 手写 ER / Prisma | 本体先行，且能同时产出 JSON Schema 与文档 |
-| ADR-003 | 校历网格 + occurrence 物化 | 运行时展开 RRULE | 单双周在 SQL 里无法高效参与冲突检测 |
-| ADR-004 | 规则打分，不上 CP-SAT | OR-Tools 全局求解 | 用户选择；可解释、可调、无额外运行时 |
-| ADR-005 | 不引入 RDF / 图库 | Oxigraph / Neo4j | 事务与 D1 兼容性优先，本体价值在约束不在查询 |
-| ADR-006 | Shift 用绝对时间，Slot 用格子 | 全部用格子 | 临时任务、跨学期边界用绝对时间更稳 |
-| ADR-007 | 不引入 Docker | Docker Compose | 全 Serverless，无容器需求 |
-
-## 12. 已知风险
-
-1. **课表解析**是最大不确定性。已支持中文表头别名、无表头列序猜测、单双周与周段；不支持 GBK 编码、Excel 合并单元格向下填充、非 WEEKLY 的重复规则。缓解：解析结果一律先过人工确认。
-2. **时区**：固定 `+08:00`（表里留了 `timezone` 字段，尚未使用）。ICS 的 TZID 被忽略。
-3. **并发排班**：两人同时排同一班次，靠 `assignment(shift_id, person_id)` 唯一键与「人数已满」检查兜底；跨班次的"同一人同一时刻"没有数据库级约束，靠试排时的占用检查，极端并发下仍有窗口。
-4. **导入 apply 非整单事务**：按 meeting 分批写，中途失败可能留下部分课程（状态仍为 `needs_review`，可重试）。
-5. **公平口径**：权重是拍出来的，后台可调，改动会写审计。
-6. **本机无法运行 workerd**：`pnpm dev` 在 Android/proot 下起不来，验证依赖 48 个测试（含真实 SQL 的端到端）。
-7. **通知**：只做 CSV 导出，邮件/短信未实现。
+- 固定北京时间（UTC+08:00）；尚非任意时区产品。
+- 解析器不支持所有教务导出变体、GBK、复杂合并单元格与非 WEEKLY 的 ICS 重复规则；确认页是必要步骤。
+- 贪心算法不保证全局最优；先排某个任务会影响后续任务的候选。
+- 课表/请假与排班的同时编辑不是跨请求的全局事务；变更后应重新试排并复核已有安排。
+- 文件与数据库需分别备份，恢复时核对导入原件；首次上线前端验证不能替代真实用户的邮箱或第三方登录验证。

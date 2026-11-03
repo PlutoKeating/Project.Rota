@@ -14,7 +14,7 @@
 | 学期 / 节次 / 格子（20 周 × 7 天 × 12 节） | ✅ |
 | 人员、部门、角色、一人多部门（带任期） | ✅ |
 | 课程与课表，按人选课、按周展开 | ✅ |
-| 单双周 / 周段 / 调课 | ✅ |
+| 单双周 / 周段 | ✅ |
 | 可用性计算（课表 + 请假 + 跨部门占用） | ✅ |
 | 一次性 / 周期 / 长期任务与班次 | ✅ |
 | 试排（候选 + 打分明细 + 排除原因） | ✅ |
@@ -24,15 +24,18 @@
 | 模型供应商后台配置 + 热切换 | ✅ |
 | CSV 导出（班表 / 公平） | ✅ |
 | 响应式 Web 界面（手机底部 tab / 桌面侧栏） | ✅ |
-| 账号体系（id.plutokeating.beer OIDC） | 🚧 占位，见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#7-鉴权) |
+| 账号体系（id.plutokeating.beer OIDC） | ✅ PKCE、签名验证、服务端会话、管理员授权 |
 | 邮件 / 短信通知 | ❌ 未做，v1 只做导出 |
 
-当前是 **v1：功能闭环**。本机验证覆盖 48 个测试（含真实 SQL 的端到端流程），但 `pnpm dev` 在 Android/proot 下起不来（workerd 限制），见 QUICK_START。
+当前完成 **v1 业务流程与生产认证接入**。自动化验证覆盖真实 SQL 排班、导入事务、OIDC 验签、权限和存储异常；已部署入口为 [Rota](https://project-rota.williamhvollita.workers.dev)。生产仅允许管理员白名单登录。
+
+GitHub Actions 检查提交，Cloudflare Workers Builds 连接仓库后自动构建部署。部署步骤与实际验证边界见 [QUICK_START](docs/QUICK_START.md) 和 [交付进度](docs/PROGRESS.md)。
 
 ## 五分钟上手
 
 ```bash
 pnpm install
+cp .dev.vars.example .dev.vars
 pnpm db:local     # 建本地 D1
 pnpm dev          # http://localhost:5173（普通 Linux/macOS）
 ```
@@ -55,14 +58,14 @@ flowchart TB
     A[React 19 + Tailwind 4<br/>src/client] -->|/api/*| B[Hono<br/>src/worker/api]
     B --> C[领域层<br/>availability / assign / ledger / scheduler]
     C --> E[(D1 / SQLite)]
-    B --> F[(R2<br/>课表原件)]
+    B --> F[HTTPS 文件服务<br/>课表原件]
     B --> G[(KV<br/>settings / 配置版本)]
     C --> H[LLM 网关<br/>OpenAI / Anthropic / Google]
     I[schema/rota.yaml] -->|LinkML| J[migrations/*.sql]
     J --> E
 ```
 
-三层约束：**本体层**定义数据长什么样，**领域层**只吃普通对象（不碰 D1 / Hono），**接口层**负责拼装与审计。所以打分逻辑能在 Node 里直接跑真实 SQL 的集成测试，也能整体替换成求解器。
+**本体层**定义业务数据，纯评分函数处理普通对象，排班与可用性服务使用 D1，**接口层**负责权限、拼装与审计。测试在 Node.js 24 的真实 SQLite 上执行。
 
 ## 文档
 
@@ -90,7 +93,7 @@ flowchart TB
 
 ```
 schema/rota.yaml      本体（唯一源）
-migrations/           生成的 DDL
+migrations/           初始 DDL 与增量迁移
 src/worker/domain/    可用性、打分、账本、排班
 src/worker/api/       Hono 路由
 src/worker/import/    Excel / CSV / ICS / 截图解析

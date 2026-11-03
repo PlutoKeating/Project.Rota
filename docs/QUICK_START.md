@@ -1,126 +1,81 @@
-# 上手
+# 上手与部署
 
-## 环境要求
+## 环境
 
-| 工具 | 版本 | 用途 |
-| --- | --- | --- |
-| Node.js | ≥ 20 | 构建与运行 |
-| pnpm | ≥ 10 | 包管理（仓库用 pnpm） |
-| Python | ≥ 3.11 | 仅用于生成 LinkML 产物 |
-
-## 1. 安装依赖
+Node.js 24+（真实 SQL 测试使用 `node:sqlite`），Corepack，项目固定版本 pnpm。Python 仅用于 LinkML 模型生成。
 
 ```bash
-pnpm install
-```
-
-## 2. 本地跑起来
-
-```bash
+corepack enable
+pnpm install --frozen-lockfile
+cp .dev.vars.example .dev.vars
+pnpm db:local
 pnpm dev
 ```
 
-Vite 会通过 `@cloudflare/vite-plugin` 在 workerd 里启动 Worker，前端与 `/api/*` 同端口。默认地址：
+打开 `http://localhost:5173`。本地 `.dev.vars` 同时设置 `APP_ENV=development` 与 `AUTH_DEV_BYPASS=true` 才会使用本地管理员；不要把这两个设置上传生产。Android/proot 中 workerd 可能受 mmap 限制，不能据此认定普通 Linux 环境也无法运行。
 
-```
-http://localhost:5173
-```
+本地文件导入需要配置可用的 HTTPS 文件服务（见下文）。`.dev.vars` 与 `.env` 均忽略，不提交。
 
-访问 `/api/health` 应返回：
-
-```json
-{ "ok": true, "env": "development", "db": "down", "ts": "..." }
-```
-
-`db: "down"` 是正常的——还没建本地库。
-
-> **Android / proot 环境**：workerd 需要 1 GB 对齐内存，在 proot 下会因 mmap 限制启动失败（tcmalloc 报 `MmapAligned() failed`）。此时 `pnpm dev` 不可用，改用 `pnpm test` / `pnpm typecheck` / `pnpm build` 做验证；要看真实页面就直接 `pnpm deploy` 到 Cloudflare。普通 Linux / macOS 不受影响。
-
-## 3. 建本地数据库
+## 验证
 
 ```bash
-pnpm db:local
+pnpm check       # Worker/Client 类型检查与自动化测试
+pnpm build       # Worker 与静态资源
 ```
 
-它执行 `wrangler d1 migrations apply rota --local`，把 `migrations/0001_init.sql` 应用到 `.wrangler/state` 下的本地 D1。再次访问 `/api/health` 应变成 `db: "up"`。
+测试包含实际 SQLite 的业务流程、并发排班、导入失败回滚、OIDC 验签与攻击输入、会话撤销、CSRF、权限和文件存储错误。
 
-## 4. 验证
+## 业务流程
 
-```bash
-pnpm test        # 48 个测试：单测 + 真实 SQL 的端到端流程
-pnpm typecheck   # Worker 与 Client 两套 tsconfig
-pnpm build       # 前端 + Worker 产物
-```
+登录后依次创建学期与节次、人员与组织成员、课程、任务与班次，试排并确认分配，在公平页查看历史分配，导出 CSV。课表也可上传 Excel/CSV/ICS/截图，先确认解析结果再应用。截图识别需在设置里启用视觉模型，可使用 Workers AI 或配置外部供应商的 Worker Secret。
 
-## 5. 走一遍完整流程
+## 新部署
 
-打开界面后按这个顺序，十分钟能从空库排出一个班：
-
-1. **学期** → 新建：`2026 秋`、开学日 `2026-09-07`、20 周、节次表（默认 12 节可直接用）。
-2. **人员** → 新建两个人：张三、李四。
-3. **组织** → 新建 `宣传部`；回到人员，给两人加成员关系（部门选宣传部）。
-4. **课表** → 选张三 → 添加课程：高等数学、周一、第 1–2 节、每周。
-5. **任务** → 新建 `迎新值班`（部门选宣传部）→ 加一个班次：`2026-09-07T08:00` 到 `08:45`。
-6. **排班** → 点这个班次「试排」：张三因为周一第 1 节有课被排除，李四成为候选 → 确认分配。
-7. **公平** → 李四计 1 次；**导出** → 班表 CSV。
-
-课表也可以走 **导入**：上传教务导出的 Excel/CSV，或直接传课表截图（需先在设置里配一个支持视觉的模型供应商）。
-
-## 6. 改本体
-
-`schema/rota.yaml` 是唯一源。改完后：
+1. 使用自己的 Cloudflare 账户创建 D1、KV，并替换 `wrangler.jsonc` 中对应账户和资源标识；设置 Worker 名称和公开 `APP_ORIGIN`。
+2. 在身份提供方登记授权码 + PKCE 客户端，精确回调地址为 `APP_ORIGIN + /api/auth/callback`。issuer 必须与发现文档完全一致（包括末尾 `/`）。本项目使用公共客户端，不需要客户端密码；机密客户端可设置 `OIDC_CLIENT_SECRET`。
+3. 初始化数据库，并通过私有 SQL 文件插入已核验 OIDC subject 的 `admin_user`，role 为 owner、enabled 为 1。不要把真实身份信息放进迁移或仓库。
+4. 配置文件存储，设置 Secrets，部署。
 
 ```bash
-python3 -m venv /root/venvs/linkml
-/root/venvs/linkml/bin/pip install linkml
-
-LINKML_BIN=/root/venvs/linkml/bin/linkml bash scripts/gen.sh
-```
-
-会重新生成：
-
-- `migrations/0001_init.sql`（DDL）
-- `docs/er.md`（ER 图）
-- `schema/rota.schema.json`（JSON Schema）
-
-> 已经上线过就不能改 `0001`，新增 `migrations/0002_xxx.sql`。
-
-## 7. 部署
-
-首次：
-
-```bash
-wrangler login
-wrangler d1 create rota          # 把返回的 database_id 填进 wrangler.jsonc
-wrangler r2 bucket create rota-files
-wrangler kv namespace create CONFIG   # 把返回的 id 填进 wrangler.jsonc
+pnpm exec wrangler d1 create rota
+pnpm exec wrangler kv namespace create CONFIG
 pnpm db:remote
+# 按自己的部署资源修改 wrangler.jsonc 后：
+pnpm exec wrangler secret put STORAGE_URL
+pnpm exec wrangler secret put STORAGE_AUTHORIZATION
 pnpm deploy
 ```
 
-之后：
+`pnpm deploy` 执行 check、build、远程迁移、Worker 发布。生产资源由服务端提供，不需要 R2。
+
+## 文件存储协议
+
+`STORAGE_URL` 为 HTTPS 基础 URL，`STORAGE_AUTHORIZATION` 为完整 Authorization 头值，两者都使用 Worker Secrets，不发送给浏览器。适配器访问 `<base>/imports/<id>/<encoded-filename>`：PUT 二进制，DELETE 原件。服务必须验证凭据、禁止目录列表、限制单文件 5 MiB，并提供持久化与备份。可使用标准 Nginx WebDAV PUT/DELETE 或等效服务。
+
+私有生产地址、容器端口、SSH 信息和密钥不在此文档记录。
+
+## GitHub 自动部署
+
+1. GitHub 创建公开 `Project.Rota`，push 经检查的提交。
+2. Cloudflare Worker → Settings → Builds → Connect，选择仓库和 `main`。
+3. 构建命令：`pnpm run check && pnpm run build`。
+4. 部署命令：`pnpm run db:remote && pnpm exec wrangler deploy`。
+5. 构建镜像 Node 版本设为 24，使用 package.json 中的 pnpm 版本；如自动安装不识别 Corepack，安装命令设 `corepack enable && pnpm install --frozen-lockfile`。
+6. 为构建令牌授予此 Worker 发布与 D1 迁移所需权限。运行时 Secrets 留在 Worker，不写进构建日志或 GitHub。
+7. 推送后核对 GitHub Validate 与 Cloudflare Builds 的成功记录，再检查 `/api/health`、匿名业务接口 401、登录跳转和实际业务操作。
+
+Wrangler OAuth 登录权限不一定包含 Workers Builds 配置权限，配置 API 返回 403 时需要控制台连接或具有该权限的用户 API token。不要把 Wrangler 的 OAuth token 复制到 CI。
+
+## 模型生成
 
 ```bash
-pnpm deploy
+python3 -m venv .venv
+.venv/bin/pip install linkml
+LINKML_BIN=.venv/bin/linkml bash scripts/gen.sh
 ```
 
-密钥不要写进 `wrangler.jsonc`：
+`0001_init.sql` 已部署后不得改写；领域模型变更必须另建增量迁移。认证运行时存储与数据库约束使用独立迁移，不由领域本体生成器覆盖。
 
-```bash
-wrangler secret put OIDC_CLIENT_SECRET
-wrangler secret put LLM_API_KEY
-```
+## 回滚
 
-## 常见问题
-
-**`database_id` 报错 / 连不上 D1**
-`wrangler.jsonc` 里的 `database_id` 是占位符，必须先 `wrangler d1 create rota` 换成真实 ID。
-
-**`/api/terms` 返回 500**
-本地没跑迁移，见第 3 步。
-
-**pnpm 提示 ignored build scripts**
-`pnpm-workspace.yaml` 里已放行 `esbuild` 与 `workerd`。若仍提示，执行 `pnpm rebuild`。
-
-**端口被占用**
-`pnpm dev --port 5174`。
+Worker 可回滚到上一个版本，但数据库迁移不会随 Worker 回滚。迁移须兼容先前版本，重大变更前导出备份。文件存储独立备份；不要删除持久卷。具体生产操作与账号信息留在私有运维记录。

@@ -7,9 +7,9 @@
 
 - JSON 一律 camelCase；数据库列是 snake_case，由 `lib/core.ts` 的 `camelize` 转换。
 - 列表返回 `{ items: T[] }`；单资源直接返回对象。
-- 错误：`{ "error": { "code": "...", "message": "..." } }`，`code` 取值 `bad_request` / `not_found` / `conflict` / `internal`。
+- 错误：`{ "error": { "code": "...", "message": "..." } }`，`code` 取值 `bad_request` / `unauthorized` / `forbidden` / `not_found` / `conflict` / `internal`（存储与模型服务另有专用错误码）。
 - 时间：ISO 8601 带偏移（`2026-10-07T10:00:00+08:00`）；日期用 `YYYY-MM-DD`。
-- 鉴权：**当前为占位模式**，所有请求视为 `owner`。接入 OIDC 后由 `src/worker/auth.ts` 接管。
+- 鉴权：除健康检查和认证入口外，所有业务接口要求启用的管理员会话；`/admin/*` 要求 owner。写请求必须带与 `APP_ORIGIN` 一致的 Origin。生产禁止开发绕过。
 - 写操作都会落 `audit_event`。
 
 ## 校历
@@ -24,7 +24,7 @@
 | `GET` | `/terms/:id/periods` | 节次 |
 | `GET` | `/terms/:id/slots?week=&weekday=` | 格子（可按周过滤） |
 
-`POST /terms` 接收 `CreateTermInput`，返回 `TermDetail`。生成格子数 = `weekCount × 7 × periods.length`，220 周内一次写入（D1 batch 分批，每批 ≤ 100 条语句）。
+`POST /terms` 接收 `CreateTermInput`，返回 `TermDetail`。生成格子数 = `weekCount × 7 × periods.length`，最多 30 周（D1 batch 分批，每批 ≤ 100 条语句）。
 
 ## 人员与组织
 
@@ -88,7 +88,7 @@
 | `GET` | `/shifts?from=&to=&orgId=&status=` | 班次看板 |
 | `POST` | `/shifts/:id/preview` | **只算不写**：候选 + 打分明细 + 被排除原因 |
 | `POST` | `/shifts/:id/assign` | 指定人或自动选最高分；事务写 assignment + 公平账本 |
-| `POST` | `/tasks/:id/auto-assign` | 整任务贪心排：候选最少的班次优先 |
+| `POST` | `/tasks/:id/auto-assign` | 整任务贪心排：候选最少的班次优先，填满 requiredHeadcount；assigned 为成功人次，skipped 为未填席位 |
 | `DELETE` | `/assignments/:id` | 撤销，回滚账本 |
 
 `preview` 请求体（均可选）：`{ "cooldownDays": 3, "weights": {...} }`，缺省读 `/admin/settings`。
@@ -100,7 +100,7 @@
 | `GET` | `/fairness?orgId=&windowKey=` | 账本，按次数升序（最亏的在前） |
 | `POST` | `/fairness/recompute` | 从 `assignment` 重算，幂等 |
 
-`windowKey` 规则：`<termName>-W<周次>` 或 `<termName>-M<月份>`。不传则用当前学期当前周。
+`windowKey` 规则：`<termName>-W<周次>`。不传时返回所有窗口。`carryOver` 为该周开始前同组织的历史有效分配次数；试排计入跨窗口历史。
 
 ## 导入
 
@@ -110,7 +110,7 @@
 | `GET` | `/imports` | 最近 50 条 |
 | `GET` | `/imports/:id` | 状态与解析结果 |
 | `POST` | `/imports/:id/apply` | 把解析结果落成课程；可选覆盖 |
-| `DELETE` | `/imports/:id` | 删除任务与 R2 原件 |
+| `DELETE` | `/imports/:id` | 删除任务与 存储原件 |
 
 解析优先级：`excel` / `csv` → SheetJS；`ics` → 自研 VEVENT 解析；`screenshot` → 视觉模型。识别结果进 `needs_review`，**不自动落库**。
 
@@ -128,6 +128,7 @@
 - 传 `parsed` 时用它覆盖库里的原始解析结果（前端确认页改过的内容）。
 - `replace: true` 允许覆盖已应用的任务；`overwrite` 作为同义字段兼容。
 - 未传 `termId` / `personId` 时用导入时记录的值。
+- 一次确认 1–100 门课程，先校验整单，再用一个数据库事务写入；失败保留 needs_review，不留下部分课程。重复课程名/教师组合需先合并。
 
 ## 管理
 
@@ -141,6 +142,9 @@
 | `DELETE` | `/admin/llm-providers/:id` | 删除 |
 | `POST` | `/admin/llm-providers/:id/test` | 发一条最小请求探测 |
 | `GET` | `/admin/audit?limit=` | 审计 |
+| `GET` | `/admin/users` | 管理员名单 |
+| `POST` | `/admin/users` | 按 `{oidcSubject,fullName,role}` 授权，role 为 admin 或 owner |
+| `PATCH` | `/admin/users/:id` | 修改 role/enabled，同时撤销该账号会话；禁止修改自己 |
 
 ## 导出
 
@@ -149,16 +153,16 @@
 | `GET` | `/export/schedule.csv?from=&to=&orgId=` | 班表 CSV（带 BOM，Excel 直接打开） |
 | `GET` | `/export/fairness.csv?orgId=&windowKey=` | 公平账本 CSV |
 
-## 认证（占位）
+## 认证
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| `GET` | `/auth/me` | 返回 `{ authenticated, user, mode }`，当前 `mode: "disabled"` |
-| `GET` | `/auth/login` | 501，占位 |
-| `GET` | `/auth/callback` | 501，占位 |
-| `POST` | `/auth/logout` | 清 Cookie |
+| `GET` | `/auth/me` | `{ authenticated, user, mode }`，未登录 user=null，生产 mode=oidc |
+| `GET` | `/auth/login` | 创建一次性 state/nonce/PKCE，302 到身份提供方 |
+| `GET` | `/auth/callback` | 交换并验证 ID Token，检查白名单，建立 8 小时会话并回到首页 |
+| `POST` | `/auth/logout` | 校验 Origin、删除会话、清除 Cookie |
 
-接入 `id.plutokeating.beer` 时只改 `src/worker/auth.ts` 与这三个路由，其余代码统一从 `c.get("user")` 取当前用户。
+失败回到 `/?auth_error=invalid_state|expired|not_allowed|failed`。不把上游响应、令牌或授权码写入日志。会话 Cookie 为 `__Host-rota_session`，HttpOnly、Secure、SameSite=Lax；角色/停用状态每次从数据库读取。
 
 ## 健康检查
 
