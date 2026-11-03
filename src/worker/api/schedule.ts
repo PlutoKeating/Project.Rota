@@ -72,9 +72,9 @@ schedule.get("/shifts", async (c) => {
             a.assigned_at, a.assigned_by, p.full_name as person_name
        from assignment a
        join person p on p.id = a.person_id
-      where a.shift_id in (${ids.map(() => "?").join(",")})
+      where a.shift_id in (select value from json_each(?))
       order by a.assigned_at`,
-    ...ids,
+    JSON.stringify(ids),
   );
 
   const byShift = new Map<string, typeof assignments>();
@@ -102,19 +102,19 @@ schedule.post("/shifts/:id/assign", async (c) => {
     await readJson<{ personId?: string; cooldownDays?: number; weights?: ScheduleConfig["weights"] }>(c).catch(() => ({}));
   const config = await loadConfig(c.env, body);
   const personId = typeof body.personId === "string" && body.personId ? body.personId : null;
-  return c.json(await assignShift(c.env.DB, shiftId, personId, config, "local-owner"));
+  return c.json(await assignShift(c.env.DB, shiftId, personId, config, c.get("user").id));
 });
 
 schedule.post("/tasks/:id/auto-assign", async (c) => {
   const taskId = asString(c.req.param("id"), "id");
   const body = await readJson<{ cooldownDays?: number; weights?: ScheduleConfig["weights"] }>(c).catch(() => ({}));
   const config = await loadConfig(c.env, body);
-  return c.json(await autoAssignTask(c.env.DB, taskId, config, "local-owner"));
+  return c.json(await autoAssignTask(c.env.DB, taskId, config, c.get("user").id));
 });
 
 schedule.delete("/assignments/:id", async (c) => {
   const id = asString(c.req.param("id"), "id");
-  const result = await unassign(c.env.DB, id, "local-owner");
+  const result = await unassign(c.env.DB, id, c.get("user").id);
   return c.json(result);
 });
 

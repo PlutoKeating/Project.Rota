@@ -8,7 +8,8 @@ const exportApi = new Hono<{ Bindings: Env }>();
 const WEEKDAYS = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 
 function csvCell(value: unknown): string {
-  const text = value === null || value === undefined ? "" : String(value);
+  const raw = value === null || value === undefined ? "" : String(value);
+  const text = /^[\s]*[=+@-]/.test(raw) ? "'" + raw : raw;
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 

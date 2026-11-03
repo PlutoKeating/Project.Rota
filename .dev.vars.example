@@ -1,8 +1,10 @@
-# 复制为 .dev.vars 后填写；该文件已被 gitignore，不会进仓库。
-# wrangler dev 会自动读取 .dev.vars。
-
-# OIDC（id.plutokeating.beer）授权码交换用的 client secret
+# Only for isolated local development. Production ignores AUTH_DEV_BYPASS.
+APP_ENV=development
+AUTH_DEV_BYPASS=true
+# Optional confidential OIDC client; public PKCE clients leave this empty.
 OIDC_CLIENT_SECRET=
-
-# 默认模型供应商的密钥；也可以在后台按供应商单独配置后放 Worker Secret
+# Generic HTTPS file store. Real endpoint and credentials are Worker Secrets.
+STORAGE_URL=
+STORAGE_AUTHORIZATION=
+# External model provider key, if used instead of Workers AI.
 LLM_API_KEY=

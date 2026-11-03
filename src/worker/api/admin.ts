@@ -1,3 +1,4 @@
+import { requireOwner } from "../auth";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type {
@@ -35,9 +36,11 @@ import {
  *   让运行中的进程能感知配置变化。
  * - 模型供应商配置存 D1，密钥只存 Worker Secret 的名字（api_key_secret），
  *   接口永远不返回密钥值。
- * - 所有写操作落 audit_event，actor_id 固定 "system"（认证占位阶段）。
+ * - 所有写操作落 audit_event，actor_id 来自当前登录账号。
  */
 export const admin = new Hono<{ Bindings: Env }>();
+
+admin.use("*", async (c, next) => { await requireOwner(c); await next(); });
 
 const PROVIDER_KINDS: readonly LlmProviderKind[] = [
   "openai_compatible",
@@ -439,7 +442,7 @@ async function audit(
     c.env.DB,
     "insert into audit_event (id, actor_id, action, target_type, target_id, payload, actor_ip, created_at) values (?,?,?,?,?,?,?,?)",
     ulid(),
-    "system",
+    c.get("user").id,
     action,
     targetType,
     targetId,
@@ -448,3 +451,40 @@ async function audit(
     nowIso(),
   );
 }
+
+// 账号只保存公开的 OIDC subject 与本系统授权，不接触身份服务实现。
+admin.get("/users", async c => c.json({ items: await dbAll(c.env.DB,
+  "select id, oidc_subject, full_name, role, enabled, last_login_at, created_at from admin_user order by created_at") }));
+
+admin.post("/users", async c => {
+  const body = await readObjectBody(c);
+  const subject = asString(body.oidcSubject, "oidcSubject", 255);
+  const name = asString(body.fullName, "fullName", 100);
+  const role = oneOf(body.role ?? "admin", ["owner", "admin"] as const, "role");
+  const id = ulid();
+  if (await dbOne(c.env.DB, "select id from admin_user where oidc_subject=?", subject)) throw badRequest("账号已存在");
+  await c.env.DB.batch([
+    c.env.DB.prepare("insert into admin_user (id,oidc_subject,full_name,role,enabled,created_at) values (?,?,?,?,1,?)")
+      .bind(id, subject, name, role, nowIso()),
+    c.env.DB.prepare("insert into audit_event (id,actor_id,action,target_type,target_id,created_at) values (?,?,'admin.user.create','admin_user',?,?)")
+      .bind(ulid(), c.get("user").id, id, nowIso()),
+  ]);
+  return c.json({ id }, 201);
+});
+
+admin.patch("/users/:id", async c => {
+  const id = c.req.param("id");
+  if (id === c.get("user").id) throw badRequest("不能修改自己的角色或停用自己");
+  const existing = await dbOne<{ role: string; enabled: number }>(c.env.DB, "select role,enabled from admin_user where id=?", id);
+  if (!existing) throw notFound("账号不存在");
+  const body = await readObjectBody(c);
+  const role = oneOf(body.role ?? existing.role, ["owner", "admin"] as const, "role");
+  const enabled = body.enabled === undefined ? existing.enabled : Number(asBool(body.enabled));
+  await c.env.DB.batch([
+    c.env.DB.prepare("update admin_user set role=?,enabled=? where id=?").bind(role, enabled, id),
+    c.env.DB.prepare("delete from auth_session where user_id=?").bind(id),
+    c.env.DB.prepare("insert into audit_event (id,actor_id,action,target_type,target_id,payload,created_at) values (?,?,'admin.user.update','admin_user',?,?,?)")
+      .bind(ulid(), c.get("user").id, id, JSON.stringify({ role, enabled }), nowIso()),
+  ]);
+  return c.json({ ok: true });
+});

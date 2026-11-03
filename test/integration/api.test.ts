@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import guards from "../../migrations/0003_assignment_guards.sql?raw";
 import ddl from "../../migrations/0001_init.sql?raw";
 import app from "../../src/worker/index";
 import type { Env } from "../../src/worker/env";
@@ -11,13 +12,14 @@ import { createFiles, createKv, D1Stub } from "../helpers/d1";
  */
 
 function makeEnv(): Env {
-  const db = new D1Stub(ddl);
+  const db = new D1Stub(ddl + guards);
   return {
     DB: db as unknown as D1Database,
     FILES: createFiles() as unknown as R2Bucket,
     CONFIG: createKv() as unknown as KVNamespace,
     ASSETS: {} as Fetcher,
     APP_ENV: "test",
+    AUTH_DEV_BYPASS: "true",
     OIDC_ISSUER: "https://id.example",
     OIDC_CLIENT_ID: "test",
   };
@@ -298,5 +300,21 @@ describe("管理后台", () => {
     expect(saved.status).toBe(200);
     expect(saved.data.defaultCooldownDays).toBe(5);
     expect(saved.data.weights.fairness).toBe(0.6);
+  });
+});
+
+describe("导入事务", () => {
+  it("后续课程冲突时，前面的新课程也不会留下", async () => {
+    const env = makeEnv();
+    const { termId, zhangId } = await bootstrap(env);
+    await call(env, "POST", "/api/courses", { termId, name: "已有课程", personIds: [zhangId], meetings: [{ weekday: 1, periodFrom: 1, periodTo: 1, patternKind: "all" }] });
+    const form = new FormData();
+    form.append("file", new File(["课程,星期,节次,周次\n新课程,周二,1-1,1-4\n已有课程,周一,1-1,1-4"], "test.csv"));
+    form.append("termId", termId); form.append("personId", zhangId); form.append("sourceKind", "csv");
+    const job = await (await app.request("/api/imports", { method: "POST", body: form }, env)).json() as any;
+    expect((await call(env, "POST", `/api/imports/${job.id}/apply`, {})).status).toBe(409);
+    const courses = await call(env, "GET", `/api/courses?termId=${termId}`);
+    expect(courses.data.items.map((c: any) => c.name)).toEqual(["已有课程"]);
+    expect((await call(env, "GET", `/api/imports/${job.id}`)).data.status).toBe("needs_review");
   });
 });

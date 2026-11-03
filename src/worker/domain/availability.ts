@@ -183,7 +183,7 @@ export async function loadAvailabilityBatch(
     termId,
   );
 
-  const marks = personIds.map(() => "?").join(",");
+  const marks = "select value from json_each(?)";
 
   const occurrences = await dbAll<OccurrenceRow & { personId: string }>(
     db,
@@ -195,7 +195,7 @@ export async function loadAvailabilityBatch(
       where e.term_id = ? and e.status = 'active' and o.status != 'cancelled'
         and e.person_id in (${marks})`,
     termId,
-    ...personIds,
+    JSON.stringify(personIds),
   );
 
   const assignmentRows = await dbAll<AssignmentRow & { personId: string }>(
@@ -208,7 +208,7 @@ export async function loadAvailabilityBatch(
         and a.person_id in (${marks})`,
     excludeShiftId,
     excludeShiftId,
-    ...personIds,
+    JSON.stringify(personIds),
   );
 
   const leaveRows = await dbAll<{
@@ -222,7 +222,7 @@ export async function loadAvailabilityBatch(
     `select id, person_id, starts_at, ends_at, kind
        from unavailability
       where status = 'approved' and person_id in (${marks})`,
-    ...personIds,
+    JSON.stringify(personIds),
   );
 
   for (const row of occurrences) {

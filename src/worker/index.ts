@@ -11,6 +11,7 @@ import { schedule } from "./api/schedule";
 import { tasks } from "./api/tasks";
 import { terms } from "./api/terms";
 import type { Env } from "./env";
+import { getCurrentUser, requireSameOrigin } from "./auth";
 import { HttpError } from "./lib/core";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -38,6 +39,16 @@ app.get("/api/health", async (c) => {
     ts: new Date().toISOString(),
   };
   return c.json(body, db === "up" ? 200 : 503);
+});
+
+app.use("/api/*", async (c, next) => {
+  c.header("Cache-Control", "no-store");
+  if (c.req.path.startsWith("/api/auth/")) return next();
+  const user = await getCurrentUser(c);
+  if (!user) throw new HttpError(401, "unauthorized", "请先登录");
+  c.set("user", user);
+  if (!["GET", "HEAD", "OPTIONS"].includes(c.req.method)) requireSameOrigin(c);
+  await next();
 });
 
 app.route("/api", terms);

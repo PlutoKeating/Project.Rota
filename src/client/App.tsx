@@ -1,3 +1,4 @@
+import { AuthGate } from "./components/AuthGate";
 import { useEffect } from "react";
 import { EmptyState } from "./components/EmptyState";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -96,7 +97,7 @@ function RoutedApp() {
 export default function App() {
   return (
     <ToastProvider>
-      <RoutedApp />
+      <AuthGate><RoutedApp /></AuthGate>
     </ToastProvider>
   );
 }

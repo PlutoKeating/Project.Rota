@@ -1,3 +1,4 @@
+import { UnavailabilityEditor } from "../components/UnavailabilityEditor";
 import { useEffect, useMemo, useState } from "react";
 import type {
   CreateCourseInput,
@@ -281,6 +282,7 @@ export function TimetablePage() {
 
   return (
     <div className="space-y-4 sm:space-y-5">
+      {personId && <UnavailabilityEditor key={personId} personId={personId} onChanged={() => setVersion(v => v + 1)} />}
       <Card title="周课表" description="按人、按周查看；课程与请假会直接进入可用性计算。">
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
           <Field label="学期">

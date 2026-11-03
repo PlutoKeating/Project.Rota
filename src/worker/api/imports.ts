@@ -1,3 +1,4 @@
+import { fileStore } from "../storage";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type {
@@ -38,7 +39,7 @@ import {
 /**
  * 课表导入路由。
  *
- * 流程：上传原件到 R2 → import_job(parsing) → 同步解析 → needs_review。
+ * 流程：上传原件到文件存储 → import_job(parsing) → 同步解析 → needs_review。
  * 解析结果永远不自动落库，必须由管理员调 apply 确认；apply 时：
  * - 一门课只建一份 course + course_meeting，多人选课只加 enrollment；
  * - occurrence 按 meeting 规则展开到 slot，不复制到人。
@@ -119,7 +120,7 @@ imports.post("/", async (c) => {
   const id = ulid();
   const fileKey = `imports/${id}/${fileName}`;
 
-  await c.env.FILES.put(fileKey, bytes, { httpMetadata: { contentType } });
+  await fileStore(c.env).put(fileKey, bytes, { httpMetadata: { contentType } });
 
   try {
     await dbRun(
@@ -136,9 +137,9 @@ imports.post("/", async (c) => {
       null,
     );
   } catch (error) {
-    // 元数据写不进去就把 R2 原件删掉，避免留下孤儿对象。
+    // 元数据写不进去就把文件存储原件删掉，避免留下孤儿对象。
     try {
-      await c.env.FILES.delete(fileKey);
+      await fileStore(c.env).delete(fileKey);
     } catch {
       // 清理失败不覆盖原始错误
     }
@@ -297,24 +298,24 @@ imports.post("/:id/apply", async (c) => {
     enrollments: 0,
   };
 
+  if (coursesToApply.length === 0 || coursesToApply.length > 100) throw badRequest("每次确认须包含 1–100 门课程");
+  const planned: Statement[] = [];
+  const names = new Set<string>();
   for (const course of coursesToApply) {
-    await applyCourse(c.env.DB, context, slotMap, course, personId, replace, summary, warnings);
+    if (!course || typeof course.name !== "string") throw badRequest("课程名称无效");
+    const key = JSON.stringify([course.name.trim(), course.teacher?.trim() ?? ""]);
+    if (names.has(key)) throw badRequest("同一导入中课程名称和教师重复，请先合并上课规则");
+    names.add(key);
+    await applyCourse(c.env.DB, context, slotMap, course, personId, replace, summary, warnings, planned);
   }
+  if (summary.meetings + summary.enrollments === 0) throw badRequest("没有可应用的有效上课规则");
 
   const updatedAt = nowIso();
-  await dbRun(
-    c.env.DB,
-    "update import_job set status = ?, updated_at = ? where id = ?",
-    "applied",
-    updatedAt,
-    id,
-  );
-  await audit(c, "import.apply", "import_job", id, {
-    termId,
-    personId,
-    replace,
-    ...summary,
-  });
+  planned.push({ sql: "update import_job set status = ?, updated_at = ? where id = ?", params: ["applied", updatedAt, id] });
+  planned.push({ sql: "insert into audit_event (id, actor_id, action, target_type, target_id, payload, created_at) values (?,?,?,?,?,?,?)",
+    params: [ulid(), c.get("user").id, "import.apply", "import_job", id, JSON.stringify({ termId, personId, replace, ...summary }), nowIso()] });
+  // 所有课程、选课、规则、格子和任务状态在同一个 D1 事务中提交。
+  await dbBatch(c.env.DB, planned);
 
   const updated = await getJobRow(c.env.DB, id);
   return c.json({
@@ -329,7 +330,7 @@ imports.delete("/:id", async (c) => {
   const row = await getJobRow(c.env.DB, id);
   if (!row) throw notFound("导入任务不存在");
 
-  if (row.fileKey) await c.env.FILES.delete(row.fileKey);
+  if (row.fileKey) await fileStore(c.env).delete(row.fileKey);
   await dbRun(c.env.DB, "delete from import_job where id = ?", id);
   await audit(c, "import.delete", "import_job", id, {
     sourceKind: row.sourceKind,
@@ -351,6 +352,7 @@ async function applyCourse(
   replace: boolean,
   summary: ApplySummary,
   warnings: string[],
+  planned: Statement[],
 ): Promise<void> {
   const name = (parsedCourse.name ?? "").trim();
   if (!name) return;
@@ -394,7 +396,7 @@ async function applyCourse(
       if (other && Number(other.n) > 0) {
         throw conflict(`课程「${name}」还有其他人选课，不能用 replace 重建`);
       }
-      await deleteCourseData(db, existing.id);
+      await deleteCourseData(db, existing.id, planned);
       rebuild = true;
     } else {
       enrollment = await dbOne<{ id: string; status: string }>(
@@ -418,30 +420,22 @@ async function applyCourse(
   const isNewCourse = !existing || rebuild;
   if (isNewCourse) {
     courseId = ulid();
-    await dbRun(
-      db,
-      "insert into course (id, term_id, code, name, teacher, created_at) values (?,?,?,?,?,?)",
-      courseId,
-      context.term.id,
-      null,
-      name,
-      teacher,
-      nowIso(),
-    );
+    planned.push({ sql: "insert into course (id, term_id, code, name, teacher, created_at) values (?,?,?,?,?,?)",
+      params: [courseId, context.term.id, null, name, teacher, nowIso()] });
     summary.courses += 1;
   } else {
     courseId = existing.id;
   }
 
   if (isNewCourse) {
-    await insertEnrollment(db, personId, courseId, context.term.id);
+    insertEnrollment(planned, personId, courseId, context.term.id);
     summary.enrollments += 1;
   } else if (enrollment) {
     // 之前被 dropped 的选课重新激活
-    await dbRun(db, "update enrollment set status = 'active' where id = ?", enrollment.id);
+    planned.push({ sql: "update enrollment set status = 'active' where id = ?", params: [enrollment.id] });
     summary.enrollments += 1;
   } else {
-    await insertEnrollment(db, personId, courseId, context.term.id);
+    insertEnrollment(planned, personId, courseId, context.term.id);
     summary.enrollments += 1;
   }
 
@@ -498,29 +492,17 @@ async function applyCourse(
       }
     }
 
-    await runStatements(db, statements);
+    planned.push(...statements);
+    existingMeetings.add(key);
   }
 }
 
-async function insertEnrollment(
-  db: D1Database,
-  personId: string,
-  courseId: string,
-  termId: string,
-): Promise<void> {
-  await dbRun(
-    db,
-    "insert into enrollment (id, person_id, course_id, term_id, status, created_at) values (?,?,?,?,?,?)",
-    ulid(),
-    personId,
-    courseId,
-    termId,
-    "active",
-    nowIso(),
-  );
+function insertEnrollment(planned: Statement[], personId: string, courseId: string, termId: string): void {
+  planned.push({ sql: "insert into enrollment (id, person_id, course_id, term_id, status, created_at) values (?,?,?,?,?,?)",
+    params: [ulid(), personId, courseId, termId, "active", nowIso()] });
 }
 
-async function deleteCourseData(db: D1Database, courseId: string): Promise<void> {
+async function deleteCourseData(db: D1Database, courseId: string, planned: Statement[]): Promise<void> {
   const meetings = await dbAll<{ id: string }>(
     db,
     "select id from course_meeting where course_id = ?",
@@ -535,15 +517,7 @@ async function deleteCourseData(db: D1Database, courseId: string): Promise<void>
     { sql: "delete from enrollment where course_id = ?", params: [courseId] },
     { sql: "delete from course where id = ?", params: [courseId] },
   );
-  await runStatements(db, statements);
-}
-
-/** D1 batch 是单事务，但一次塞几千条不安全，按 90 条分批。 */
-async function runStatements(db: D1Database, statements: Statement[]): Promise<void> {
-  const chunkSize = 90;
-  for (let index = 0; index < statements.length; index += chunkSize) {
-    await dbBatch(db, statements.slice(index, index + chunkSize));
-  }
+  planned.push(...statements);
 }
 
 // ---------------------------------------------------------------------------
@@ -761,7 +735,7 @@ async function audit(
     c.env.DB,
     "insert into audit_event (id, actor_id, action, target_type, target_id, payload, actor_ip, created_at) values (?,?,?,?,?,?,?,?)",
     ulid(),
-    "system",
+    c.get("user").id,
     action,
     targetType,
     targetId,

@@ -127,6 +127,14 @@ export async function complete(env: Env, options: CompleteOptions): Promise<stri
   const provider = await resolveProvider(env, options.providerId);
   const temperature =
     options.temperature ?? paramNumber(provider.params, "temperature") ?? 0.2;
+  if (provider.kind === "cloudflare_ai") {
+    if (!env.AI) throw new HttpError(503, "llm_not_configured", "Workers AI 绑定尚未配置");
+    const input = buildOpenAi(provider, options, temperature).body;
+    const result = asRecord(await env.AI.run(provider.model, input));
+    const text = typeof result?.response === "string" ? result.response : extractOpenAiText(result);
+    if (!text.trim()) throw new HttpError(502, "llm_error", "模型返回内容为空");
+    return text;
+  }
   const request = buildRequest(provider, options, temperature);
 
   let response: Response;
@@ -209,7 +217,7 @@ function buildRequest(
       throw new HttpError(
         501,
         "not_implemented",
-        "cloudflare_ai 供应商暂不支持，请改用 openai_compatible / anthropic / google",
+        "Workers AI 必须通过绑定调用",
       );
     default:
       throw new HttpError(501, "not_implemented", `未知的模型供应商类型：${provider.kind}`);

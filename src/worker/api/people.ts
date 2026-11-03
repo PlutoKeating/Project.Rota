@@ -90,14 +90,15 @@ const MEMBERSHIP_SELECT = `
 // ---------------------------------------------------------------------------
 
 function auditStatement(
+  actor: string,
   action: string,
   targetType: string,
   targetId: string,
   payload: Record<string, unknown>,
 ): Statement {
   return {
-    sql: "insert into audit_event (id, actor_id, action, target_type, target_id, payload, created_at) values (?, 'system', ?, ?, ?, ?, ?)",
-    params: [ulid(), action, targetType, targetId, JSON.stringify(payload), nowIso()],
+    sql: "insert into audit_event (id, actor_id, action, target_type, target_id, payload, created_at) values (?, ?, ?, ?, ?, ?, ?)",
+    params: [ulid(), actor, action, targetType, targetId, JSON.stringify(payload), nowIso()],
   };
 }
 
@@ -471,7 +472,7 @@ const createPerson = async (c: PeopleContext) => {
       sql: "insert into person (id, student_no, full_name, email, phone, status, created_at) values (?, ?, ?, ?, ?, ?, ?)",
       params: [id, studentNo, fullName, email, phone, status, createdAt],
     },
-    auditStatement("person.create", "person", id, { fullName, studentNo, email, status }),
+    auditStatement(c.get("user").id, "person.create", "person", id, { fullName, studentNo, email, status }),
   ]);
 
   const person: Person = { id, studentNo, fullName, email, phone, status, createdAt };
@@ -551,7 +552,7 @@ const updatePerson = async (c: PeopleContext) => {
 
   await dbBatch(db, [
     { sql: `update person set ${sets.join(", ")} where id = ?`, params: [...params, id] },
-    auditStatement("person.update", "person", id, changes),
+    auditStatement(c.get("user").id, "person.update", "person", id, changes),
   ]);
 
   const updated = await loadPerson(db, id);
@@ -578,7 +579,7 @@ const deletePerson = async (c: PeopleContext) => {
     { sql: "delete from fairness_stat where person_id = ?", params: [id] },
     { sql: "delete from membership where person_id = ?", params: [id] },
     { sql: "delete from person where id = ?", params: [id] },
-    auditStatement("person.delete", "person", id, { fullName: person.fullName }),
+    auditStatement(c.get("user").id, "person.delete", "person", id, { fullName: person.fullName }),
   ]);
   return c.json({ ok: true });
 };
@@ -716,7 +717,7 @@ const createUnavailability = async (c: PeopleContext) => {
       sql: "insert into unavailability (id, person_id, starts_at, ends_at, kind, status, reason, created_at) values (?, ?, ?, ?, ?, ?, ?, ?)",
       params: [id, personId, startsAt, endsAt, kind, status, reason, nowIso()],
     },
-    auditStatement("unavailability.create", "unavailability", id, {
+    auditStatement(c.get("user").id, "unavailability.create", "unavailability", id, {
       personId,
       startsAt,
       endsAt,
@@ -741,7 +742,7 @@ const deleteUnavailability = async (c: PeopleContext) => {
 
   await dbBatch(db, [
     { sql: "delete from unavailability where id = ?", params: [id] },
-    auditStatement("unavailability.delete", "unavailability", id, { personId: row.personId }),
+    auditStatement(c.get("user").id, "unavailability.delete", "unavailability", id, { personId: row.personId }),
   ]);
   return c.json({ ok: true });
 };
@@ -784,7 +785,7 @@ const createOrg = async (c: PeopleContext) => {
       sql: "insert into organization (id, code, name, parent_id, kind, status, created_at) values (?, ?, ?, ?, ?, ?, ?)",
       params: [id, code, name, parentId, kind, status, nowIso()],
     },
-    auditStatement("org.create", "organization", id, { name, code, parentId, kind, status }),
+    auditStatement(c.get("user").id, "org.create", "organization", id, { name, code, parentId, kind, status }),
   ]);
 
   const org: Org = { id, code, name, parentId, kind, status };
@@ -858,7 +859,7 @@ const updateOrg = async (c: PeopleContext) => {
 
   await dbBatch(db, [
     { sql: `update organization set ${sets.join(", ")} where id = ?`, params: [...params, id] },
-    auditStatement("org.update", "organization", id, changes),
+    auditStatement(c.get("user").id, "org.update", "organization", id, changes),
   ]);
 
   const updated = await dbOne<Org>(db, `select ${ORG_COLUMNS} from organization where id = ?`, id);
@@ -897,7 +898,7 @@ const deleteOrg = async (c: PeopleContext) => {
     { sql: "delete from role where org_id = ?", params: [id] },
     { sql: "delete from membership where org_id = ?", params: [id] },
     { sql: "delete from organization where id = ?", params: [id] },
-    auditStatement("org.delete", "organization", id, { name: org.name }),
+    auditStatement(c.get("user").id, "org.delete", "organization", id, { name: org.name }),
   ]);
   return c.json({ ok: true });
 };
@@ -935,7 +936,7 @@ const createRole = async (c: PeopleContext) => {
       sql: "insert into role (id, code, name, org_id, description) values (?, ?, ?, ?, ?)",
       params: [id, code, name, orgId, description],
     },
-    auditStatement("role.create", "role", id, { name, code, orgId }),
+    auditStatement(c.get("user").id, "role.create", "role", id, { name, code, orgId }),
   ]);
 
   const role: Role = { id, code, name, orgId, description };
@@ -1021,7 +1022,7 @@ const createMembership = async (c: PeopleContext) => {
         nowIso(),
       ],
     },
-    auditStatement("membership.create", "membership", id, { personId, orgId, roleId, status }),
+    auditStatement(c.get("user").id, "membership.create", "membership", id, { personId, orgId, roleId, status }),
   ]);
   return c.json(await loadMembershipView(db, id));
 };
@@ -1086,7 +1087,7 @@ const updateMembership = async (c: PeopleContext) => {
 
   await dbBatch(db, [
     { sql: `update membership set ${sets.join(", ")} where id = ?`, params: [...params, id] },
-    auditStatement("membership.update", "membership", id, changes),
+    auditStatement(c.get("user").id, "membership.update", "membership", id, changes),
   ]);
   return c.json(await loadMembershipView(db, id));
 };
@@ -1104,7 +1105,7 @@ const deleteMembership = async (c: PeopleContext) => {
   // 软删：把状态置为 ended，保留任期历史。
   await dbBatch(db, [
     { sql: "update membership set status = 'ended' where id = ?", params: [id] },
-    auditStatement("membership.ended", "membership", id, { personId: existing.personId }),
+    auditStatement(c.get("user").id, "membership.ended", "membership", id, { personId: existing.personId }),
   ]);
   return c.json(await loadMembershipView(db, id));
 };

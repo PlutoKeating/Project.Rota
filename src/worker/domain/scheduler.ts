@@ -17,10 +17,10 @@ import {
   nowIso,
   ulid,
 } from "../lib/core";
-import { DEFAULT_WEIGHTS, scoreCandidate, type Candidate, type ScoringContext } from "./assign";
+import { DEFAULT_WEIGHTS, scoreCandidate, stableHash, type Candidate, type ScoringContext } from "./assign";
 import { freeMinutes, loadAvailabilityBatch } from "./availability";
 import { minutesBetween, resolveTermForDate, windowKeyFor } from "./ledger";
-import { isoWeekday } from "./time";
+import { addDays, isoWeekday, weekIndexOf } from "./time";
 
 export interface ScheduleConfig {
   cooldownDays: number;
@@ -74,33 +74,51 @@ export async function previewShift(
 ): Promise<PreviewResult> {
   const shift = await loadShift(db, shiftId);
   const task = await loadTask(db, shift.taskId);
+  if (shift.status === "cancelled" || task.status === "cancelled" || task.status === "done") throw conflict("任务或班次已关闭");
   if (!task.orgId) throw badRequest("任务未归属部门，无法按公平口径排班");
 
   const term = await resolveTermForDate(db, shift.startsAt);
-  const windowKey = windowKeyFor(term, shift.startsAt);
   const weekday = isoWeekday(shift.startsAt.slice(0, 10));
 
   const persons = await dbAll<PersonRow>(
     db,
-    `select p.id, p.full_name
+    `select distinct p.id, p.full_name
        from person p
        join membership m on m.person_id = p.id
       where m.org_id = ? and m.status = 'active' and p.status = 'active'
         and (? is null or m.role_id = ?)
+        and (m.valid_from is null or m.valid_from <= ?)
+        and (m.valid_to is null or m.valid_to >= ?)
       order by p.full_name collate nocase`,
     task.orgId,
     shift.requiredRoleId,
     shift.requiredRoleId,
+    shift.startsAt.slice(0, 10),
+    shift.endsAt.slice(0, 10),
   );
 
+  const conflicts = await dbAll<{ personId: string }>(db, `
+    select person_id from unavailability where status = 'approved'
+      and julianday(starts_at) < julianday(?) and julianday(ends_at) > julianday(?)
+    union select a.person_id from assignment a join shift s on s.id = a.shift_id
+      where a.status in ('proposed','confirmed','completed') and s.status != 'cancelled'
+      and julianday(s.starts_at) < julianday(?) and julianday(s.ends_at) > julianday(?)`,
+    shift.endsAt, shift.startsAt, shift.endsAt, shift.startsAt);
+  const conflictIds = new Set(conflicts.map(row => row.personId));
+  const skilled = shift.requiredSkillId ? new Set((await dbAll<{ personId: string }>(db,
+    "select person_id from person_skill where skill_id=?", shift.requiredSkillId)).map(row => row.personId)) : null;
   const personIds = persons.map((p) => p.id);
   const { slots, byPerson } = await loadAvailabilityBatch(db, personIds, term.id, shift.id);
 
   const ledgerRows = await dbAll<LedgerRow>(
     db,
-    "select person_id, shift_count, minutes, last_assigned_at from fairness_stat where org_id = ? and window_key = ?",
-    task.orgId,
-    windowKey,
+    `select a.person_id, count(*) as shift_count,
+      sum((julianday(s.ends_at)-julianday(s.starts_at))*1440) as minutes,
+      max(s.starts_at) as last_assigned_at
+      from assignment a join shift s on s.id=a.shift_id join task t on t.id=s.task_id
+      where t.org_id=? and a.status in ('proposed','confirmed','completed')
+      and s.status != 'cancelled' and julianday(s.starts_at) < julianday(?) group by a.person_id`,
+    task.orgId, shift.startsAt,
   );
   const ledger = new Map(ledgerRows.map((row) => [row.personId, row]));
 
@@ -109,8 +127,8 @@ export async function previewShift(
         db,
         `select person_id, weekday, polarity, weight
            from preference
-          where person_id in (${personIds.map(() => "?").join(",")})`,
-        ...personIds,
+          where person_id in (select value from json_each(?))`,
+        JSON.stringify(personIds),
       )
     : [];
   const prefsByPerson = new Map<string, PreferenceRow[]>();
@@ -122,8 +140,11 @@ export async function previewShift(
 
   const shiftCountRow = await dbOne<{ total: number }>(
     db,
-    "select count(*) as total from shift where task_id = ? and status != 'cancelled'",
-    task.id,
+    `select (select coalesce(sum(required_headcount),0) from shift where task_id=? and status != 'cancelled')
+      + (select count(*) from assignment a join shift s on s.id=a.shift_id join task t on t.id=s.task_id
+         where t.org_id=? and t.id != ? and a.status in ('proposed','confirmed','completed')
+         and julianday(s.starts_at) < julianday(?)) as total`,
+    task.id, task.orgId, task.id, shift.startsAt,
   );
   const totalShifts = shiftCountRow?.total ?? 1;
 
@@ -131,8 +152,12 @@ export async function previewShift(
   const prepared: { person: PersonRow; candidate: Candidate; free: number; busy: boolean }[] = [];
 
   for (const person of persons) {
+    if (skilled && !skilled.has(person.id)) {
+      excluded.push({ personId: person.id, fullName: person.fullName, reason: "skill" });
+      continue;
+    }
     const bucket = byPerson.get(person.id) ?? new Map();
-    const busy = slots.some((slot) => bucket.has(slot.id) && overlaps(shift.startsAt, shift.endsAt, slot));
+    const busy = conflictIds.has(person.id) || slots.some((slot) => bucket.has(slot.id) && overlaps(shift.startsAt, shift.endsAt, slot));
     const free = freeMinutes(slots, bucket);
     const own = ledger.get(person.id);
 
@@ -169,7 +194,7 @@ export async function previewShift(
     totalShifts,
     totalFreeMinutes,
     participantCount: prepared.length,
-    now: nowIso(),
+    now: shift.startsAt,
     cooldownDays: config.cooldownDays,
     weights: config.weights,
   };
@@ -192,7 +217,7 @@ export async function previewShift(
     });
   }
 
-  candidates.sort((a, b) => b.score - a.score || a.personId.localeCompare(b.personId));
+  candidates.sort((a, b) => b.score - a.score || stableHash(shift.id + a.personId) - stableHash(shift.id + b.personId));
 
   return {
     shift,
@@ -207,8 +232,9 @@ function ledgerStatements(
   key: { personId: string; orgId: string; windowKey: string },
   minutes: number,
   delta: 1 | -1,
+  startsAt: string,
 ): { sql: string; params: (string | number)[] }[] {
-  const at = nowIso();
+  const at = startsAt;
   const statements: { sql: string; params: (string | number)[] }[] = [
     {
       sql: `update fairness_stat
@@ -291,7 +317,7 @@ export async function assignShift(
         actor,
       ],
     },
-    ...ledgerStatements({ personId: chosen.personId, orgId: task.orgId, windowKey }, minutes, 1),
+    ...ledgerStatements({ personId: chosen.personId, orgId: task.orgId, windowKey }, minutes, 1, shift.startsAt),
   ];
 
   if ((existing?.c ?? 0) + 1 >= shift.requiredHeadcount) {
@@ -345,12 +371,27 @@ export async function unassign(
   if (!task.orgId) throw badRequest("任务未归属部门");
   const term = await resolveTermForDate(db, shift.startsAt);
   const windowKey = windowKeyFor(term, shift.startsAt);
-  const minutes = minutesBetween(shift.startsAt, shift.endsAt);
+  const weekOffset = ((weekIndexOf(shift.startsAt.slice(0, 10), term.startDate, term.weekCount) ?? 1) - 1) * 7;
+  const weekStart = addDays(term.startDate, weekOffset) + "T00:00:00+08:00";
+  const weekEnd = addDays(term.startDate, weekOffset + 7) + "T00:00:00+08:00";
 
   await dbBatch(db, [
     { sql: "delete from assignment where id = ?", params: [assignmentId] },
-    ...ledgerStatements({ personId: row.personId, orgId: task.orgId, windowKey }, minutes, -1),
-    { sql: "update shift set status = 'open' where id = ?", params: [shift.id] },
+    { sql: `update fairness_stat set
+        shift_count=(select count(*) from assignment a join shift s on s.id=a.shift_id join task t on t.id=s.task_id
+          where a.person_id=? and t.org_id=? and a.status in ('proposed','confirmed','completed')
+          and julianday(s.starts_at)>=julianday(?) and julianday(s.starts_at)<julianday(?)),
+        minutes=(select coalesce(round(sum((julianday(s.ends_at)-julianday(s.starts_at))*1440)),0)
+          from assignment a join shift s on s.id=a.shift_id join task t on t.id=s.task_id
+          where a.person_id=? and t.org_id=? and a.status in ('proposed','confirmed','completed')
+          and julianday(s.starts_at)>=julianday(?) and julianday(s.starts_at)<julianday(?))
+        where person_id=? and org_id=? and window_key=?`,
+      params: [row.personId, task.orgId, weekStart, weekEnd, row.personId, task.orgId, weekStart, weekEnd, row.personId, task.orgId, windowKey] },
+    { sql: `update fairness_stat set last_assigned_at=(select max(s.starts_at) from assignment a
+       join shift s on s.id=a.shift_id join task t on t.id=s.task_id
+       where a.person_id=? and t.org_id=? and a.status in ('proposed','confirmed','completed'))
+       where person_id=? and org_id=? and window_key=?`, params: [row.personId, task.orgId, row.personId, task.orgId, windowKey] },
+    { sql: "update shift set status = case when status='cancelled' then status else 'open' end where id = ?", params: [shift.id] },
     {
       sql: `insert into audit_event (id, actor_id, action, target_type, target_id, payload, created_at)
             values (?, ?, 'assignment.delete', 'assignment', ?, ?, ?)`,
@@ -373,14 +414,25 @@ export async function autoAssignTask(
     taskId,
   );
 
+  const ranked = await Promise.all(shifts.map(async shift => ({
+    id: shift.id, candidates: (await previewShift(db, shift.id, config)).candidates.length,
+  })));
+  ranked.sort((a, b) => a.candidates - b.candidates);
   let assigned = 0;
   let skipped = 0;
-  for (const shift of shifts) {
-    try {
-      await assignShift(db, shift.id, null, config, actor);
-      assigned += 1;
-    } catch {
-      skipped += 1;
+  for (const shift of ranked) {
+    while (true) {
+      const row = await dbOne<{ required: number; filled: number }>(db,
+        `select required_headcount as required, (select count(*) from assignment where shift_id = s.id and status != 'declined') as filled from shift s where id = ?`, shift.id);
+      if (!row || row.filled >= row.required) break;
+      try {
+        await assignShift(db, shift.id, null, config, actor);
+        assigned += 1;
+      } catch (error) {
+        if (!(error instanceof Error) || !("status" in error) || error.status !== 409) throw error;
+        skipped += row.required - row.filled;
+        break;
+      }
     }
   }
   return { assigned, skipped };

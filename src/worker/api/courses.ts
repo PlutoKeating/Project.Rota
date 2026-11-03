@@ -108,19 +108,21 @@ interface MeetingRow {
 // ---------------------------------------------------------------------------
 
 function auditStatement(
+  actor: string,
   action: string,
   targetType: string,
   targetId: string,
   payload: Record<string, unknown>,
 ): Statement {
   return {
-    sql: "insert into audit_event (id, actor_id, action, target_type, target_id, payload, created_at) values (?, 'system', ?, ?, ?, ?, ?)",
-    params: [ulid(), action, targetType, targetId, JSON.stringify(payload), nowIso()],
+    sql: "insert into audit_event (id, actor_id, action, target_type, target_id, payload, created_at) values (?, ?, ?, ?, ?, ?, ?)",
+    params: [ulid(), actor, action, targetType, targetId, JSON.stringify(payload), nowIso()],
   };
 }
 
 async function writeAudit(
   db: D1Database,
+  actor: string,
   action: string,
   targetType: string,
   targetId: string,
@@ -128,8 +130,9 @@ async function writeAudit(
 ): Promise<void> {
   await dbRun(
     db,
-    "insert into audit_event (id, actor_id, action, target_type, target_id, payload, created_at) values (?, 'system', ?, ?, ?, ?, ?)",
+    "insert into audit_event (id, actor_id, action, target_type, target_id, payload, created_at) values (?, ?, ?, ?, ?, ?, ?)",
     ulid(),
+    actor,
     action,
     targetType,
     targetId,
@@ -423,7 +426,7 @@ const createCourse = async (c: CoursesContext) => {
     throw error;
   }
 
-  await writeAudit(db, "course.create", "course", courseId, {
+  await writeAudit(db, c.get("user").id, "course.create", "course", courseId, {
     termId,
     name,
     code,
@@ -453,7 +456,7 @@ const deleteCourse = async (c: CoursesContext) => {
     { sql: "delete from course_meeting where course_id = ?", params: [id] },
     { sql: "delete from enrollment where course_id = ?", params: [id] },
     { sql: "delete from course where id = ?", params: [id] },
-    auditStatement("course.delete", "course", id, { name: course.name }),
+    auditStatement(c.get("user").id, "course.delete", "course", id, { name: course.name }),
   ]);
   return c.json({ ok: true });
 };
@@ -488,7 +491,7 @@ const enrollCourse = async (c: CoursesContext) => {
     }));
     await runBatches(db, statements);
   }
-  await writeAudit(db, "course.enroll", "course", courseId, {
+  await writeAudit(db, c.get("user").id, "course.enroll", "course", courseId, {
     requested: personIds.length,
     added,
   });
@@ -544,7 +547,7 @@ const addMeeting = async (c: CoursesContext) => {
     ...occurrenceStatements(row, term.weekCount, slotsByKey, seen),
   ];
   await runBatches(db, statements);
-  await writeAudit(db, "course.meeting.create", "course_meeting", meetingId, {
+  await writeAudit(db, c.get("user").id, "course.meeting.create", "course_meeting", meetingId, {
     courseId,
     weekday: meeting.weekday,
     periodFrom: meeting.periodFrom,
@@ -581,7 +584,7 @@ const deleteMeeting = async (c: CoursesContext) => {
   await dbBatch(db, [
     { sql: "delete from course_occurrence where meeting_id = ?", params: [id] },
     { sql: "delete from course_meeting where id = ?", params: [id] },
-    auditStatement("course.meeting.delete", "course_meeting", id, { courseId: meeting.courseId }),
+    auditStatement(c.get("user").id, "course.meeting.delete", "course_meeting", id, { courseId: meeting.courseId }),
   ]);
   return c.json({ ok: true });
 };
@@ -642,7 +645,7 @@ const recomputeOccurrences = async (c: CoursesContext) => {
     },
   ]);
   await runBatches(db, statements);
-  await writeAudit(db, "term.recompute_occurrences", "term", termId, {
+  await writeAudit(db, c.get("user").id, "term.recompute_occurrences", "term", termId, {
     meetings: meetings.length,
     occurrences: statements.length,
   });

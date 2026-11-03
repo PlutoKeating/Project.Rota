@@ -1,47 +1,65 @@
 import type { Context } from "hono";
+import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import type { Env } from "./env";
-
-/**
- * 认证占位。
- *
- * TODO(OIDC)：接入 https://id.plutokeating.beer 时，只需要替换本文件里的
- * 两个函数，并在 api/auth.ts 实现 login / callback：
- *
- * 1. getCurrentUser：
- *    - 从 Cookie（HttpOnly + Secure + SameSite=Lax）取会话；
- *    - 校验 OIDC ID Token（iss / aud / exp / 签名），或用授权码换 token 后校验；
- *    - 用 oidc_subject 查 `admin_user`，确认 enabled=1，返回数据库里的角色；
- *    - 未登录返回 null（现在返回本地 owner，调用方无需判空）。
- * 2. requireOwner：
- *    - 调 getCurrentUser，未登录抛 401，角色不是 owner 抛 403。
- *
- * 其余业务代码统一通过 `c.get("user")`（或本文件的函数）取当前用户，
- * 不要在路由里自己解析 Cookie / Token。
- */
-
-export type AuthMode = "disabled" | "oidc";
+import { HttpError } from "./lib/core";
 
 export interface CurrentUser {
   id: string;
   name: string;
-  role: "owner";
-  mode: AuthMode;
+  role: "owner" | "admin";
+  mode: "disabled" | "oidc";
 }
 
-/** 占位模式下的本地管理员，ID 固定，便于审计日志辨认。 */
-export const LOCAL_OWNER: CurrentUser = {
-  id: "local-owner",
-  name: "本地管理员",
-  role: "owner",
-  mode: "disabled",
-};
-
-export async function getCurrentUser(c: Context<{ Bindings: Env }>): Promise<CurrentUser> {
-  void c;
-  return LOCAL_OWNER;
+declare module "hono" {
+  interface ContextVariableMap { user: CurrentUser }
 }
 
-/** 占位模式下永远通过；接入 OIDC 后改为 401 / 403 判断。 */
+export const LOCAL_OWNER: CurrentUser = { id: "local-owner", name: "本地管理员", role: "owner", mode: "disabled" };
+export const SESSION_COOKIE = "__Host-rota_session";
+export const FLOW_COOKIE = "__Host-rota_flow";
+export const SESSION_SECONDS = 8 * 60 * 60;
+
+// 双重开关，仅隔离的本地开发和测试环境可绕过认证。
+export function localAuth(env: Env): boolean {
+  return env.AUTH_DEV_BYPASS === "true" && ["development", "test"].includes(env.APP_ENV);
+}
+
+export async function tokenHash(value: string): Promise<string> {
+  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, "0")).join("");
+}
+
+export function setAuthCookie(c: Context, name: string, value: string, maxAge: number) {
+  setCookie(c, name, value, { httpOnly: true, secure: true, sameSite: "Lax", path: "/", maxAge });
+}
+
+export function clearAuthCookie(c: Context, name: string) {
+  deleteCookie(c, name, { secure: true, httpOnly: true, sameSite: "Lax", path: "/" });
+}
+
+export async function getCurrentUser(c: Context<{ Bindings: Env }>): Promise<CurrentUser | null> {
+  if (localAuth(c.env)) return LOCAL_OWNER;
+  const token = getCookie(c, SESSION_COOKIE);
+  if (!token) return null;
+  const row = await c.env.DB.prepare(`select u.id, u.full_name as name, u.role
+    from auth_session s join admin_user u on u.id = s.user_id
+    where s.token_hash = ? and s.expires_at > ? and u.enabled = 1`)
+    .bind(await tokenHash(token), Math.floor(Date.now() / 1000)).first<{ id: string; name: string; role: string }>();
+  if (!row || !["owner", "admin"].includes(row.role)) return null;
+  return { id: row.id, name: row.name, role: row.role as CurrentUser["role"], mode: "oidc" };
+}
+
 export async function requireOwner(c: Context<{ Bindings: Env }>): Promise<CurrentUser> {
-  return getCurrentUser(c);
+  const user = c.get("user") ?? await getCurrentUser(c);
+  if (!user) throw new HttpError(401, "unauthorized", "请先登录");
+  if (user.role !== "owner") throw new HttpError(403, "forbidden", "需要所有者权限");
+  return user;
+}
+
+export function requireSameOrigin(c: Context<{ Bindings: Env }>) {
+  if (localAuth(c.env)) return;
+  const expected = c.env.APP_ORIGIN;
+  if (!expected || c.req.header("origin") !== expected || c.req.header("sec-fetch-site") === "cross-site") {
+    throw new HttpError(403, "forbidden", "请求来源无效，请从本站重新操作");
+  }
 }

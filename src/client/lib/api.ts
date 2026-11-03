@@ -105,6 +105,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     }
   }
 
+  if (response.status === 401) window.dispatchEvent(new Event("rota:unauthorized"));
   if (!response.ok) throw toApiError(response.status, data);
   return data as T;
 }

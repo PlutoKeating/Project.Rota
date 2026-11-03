@@ -1,5 +1,5 @@
 import type { FairnessRow, Term } from "../../shared/types";
-import { badRequest, dbAll, dbOne, dbRun, nowIso } from "../lib/core";
+import { badRequest, dbAll, dbBatch, dbOne, dbRun, nowIso, ulid } from "../lib/core";
 import { addDays, weekIndexOf } from "./time";
 
 /**
@@ -98,7 +98,13 @@ export async function listFairness(
   return dbAll<FairnessRow>(
     db,
     `select f.person_id, p.full_name, f.org_id, o.name as org_name,
-            f.window_key, f.shift_count, f.minutes, f.carry_over, f.last_assigned_at
+            f.window_key, f.shift_count, f.minutes,
+            coalesce((select count(*) from assignment a join shift s on s.id=a.shift_id join task t on t.id=s.task_id
+              where a.person_id=f.person_id and t.org_id=f.org_id and a.status in ('proposed','confirmed','completed')
+              and s.status != 'cancelled' and julianday(s.starts_at) < (
+                select julianday(tm.start_date || 'T00:00:00+08:00') + (cast(substr(f.window_key,length(tm.name)+3) as integer)-1)*7
+                from term tm where substr(f.window_key,1,length(tm.name)+2)=tm.name || '-W' limit 1
+              )),0) as carry_over, f.last_assigned_at
        from fairness_stat f
        join person p on p.id = f.person_id
        left join organization o on o.id = f.org_id
@@ -161,29 +167,16 @@ export async function recomputeFairness(
     buckets.set(key, bucket);
   }
 
-  await dbRun(
-    db,
-    filter.orgId
-      ? "delete from fairness_stat where org_id = ?"
-      : "delete from fairness_stat",
-    ...(filter.orgId ? [filter.orgId] : []),
-  );
-
+  const statements: { sql: string; params: (string | number | null)[] }[] = [{
+    sql: filter.orgId ? "delete from fairness_stat where org_id = ?" : "delete from fairness_stat",
+    params: filter.orgId ? [filter.orgId] : [],
+  }];
   for (const bucket of buckets.values()) {
-    await dbRun(
-      db,
-      `insert into fairness_stat
-         (id, person_id, org_id, window_key, shift_count, minutes, carry_over, last_assigned_at)
-       values (?, ?, ?, ?, ?, ?, 0, ?)`,
-      `FS${Date.parse(nowIso())}${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
-      bucket.personId,
-      bucket.orgId,
-      bucket.windowKey,
-      bucket.count,
-      bucket.minutes,
-      bucket.last,
-    );
+    statements.push({ sql: `insert into fairness_stat
+      (id, person_id, org_id, window_key, shift_count, minutes, carry_over, last_assigned_at)
+      values (?, ?, ?, ?, ?, ?, 0, ?)`,
+      params: [ulid(), bucket.personId, bucket.orgId, bucket.windowKey, bucket.count, bucket.minutes, bucket.last] });
   }
-
+  await dbBatch(db, statements);
   return buckets.size;
 }

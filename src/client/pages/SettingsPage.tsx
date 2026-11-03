@@ -1,3 +1,4 @@
+import { AdminUsers } from "../components/AdminUsers";
 import { useEffect, useState } from "react";
 import type {
   AppSettings,
@@ -480,6 +481,8 @@ export function SettingsPage() {
           />
         </ListState>
       </Card>
+
+      <AdminUsers />
 
       <Card
         title="最近审计"

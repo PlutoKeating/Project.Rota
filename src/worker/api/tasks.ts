@@ -57,8 +57,8 @@ tasks.post("/tasks", async (c) => {
   await dbRun(
     c.env.DB,
     `insert into audit_event (id, actor_id, action, target_type, target_id, payload, created_at)
-     values (?, 'local-owner', 'task.create', 'task', ?, ?, ?)`,
-    ulid(), id, JSON.stringify({ title, kind }), nowIso(),
+     values (?, ?, 'task.create', 'task', ?, ?, ?)`,
+    ulid(), c.get("user").id, id, JSON.stringify({ title, kind }), nowIso(),
   );
 
   const created = await dbOne<Task>(c.env.DB, "select * from task where id = ?", id);

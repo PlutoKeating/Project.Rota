@@ -58,25 +58,27 @@ const SLOT_COLUMNS = "id, term_id, week_index, weekday, period_index, starts_at,
 // ---------------------------------------------------------------------------
 
 function auditStatement(
+  actor: string,
   action: string,
   targetType: string,
   targetId: string,
   payload: Record<string, unknown>,
 ): Statement {
   return {
-    sql: "insert into audit_event (id, actor_id, action, target_type, target_id, payload, created_at) values (?, 'system', ?, ?, ?, ?, ?)",
-    params: [ulid(), action, targetType, targetId, JSON.stringify(payload), nowIso()],
+    sql: "insert into audit_event (id, actor_id, action, target_type, target_id, payload, created_at) values (?, ?, ?, ?, ?, ?, ?)",
+    params: [ulid(), actor, action, targetType, targetId, JSON.stringify(payload), nowIso()],
   };
 }
 
 async function writeAudit(
   db: D1Database,
+  actor: string,
   action: string,
   targetType: string,
   targetId: string,
   payload: Record<string, unknown>,
 ): Promise<void> {
-  const statement = auditStatement(action, targetType, targetId, payload);
+  const statement = auditStatement(actor, action, targetType, targetId, payload);
   await dbRun(db, statement.sql, ...(statement.params ?? []));
 }
 
@@ -247,7 +249,7 @@ const createTerm = async (c: TermContext) => {
     throw error;
   }
 
-  await writeAudit(db, "term.create", "term", termId, {
+  await writeAudit(db, c.get("user").id, "term.create", "term", termId, {
     name,
     startDate,
     weekCount,
@@ -301,7 +303,7 @@ const updateTerm = async (c: TermContext) => {
 
   await dbBatch(db, [
     { sql: `update term set ${sets.join(", ")} where id = ?`, params: [...params, id] },
-    auditStatement("term.update", "term", id, changes),
+    auditStatement(c.get("user").id, "term.update", "term", id, changes),
   ]);
   return c.json(await loadTermDetail(db, id));
 };
@@ -326,7 +328,7 @@ const deleteTerm = async (c: TermContext) => {
     { sql: "delete from slot where term_id = ?", params: [id] },
     { sql: "delete from class_period where term_id = ?", params: [id] },
     { sql: "delete from term where id = ?", params: [id] },
-    auditStatement("term.delete", "term", id, { name: term.name }),
+    auditStatement(c.get("user").id, "term.delete", "term", id, { name: term.name }),
   ]);
   return c.json({ ok: true });
 };

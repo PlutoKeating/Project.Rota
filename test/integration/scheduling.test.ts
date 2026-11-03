@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import guards from "../../migrations/0003_assignment_guards.sql?raw";
 import ddl from "../../migrations/0001_init.sql?raw";
-import { assignShift, previewShift, unassign, type ScheduleConfig } from "../../src/worker/domain/scheduler";
+import { assignShift, autoAssignTask, previewShift, unassign, type ScheduleConfig } from "../../src/worker/domain/scheduler";
 import { listFairness } from "../../src/worker/domain/ledger";
 import { D1Stub } from "../helpers/d1";
 
@@ -22,7 +23,7 @@ async function run(db: D1Stub, sql: string, ...params: (string | number | null)[
 }
 
 async function seed(): Promise<D1Stub> {
-  const db = new D1Stub(ddl);
+  const db = new D1Stub(ddl + guards);
 
   await run(
     db,
@@ -142,5 +143,38 @@ describe("排班链路", () => {
     await expect(
       assignShift(db as unknown as D1Database, "sh1", "p3", CONFIG, "tester"),
     ).rejects.toThrow(/人数已满/);
+  });
+});
+
+
+describe("排班边界", () => {
+  it("自动排满多人数班次，不重复选择同一成员", async () => {
+    const db = await seed();
+    await run(db, "update shift set required_headcount=2");
+    const result = await autoAssignTask(db as unknown as D1Database, "task1", { ...CONFIG, cooldownDays: 0 }, "tester");
+    expect(result).toEqual({ assigned: 2, skipped: 0 });
+    expect(await db.prepare("select count(*) as n from assignment").first()).toMatchObject({ n: 2 });
+  });
+  it("节次之外的请假也会阻止分配", async () => {
+    const db = await seed();
+    await run(db, "update shift set starts_at='2026-09-07T20:00:00+08:00', ends_at='2026-09-07T21:00:00+08:00'");
+    await run(db, "insert into unavailability (id, person_id, starts_at, ends_at, kind, status, created_at) values ('l','p2','2026-09-07T19:00:00+08:00','2026-09-07T22:00:00+08:00','leave','approved',datetime('now'))");
+    const preview = await previewShift(db as unknown as D1Database, "sh1", CONFIG);
+    expect(preview.excluded).toContainEqual(expect.objectContaining({ personId: "p2", reason: "busy" }));
+  });
+  it("并发分配不会超员，账本只增加成功写入的次数", async () => {
+    const db = await seed();
+    const results = await Promise.allSettled(["p2", "p3"].map(p => assignShift(db as unknown as D1Database, "sh1", p, CONFIG, "tester")));
+    expect(results.filter(r => r.status === "fulfilled")).toHaveLength(1);
+    expect(await db.prepare("select sum(shift_count) as n from fairness_stat").first()).toMatchObject({ n: 1 });
+  });
+  it("任期结束和缺少技能的成员不会被选中", async () => {
+    const db = await seed();
+    await run(db, "update membership set valid_to='2026-09-06' where person_id='p2'");
+    await run(db, "insert into skill (id,name) values ('camera','摄影')");
+    await run(db, "update shift set required_skill_id='camera'");
+    const preview = await previewShift(db as unknown as D1Database, "sh1", CONFIG);
+    expect(preview.candidates).toHaveLength(0);
+    expect(preview.excluded).toContainEqual(expect.objectContaining({ personId: "p3", reason: "skill" }));
   });
 });
