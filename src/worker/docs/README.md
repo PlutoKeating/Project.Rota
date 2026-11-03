@@ -31,12 +31,14 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 
 正式提交校验完整差异、原值、引用和派班冲突，派生数据及审计同事务写入。普通 CRUD 也受租约触发器保护，租约过期可恢复。独立课表实际时间纳入 availability、人员周课表/可用时长和 scheduler，支持全局节次之外的占用。新增迁移 `0005_browser_agent_import.sql`，无新增环境变量。详见 `docs/AGENT_IMPORT.md` 与 `docs/API.md`。
 
-Agent 单轮代理新增 `work/compact` 模式、批次内成功模型复用与短暂冷却、请求/候选耗时诊断。运行依赖和环境变量不变；新前端与 Worker 需同步发布。协议见根目录 `docs/API.md`。
+Agent 单轮代理新增 `work/compact/checkpoint/verify` 模式、批次内成功模型复用与短暂冷却、请求/候选耗时诊断。运行依赖和环境变量不变；新前端与 Worker 需同步发布。协议见根目录 `docs/API.md`。
 
 ### 导入实际材料回归修正
 
-兼容模型使用 `@ai-sdk/openai-compatible` 2.x，与 AI SDK 6 对齐；保留并回传 reasoning_content，不在用户处理记录中展示模型思维链。响应返回前验证所有工具调用，发现 invalid、参数错误或截断则整轮拒绝并切换候选。MiniMax M3.1 默认 reasoning_effort=medium，供应商显式 params 设置优先。新增结构化课表和 OCR 工具在浏览器执行，Worker 不负责文件识别，未增加业务迁移或环境变量。
+兼容模型使用 `@ai-sdk/openai-compatible` 2.x，与 AI SDK 6 对齐；保留并回传 reasoning_content，不在用户处理记录中展示模型思维链。响应返回前验证所有工具调用，损坏 JSON、未知工具及截断输出整轮拒绝并切换候选；合法 JSON 的契约错误保留为 validationError 反馈，浏览器禁止执行。MiniMax M3.1 默认 reasoning_effort=medium，供应商显式 params 设置优先。新增结构化课表和 OCR 工具在浏览器执行，Worker 不负责文件识别，未增加业务迁移或环境变量。
 
 导入单轮代理支持 `work`、`compact`、`checkpoint`、`verify`：保存成果阶段仅提供持久化与查询工具，暂不提供新文件读取工具，返回调用须属于当轮开放工具集合。逐人复核继续使用同一 Agent，通过 `revise_timetable` 增量纠正、`confirm_timetable_check` 记录来源回看与方案签名。
 
 `verify` 仅开放当前原件读取、课表查询/修订、核对确认及必要历史读取，不混入全局笔记、通用 CRUD 或新材料发现工具。
+
+无进展冷却优先选择其他可用模型；只有一个候选或所有候选都在此类冷却中时保留纠错尝试，浏览器仍限制连续失败与空转次数。不是取消供应商的限流或超时处理。

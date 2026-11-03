@@ -720,7 +720,10 @@ test("image crops clip the image edge and explain invalid coordinates", async ({
     }
     let pageError = "";
     try {
-      await d.documentTool({ id: "crop" } as any, "view_image", { path: "edge.png", page: 2 });
+      await d.documentTool({ id: "crop" } as any, "view_image", {
+        path: "edge.png",
+        page: 2,
+      });
     } catch (e) {
       pageError = (e as Error).message;
     }
@@ -1016,11 +1019,19 @@ test("spreadsheet reading and source verification require the last column, and r
   expect(JSON.stringify(result.content)).toContain("最后一列课程");
 });
 
-test("source coverage never outruns the document text delivered to the model", async ({ page }) => {
-  await routes(page, () => reply([{ id: "read-long", name: "read_document", args: { path: "long.txt" } }]));
+test("source coverage never outruns the document text delivered to the model", async ({
+  page,
+}) => {
+  await routes(page, () =>
+    reply([
+      { id: "read-long", name: "read_document", args: { path: "long.txt" } },
+    ]),
+  );
   const result = await page.evaluate(async () => {
     const r = await import("/src/client/agent-import/runtime.ts");
-    const job = await r.createJob("owner", [new File(["资料".repeat(9000) + "尾部课程证据"], "long.txt")]);
+    const job = await r.createJob("owner", [
+      new File(["资料".repeat(9000) + "尾部课程证据"], "long.txt"),
+    ]);
     const runner = new r.ImportRunner(job, (j) => {
       if (j.turns === 1 && !j.pending.length) runner.stop();
     });
@@ -1029,4 +1040,89 @@ test("source coverage never outruns the document text delivered to the model", a
   });
   expect(JSON.stringify(result)).toContain("尾部课程证据");
   expect(JSON.stringify(result)).not.toContain("完整结果已归档");
+});
+
+test("conflicting update and removal explains recovery without mutating the draft", async ({
+  page,
+}) => {
+  const sources = [
+    {
+      source: "rows.txt",
+      locator: "全文",
+      explanation: "测试原件",
+      inferred: false,
+    },
+  ];
+  await routes(page, () =>
+    reply([
+      { id: "read", name: "read_document", args: { path: "rows.txt" } },
+      {
+        id: "save",
+        name: "save_timetable",
+        args: {
+          id: "plan",
+          person: { id: "p", full_name: "测试" },
+          term_name: "待定",
+          entries: [{ name: "甲" }, { name: "乙" }],
+          sources,
+        },
+      },
+      {
+        id: "wipe",
+        name: "save_timetable",
+        args: {
+          id: "plan",
+          person: { id: "p", full_name: "测试" },
+          term_name: "待定",
+          entries: [],
+          sources,
+          mode: "replace",
+        },
+      },
+      {
+        id: "bad",
+        name: "revise_timetable",
+        args: {
+          id: "plan",
+          updates: [{ index: 1, patch: { name: "错误修改" } }],
+          remove: [1],
+          sources,
+        },
+      },
+      { id: "inspect", name: "read_timetables", args: { id: "plan" } },
+      {
+        id: "correct",
+        name: "revise_timetable",
+        args: { id: "plan", remove: [1], sources },
+      },
+      {
+        id: "remove-last",
+        name: "revise_timetable",
+        args: { id: "plan", remove: [0], sources },
+      },
+    ]),
+  );
+  const result = await page.evaluate(async () => {
+    const r = await import("/src/client/agent-import/runtime.ts");
+    const job = await r.createJob("owner", [new File(["甲乙"], "rows.txt")]);
+    const runner = new r.ImportRunner(job, (j) => {
+      if (j.turns === 1 && !j.pending.length) runner.stop();
+    });
+    await runner.run();
+    return { plans: job.timetables, messages: job.messages };
+  });
+  expect(result.plans.plan.entries).toEqual([]);
+  const outputs = result.messages
+    .filter((m: any) => m.role === "tool")
+    .flatMap((m: any) => m.content);
+  expect(
+    outputs.find((o: any) => o.toolCallId === "wipe").output.value.error,
+  ).toContain("不能用空 entries 覆盖");
+  expect(
+    outputs.find((o: any) => o.toolCallId === "bad").output.value.error,
+  ).toContain("只保留 remove");
+  expect(
+    outputs.find((o: any) => o.toolCallId === "inspect").output.value.entries[1]
+      .name,
+  ).toBe("乙");
 });

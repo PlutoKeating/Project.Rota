@@ -147,7 +147,11 @@ describe("single-turn credential proxy", () => {
     );
     const result = await agentTurn(
       env,
-      { messages: [{ role: "user", content: "整理材料" }], context: "{}" },
+      {
+        messages: [{ role: "user", content: "整理材料" }],
+        context: "{}",
+        cooldowns: { model: Date.now() + 300000 },
+      },
       "batch",
     );
     expect(
@@ -175,7 +179,11 @@ describe("single-turn credential proxy", () => {
     expect(
       body.tools.some((t: any) => t.function.name === "change_record"),
     ).toBe(true);
-    expect(body.tools.some((t: any) => t.function.name === "confirm_timetable_check")).toBe(false);
+    expect(
+      body.tools.some(
+        (t: any) => t.function.name === "confirm_timetable_check",
+      ),
+    ).toBe(false);
     expect(body.messages[0].content).toContain("没有固定的解析流程");
     await agentTurn(
       env,

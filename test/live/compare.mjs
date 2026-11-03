@@ -95,19 +95,21 @@ for (const file of expectedPaths) {
         (e) =>
           (aliases.get(normalized(e.name)) ?? normalized(e.name)) ===
           normalized(name),
-      ) &&
-      !matches.some((p) =>
-        p.unresolved.some((u) => normalized(u).includes(normalized(name))),
       ),
+  );
+  const organizations = (expected.organizationIds ?? []).every((id) =>
+    matches.some((p) => p.organization_ids.includes(id)),
   );
   cases.push({
     person: expected.person.full_name,
     identity,
+    organizations,
     named,
     occupied,
     absentUnscheduled,
     pass:
       identity &&
+      organizations &&
       !named.missing.length &&
       (expected.allowAdditionalScheduled || !named.extra.length) &&
       !absentUnscheduled.length,

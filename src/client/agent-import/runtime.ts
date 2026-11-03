@@ -290,6 +290,7 @@ export async function checkJob(job: Job) {
 async function execute(
   job: Job,
   call: PendingCall,
+  explicitRemoval = false,
 ): Promise<{ result: unknown; image?: string }> {
   if (call.validationError)
     throw Error("工具未执行，请修正参数：" + call.validationError);
@@ -313,11 +314,23 @@ async function execute(
         ...args.remove,
         ...args.updates.map((u: any) => u.index),
       ];
-      if (
-        new Set(indexes).size !== indexes.length ||
-        indexes.some((i) => i >= previous.entries.length)
-      )
-        throw Error("修订索引重复或不存在");
+      const conflicts = args.updates
+        .map((u: any) => u.index)
+        .filter((i: number) => args.remove.includes(i));
+      if (conflicts.length)
+        throw Error(
+          "同一条目不能同时更新和删除。索引 " +
+            conflicts.join("、") +
+            " 同时出现在 updates 和 remove；若要删除，只保留 remove，移除对应 updates。当前草稿未变更。",
+        );
+      if (new Set(indexes).size !== indexes.length)
+        throw Error(
+          "updates 或 remove 内有重复索引，每个原条目只能指定一次；当前草稿未变更",
+        );
+      if (indexes.some((i) => i >= previous.entries.length))
+        throw Error(
+          `索引越界：当前 entries 共 ${previous.entries.length} 条，使用 read_timetables 返回的 index；当前草稿未变更`,
+        );
       const entries = previous.entries
         .map((e, i) => ({
           ...e,
@@ -332,19 +345,23 @@ async function execute(
           [...previous.sources, ...args.sources].map((e) => [canonical(e), e]),
         ).values(),
       ];
-      return execute(job, {
-        id: call.id,
-        name: "save_timetable",
-        args: {
-          ...previous,
-          person: { ...person, ...args.person },
-          term_name: args.term_name ?? previous.term_name,
-          entries,
-          sources,
-          unresolved: args.unresolved ?? previous.unresolved,
-          mode: "replace",
+      return execute(
+        job,
+        {
+          id: call.id,
+          name: "save_timetable",
+          args: {
+            ...previous,
+            person: { ...person, ...args.person },
+            term_name: args.term_name ?? previous.term_name,
+            entries,
+            sources,
+            unresolved: args.unresolved ?? previous.unresolved,
+            mode: "replace",
+          },
         },
-      });
+        true,
+      );
     }
     case "save_timetable": {
       const { mode, ...fields } = toolSpecs.save_timetable.schema.parse(
@@ -353,6 +370,15 @@ async function execute(
       if (job.verification && job.verification.id !== fields.id)
         throw Error("只能修正当前复核方案");
       const previous = job.timetables?.[fields.id];
+      if (
+        !explicitRemoval &&
+        mode === "replace" &&
+        previous?.entries.length &&
+        !fields.entries.length
+      )
+        throw Error(
+          `已有 ${previous.entries.length} 条课程，不能用空 entries 覆盖。只改身份或标题请用 revise_timetable；确需删除课程须在 remove 中明确列出索引。当前草稿未变更。`,
+        );
       const input =
         mode === "append" && previous
           ? toolSpecs.save_timetable.schema.parse({
@@ -751,7 +777,7 @@ async function execute(
         )
       )
         throw Error(
-          "仍有课表未逐人回看核对；请先保存当前未记录成果，系统随后进入逐人复核。",
+          "仍有课表未逐人回看核对。先保存当前识别成果；读完并保存的来源须用 mark_file status=done 标记（未完的继续读取），系统才会进入逐人核对。不要重复 finish_review 或仅写 note。",
         );
       if (job.pending.length > 1)
         throw Error("请先完成本轮其他工具，再提交复核");

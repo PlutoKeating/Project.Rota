@@ -19,7 +19,7 @@ const entryPatch = z.object({
 export const toolSpecs = {
   revise_timetable: {
     description:
-      "按明确索引修订已保存的课表，或追加遗漏条目；只填变化，不重复抄写整张表。term_name 可修订学期标题，person 可修订有证据的身份字段但不能换 id。index 为从0开始的 entries 数组下标。remove 只删除明确指定条目；不根据名称自动合并。须说明来源和本次修正；unresolved 若提供则替换待定事项，否则保留。",
+      "按明确索引修订已保存的课表，或追加遗漏条目；只填变化，不重复抄写整张表。term_name 可修订学期标题，person 可修订有证据的身份字段但不能换 id。index 为从0开始的 entries 数组下标。同一个 index 不能同时出现在 updates 与 remove；删除时只填 remove。所有索引均指调用前的原数组，删除后再追加。remove 只删除明确指定条目；不根据名称自动合并。须说明来源和本次修正；unresolved 若提供则替换待定事项，否则保留。",
     schema: z.object({
       id: z.string(),
       term_name: timetableProposalSchema.shape.term_name.optional(),

@@ -61,8 +61,6 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
   ) as string[];
   const candidates = rows.results
     .filter((r) => {
-      const until = body.cooldowns?.[r.id] ?? 0;
-      if (until > Date.now() && until <= Date.now() + 300000) return false;
       const p = JSON.parse(r.params || "{}");
       return p.vision !== false && p.toolCalling !== false;
     })
@@ -71,6 +69,13 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
         order.includes(id) ? order.indexOf(id) : order.length;
       return rank(a.id) - rank(b.id);
     });
+  // These are client-side no-progress cooldowns, not provider rate-limit backoffs.
+  // Keep a fallback when there is no alternative; the runner still bounds idle/error loops.
+  const eligible = candidates.filter((r) => {
+    const until = body.cooldowns?.[r.id] ?? 0;
+    return !(until > Date.now() && until <= Date.now() + 300000);
+  });
+  if (eligible.length) candidates.splice(0, candidates.length, ...eligible);
   // A successful provider is reused within this batch. New batches start with global order.
   if (body.preferredProvider)
     candidates.sort(
@@ -367,7 +372,7 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
   throw new AgentTurnError(
     (candidates.length
       ? "本轮模型调用未完成；进度已保存。" + failures.join("；")
-      : "没有可尝试的视觉/工具模型：请检查启用配置，或等待失败供应商的短暂冷却结束。") +
+      : "没有可尝试的视觉/工具模型：请检查启用配置及视觉、工具调用能力设置。") +
       " 请求编号：" +
       metrics.requestId,
     metrics,

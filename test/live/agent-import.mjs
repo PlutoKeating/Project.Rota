@@ -289,6 +289,11 @@ try {
       observations: Object.keys(result.job.observations ?? {}).length,
       people: result.job.draft.person.length,
       courses: result.job.draft.timetable_entry.length,
+      preparedEntries: Object.values(result.job.timetables ?? {}).reduce(
+        (n, p) => n + p.entries.length,
+        0,
+      ),
+      reviewedPlans: Object.keys(result.job.timetableChecks ?? {}).length,
       issues: result.validation.issues.length,
       unread: result.validation.unread.length,
     }),
