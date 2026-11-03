@@ -18,6 +18,7 @@ export interface Attempt {
   status: "ok" | "error";
   code?: string;
   httpStatus?: number;
+  retryAfterMs?: number;
 }
 export interface TurnMetrics {
   requestId: string;

@@ -25,6 +25,28 @@ if (process.env.ROTA_CAPTURE_PROVIDER_RESPONSES === "1") {
     const url = new URL(
       typeof input === "string" || input instanceof URL ? input : input.url,
     );
+    if (!response.ok && url.hostname === "opencode.ai") {
+      let body = await response.clone().text();
+      const headers = new Headers(init?.headers);
+      for (const secret of [
+        headers.get("authorization"),
+        headers.get("authorization")?.replace(/^Bearer /i, ""),
+        headers.get("x-api-key"),
+        headers.get("x-goog-api-key"),
+        url.searchParams.get("key"),
+      ]) {
+        if (secret) body = body.split(secret).join("[REDACTED]");
+      }
+      await fs.writeFile(
+        path.join(out, `provider-error-${Date.now()}.json`),
+        JSON.stringify({
+          status: response.status,
+          retryAfter: response.headers.get("retry-after"),
+          body,
+        }),
+        { mode: 0o600 },
+      );
+    }
     if (url.pathname.endsWith("/chat/completions")) {
       const value = await response
         .clone()
@@ -127,6 +149,7 @@ try {
       base_url: baseUrl,
       params: JSON.stringify({
         ...JSON.parse(source.params || "{}"),
+        ...JSON.parse(process.env.ROTA_LIVE_PARAMS || "{}"),
         vision: true,
         toolCalling: true,
       }),

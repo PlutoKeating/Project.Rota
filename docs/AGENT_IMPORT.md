@@ -178,3 +178,13 @@ expected JSON 包含 `person`（姓名及可选学号等明确身份字段）、
 无进展冷却只用于选择备用模型；没有其他可用模型时保留一次现有模型的纠错机会，仍受 12 轮无进展和连续工具错误上限约束，不把唯一模型冷却导致的空集合误报为模型未配置。增量修订分别说明更新/删除冲突、重复索引、越界，错误不会改变草稿。
 
 已有非空课表不能通过 save_timetable 的空 entries 整表覆盖；只修订身份/标题使用 revise_timetable，删除课程须显式列出 remove 索引，防止恢复上下文后把已识别课程清空。
+
+无进展判断计入新增阅读区域，而非只计读完页数；大表或长文本分块读取正在增加覆盖时不会因为尚未读完整页而误停。重复读取已覆盖区域仍不算新的覆盖进展。
+
+### 供应商协议与额度
+
+`openai_compatible` 配置可显式设置 `params.api="responses"`，使用已安装的 `@ai-sdk/openai` 原生 Responses 工具协议；通用连接测试也使用对应接口。默认仍为 Chat Completions，不改全局模型顺序。Agent 请求设 store=false，并保留可跨轮传递的加密 reasoning 元数据。配置应与供应商原生端点匹配，参考 [OpenCode Go 官方端点表](https://opencode.ai/v2/docs/console/go/)。隔离测试可用 ROTA_LIVE_PARAMS 覆盖参数，仅影响测试进程。
+
+已知 GoUsageLimitError 分类为 quota_exhausted，只显示脱敏的额度提示，整轮仅因额度耗尽失败时不立即重复请求。普通 429 的 Retry-After（数字秒）记录为 retryAfterMs；30 秒内遵循等待，较长等待保存进度并暂停，不假装是数据库迁移问题。可用备用供应商仍由单轮代理按全局顺序尝试。
+
+诊断捕获也可将失败响应写入私有 provider-error 文件，包含状态、Retry-After 和脱敏错误正文；可能含其他供应商工作区信息，不得提交。最终验收状态与边界见 [实际材料验收记录](./AGENT_IMPORT_ACCEPTANCE.md)。

@@ -556,3 +556,110 @@ it.each([
     expect(result.messages.every((m) => m.role === "assistant")).toBe(true);
   },
 );
+
+it("uses stateless Responses tool calls when explicitly configured", async () => {
+  const env = await setup("openai_compatible", "https://responses.example/v1");
+  await env.DB.prepare("UPDATE llm_provider SET params=?")
+    .bind('{"vision":true,"api":"responses"}')
+    .run();
+  let sent: any,
+    endpoint = "";
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url, options) => {
+      endpoint = String(url);
+      sent = JSON.parse(options.body);
+      return new Response(
+        JSON.stringify({
+          id: "resp",
+          object: "response",
+          created_at: 1,
+          model: "test-model",
+          status: "completed",
+          output: [
+            {
+              id: "fc",
+              type: "function_call",
+              call_id: "c",
+              name: "tree",
+              arguments: "{}",
+              status: "completed",
+            },
+          ],
+          usage: { input_tokens: 5, output_tokens: 4, total_tokens: 9 },
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    }),
+  );
+  const result = await agentTurn(
+    env,
+    { messages: [{ role: "user", content: "读取" }], context: "{}" },
+    "batch",
+  );
+  expect(endpoint).toBe("https://responses.example/v1/responses");
+  expect(sent.store).toBe(false);
+  expect(result.calls[0].name).toBe("tree");
+  await agentTurn(
+    env,
+    {
+      context: "{}",
+      messages: [
+        ...result.messages,
+        {
+          role: "tool",
+          content: [
+            {
+              type: "tool-result",
+              toolCallId: "c",
+              toolName: "tree",
+              output: { type: "json", value: { items: [] } },
+            },
+          ],
+        },
+      ],
+    },
+    "batch",
+  );
+  expect(
+    sent.input.some(
+      (m: any) => m.type === "function_call_output" && m.call_id === "c",
+    ),
+  ).toBe(true);
+});
+
+it("reports exhausted quota without exposing provider error bodies", async () => {
+  const env = await setup("google", "https://google.example");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              type: "GoUsageLimitError",
+              message: "private-workspace-information",
+            },
+          }),
+          {
+            status: 429,
+            headers: {
+              "content-type": "application/json",
+              "retry-after": "444558",
+            },
+          },
+        ),
+    ),
+  );
+  const error = await agentTurn(
+    env,
+    { messages: [{ role: "user", content: "读取" }], context: "{}" },
+    "batch",
+  ).catch((e) => e);
+  expect(error.metrics.attempts[0]).toMatchObject({
+    code: "quota_exhausted",
+    retryAfterMs: 444558000,
+  });
+  expect(error.message).toContain("额度已用尽");
+  expect(error.message).not.toContain("private-workspace");
+});

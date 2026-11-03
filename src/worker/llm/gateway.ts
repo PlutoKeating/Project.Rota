@@ -360,7 +360,9 @@ function buildRequest(
 ): BuiltRequest {
   switch (provider.kind) {
     case "openai_compatible":
-      return buildOpenAi(provider, options, temperature);
+      return provider.params.api === "responses"
+        ? buildResponses(provider, options)
+        : buildOpenAi(provider, options, temperature);
     case "anthropic":
       return buildAnthropic(provider, options, temperature);
     case "google":
@@ -378,6 +380,40 @@ function buildRequest(
         `未知的模型供应商类型：${provider.kind}`,
       );
   }
+}
+
+function buildResponses(
+  provider: ResolvedProvider,
+  options: CompleteOptions,
+): BuiltRequest {
+  const lastUser = findLastUserIndex(options.messages);
+  return {
+    url: `${provider.baseUrl}/responses`,
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${provider.apiKey}`,
+    },
+    body: {
+      model: provider.model,
+      store: false,
+      input: options.messages.map((m, i) => ({
+        role: m.role,
+        content: [
+          {
+            type: m.role === "assistant" ? "output_text" : "input_text",
+            text: m.content,
+          },
+          ...(i === lastUser
+            ? imageParts(options.images ?? [], (image) => ({
+                type: "input_image",
+                image_url: `data:${image.mime};base64,${image.base64}`,
+              }))
+            : []),
+        ],
+      })),
+      ...(options.json ? { text: { format: { type: "json_object" } } } : {}),
+    },
+  };
 }
 
 function buildOpenAi(
@@ -542,6 +578,13 @@ function extractText(kind: LlmProviderKind, payload: unknown): string {
 }
 
 function extractOpenAiText(payload: unknown): string {
+  const output = asArray(asRecord(payload)?.output);
+  if (output.length)
+    return output
+      .flatMap((item) => asArray(asRecord(item)?.content))
+      .filter((part) => asRecord(part)?.type === "output_text")
+      .map((part) => asText(asRecord(part)?.text))
+      .join("");
   const choice = asArray(asRecord(payload)?.choices)[0];
   const content = asRecord(asRecord(choice)?.message)?.content;
   if (typeof content === "string") return content;

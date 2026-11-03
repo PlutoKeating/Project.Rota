@@ -1126,3 +1126,92 @@ test("conflicting update and removal explains recovery without mutating the draf
       .name,
   ).toBe("乙");
 });
+
+test("fresh partial image regions count as progress before a page is complete", async ({
+  page,
+}) => {
+  let tile = 0;
+  await routes(page, () =>
+    reply([
+      {
+        id: "tile-" + tile,
+        name: "view_image",
+        args: {
+          path: "wide.png",
+          crop: { x: 10 * tile++, y: 0, width: 10, height: 10 },
+        },
+      },
+    ]),
+  );
+  const result = await page.evaluate(async () => {
+    const r = await import("/src/client/agent-import/runtime.ts"),
+      s = await import("/src/client/agent-import/store.ts");
+    const canvas = document.createElement("canvas");
+    canvas.width = 140;
+    canvas.height = 10;
+    const blob = await new Promise<Blob>((resolve) =>
+      canvas.toBlob((b) => resolve(b!)),
+    );
+    const job = await r.createJob("owner", [new File([blob], "wide.png")]);
+    job.verification = {
+      id: "plan",
+      workMessages: [],
+      required: [{ path: "wide.png", pages: 1 }],
+      seen: {},
+    };
+    const runner = new r.ImportRunner(job, (j) => {
+      if (j.turns === 13 && !j.pending.length) runner.stop();
+    });
+    await runner.run();
+    return {
+      turns: job.turns,
+      error: job.error,
+      pages: (await s.materials(job.id))[0].pagesRead,
+    };
+  });
+  expect(result.turns).toBe(13);
+  expect(result.error).toBeUndefined();
+  expect(result.pages).toEqual([]);
+});
+
+test("exhausted provider quota pauses with saved progress instead of immediate retry", async ({
+  page,
+}) => {
+  let requests = 0;
+  await routes(page, () => reply([]));
+  await page.route("**/api/agent-imports/*/turn", (route) => {
+    requests++;
+    return route.fulfill({
+      status: 502,
+      json: {
+        error: "供应商额度已用尽",
+        code: "llm_error",
+        metrics: {
+          requestId: "quota",
+          durationMs: 1,
+          purpose: "work",
+          attempts: [
+            {
+              providerId: "test",
+              model: "test",
+              durationMs: 1,
+              status: "error",
+              code: "quota_exhausted",
+              httpStatus: 429,
+              retryAfterMs: 444558000,
+            },
+          ],
+        },
+      },
+    });
+  });
+  const result = await page.evaluate(async () => {
+    const r = await import("/src/client/agent-import/runtime.ts");
+    const job = await r.createJob("owner", [new File(["课程"], "资料.txt")]);
+    await new r.ImportRunner(job, () => {}).run();
+    return { status: job.status, metrics: job.metrics };
+  });
+  expect(requests).toBe(1);
+  expect(result.status).toBe("paused");
+  expect(result.metrics?.[0].attempts[0].code).toBe("quota_exhausted");
+});

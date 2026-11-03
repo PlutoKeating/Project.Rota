@@ -241,3 +241,50 @@ it("returns complete owner diagnostics with HTTP status, code and type while red
   expect(plain.details).toContain(long);
   expect(plain.details).not.toContain("test-key");
 });
+
+it("connection tests and image completion use explicitly configured Responses endpoints", async () => {
+  const { env, id } = await fixture(
+    "https://opencode.ai/inference/go/openai/v1",
+  );
+  const stored = await env.DB.prepare(
+    "SELECT params FROM llm_provider WHERE id=?",
+  )
+    .bind(id)
+    .first<{ params: string }>();
+  await env.DB.prepare("UPDATE llm_provider SET params=? WHERE id=?")
+    .bind(
+      JSON.stringify({
+        ...JSON.parse(stored!.params),
+        api: "responses",
+        vision: true,
+      }),
+      id,
+    )
+    .run();
+  let sent: any;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url, init) => {
+      expect(String(url)).toBe(
+        "https://opencode.ai/inference/go/openai/v1/responses",
+      );
+      sent = JSON.parse(init.body);
+      return Response.json({
+        output: [
+          { type: "message", content: [{ type: "output_text", text: "pong" }] },
+        ],
+      });
+    }),
+  );
+  expect(await testProvider(env, id)).toEqual({ ok: true, message: "pong" });
+  expect(sent.store).toBe(false);
+  await complete(env, {
+    providerId: id,
+    messages: [{ role: "user", content: "检查图片" }],
+    images: [{ mime: "image/png", base64: "synthetic" }],
+  });
+  expect(sent.input[0].content[1]).toEqual({
+    type: "input_image",
+    image_url: "data:image/png;base64,synthetic",
+  });
+});

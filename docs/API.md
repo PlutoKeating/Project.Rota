@@ -248,3 +248,5 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 单轮返回的调用可含 `validationError`：表示合法 JSON 参数不符合契约或不属于当轮工具范围。浏览器只保存错误反馈，禁止执行该调用，由 Agent 在下一轮纠正。
 
 本地 `render_sheet` 工具支持 sheet/page/range 的表格网格图片。文件读取的 coverage 为基础坐标范围，供本地完整性校验；不会作为业务推断。
+
+模型 params.api="responses" 显式选择 OpenAI Responses 协议，默认 Chat Completions 不变；连接测试与导入代理均支持。导入 metrics.attempts 可返回 code=quota_exhausted 与 retryAfterMs，不回传上游错误正文或凭据。

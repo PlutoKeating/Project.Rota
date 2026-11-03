@@ -42,3 +42,5 @@ Agent 单轮代理新增 `work/compact/checkpoint/verify` 模式、批次内成�
 `verify` 仅开放当前原件读取、课表查询/修订、核对确认及必要历史读取，不混入全局笔记、通用 CRUD 或新材料发现工具。
 
 无进展冷却优先选择其他可用模型；只有一个候选或所有候选都在此类冷却中时保留纠错尝试，浏览器仍限制连续失败与空转次数。不是取消供应商的限流或超时处理。
+
+params.api="responses" 可为 openai_compatible 选择原生 Responses（含管理页连接测试），默认保持 Chat Completions。额度耗尽单独脱敏分类；Retry-After 秒数进入诊断，浏览器不对已知额度耗尽立即重试。未新增依赖、环境变量或数据库迁移。

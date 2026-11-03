@@ -170,19 +170,25 @@ async function requestTurn<T>(
           supplied.attempts.some(
             (a) =>
               a.code === "timeout" ||
-              a.httpStatus === 429 ||
+              (a.httpStatus === 429 &&
+                a.code !== "quota_exhausted" &&
+                (a.retryAfterMs ?? 0) <= 30000) ||
               (a.httpStatus ?? 0) >= 500,
           ));
       if (!transient || retry >= 1) throw e;
+      const retryDelay = Math.max(
+        2000,
+        ...metrics.attempts.map((a) => Math.min(a.retryAfterMs ?? 0, 30000)),
+      );
       log(
         job,
-        "模型请求暂时失败，进度已保存；2 秒后重试一次。请求编号：" +
+        `模型请求暂时失败，进度已保存；${Math.ceil(retryDelay / 1000)} 秒后重试一次。请求编号：` +
           metrics.requestId,
       );
       job.phase = "模型请求暂时失败，正在重试";
       await saveJob(job);
       update();
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await new Promise((resolve) => setTimeout(resolve, retryDelay));
       body = { ...(body as object), cooldowns: job.cooldowns };
     }
   }
@@ -1041,14 +1047,14 @@ export class ImportRunner {
           }
           const signature = canonical({
             verification: job.verification
-              ? { id: job.verification.id, seen: job.verification.seen }
+              ? { id: job.verification.id, coverage: job.verification.coverage }
               : undefined,
             revision: job.revision,
             observationRevision: job.observationRevision ?? 0,
             files: (await materials(job.id)).map((f) => [
               f.path,
               f.status,
-              f.pagesRead,
+              f.readCoverage,
             ]),
           });
           job.progress = advanceProgress(job.progress, signature);

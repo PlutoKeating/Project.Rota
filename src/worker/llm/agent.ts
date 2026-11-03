@@ -188,13 +188,20 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
                   headers,
                   fetch: guardedFetch,
                 })(p.model)
-              : createOpenAICompatible({
-                  name: "compatible",
-                  apiKey: p.apiKey,
-                  baseURL: p.baseUrl,
-                  headers,
-                  fetch: guardedFetch,
-                }).chatModel(p.model);
+              : p.params.api === "responses"
+                ? createOpenAI({
+                    apiKey: p.apiKey,
+                    baseURL: p.baseUrl,
+                    headers,
+                    fetch: guardedFetch,
+                  }).responses(p.model)
+                : createOpenAICompatible({
+                    name: "compatible",
+                    apiKey: p.apiKey,
+                    baseURL: p.baseUrl,
+                    headers,
+                    fetch: guardedFetch,
+                  }).chatModel(p.model);
       const tools = Object.fromEntries(
         Object.entries(toolSpecs)
           .filter(([name]) =>
@@ -269,9 +276,18 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
               : "required",
           maxOutputTokens: body.mode === "compact" ? 4096 : 16384,
           providerOptions:
-            effort && p.kind === "openai_compatible"
-              ? { compatible: { reasoningEffort: effort } }
-              : undefined,
+            p.kind === "openai_compatible" && p.params.api === "responses"
+              ? {
+                  openai: {
+                    store: false,
+                    strictJsonSchema: false,
+                    reasoningEffort: effort ?? "medium",
+                    include: ["reasoning.encrypted_content"],
+                  },
+                }
+              : effort && p.kind === "openai_compatible"
+                ? { compatible: { reasoningEffort: effort } }
+                : undefined,
           maxRetries: 0,
           abortSignal: AbortSignal.timeout(remaining),
         }),
@@ -344,17 +360,31 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
         typeof (error as any)?.statusCode === "number"
           ? (error as any).statusCode
           : undefined;
-      const code = ["TimeoutError", "AbortError"].includes(
-        (error as Error)?.name,
-      )
-        ? "timeout"
-        : status
-          ? "upstream_http"
-          : (error as Error)?.message === "model_output_truncated"
-            ? "output_truncated"
-            : (error as Error)?.message === "invalid_tool_protocol"
-              ? "invalid_tool_call"
-              : "protocol_or_configuration";
+      let upstreamType: unknown;
+      try {
+        upstreamType = JSON.parse((error as any)?.responseBody ?? "null")?.error
+          ?.type;
+      } catch {
+        /* Do not expose untrusted provider bodies. */
+      }
+      const retryHeader = (error as any)?.responseHeaders?.["retry-after"];
+      const retrySeconds = Number(retryHeader);
+      const retryAfterMs =
+        retryHeader && Number.isFinite(retrySeconds) && retrySeconds >= 0
+          ? Math.min(retrySeconds * 1000, 30 * 86400000)
+          : undefined;
+      const code =
+        status === 429 && upstreamType === "GoUsageLimitError"
+          ? "quota_exhausted"
+          : ["TimeoutError", "AbortError"].includes((error as Error)?.name)
+            ? "timeout"
+            : status
+              ? "upstream_http"
+              : (error as Error)?.message === "model_output_truncated"
+                ? "output_truncated"
+                : (error as Error)?.message === "invalid_tool_protocol"
+                  ? "invalid_tool_call"
+                  : "protocol_or_configuration";
       metrics.attempts.push({
         providerId: row.id,
         model: modelId,
@@ -362,9 +392,10 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
         status: "error",
         code,
         httpStatus: status,
+        retryAfterMs,
       });
       failures.push(
-        `${row.id} / ${modelId}：${code}${status ? " (" + status + ")" : ""}`,
+        `${modelId}：${code === "quota_exhausted" ? "供应商额度已用尽，请恢复额度或选择其他模型" : code}${status ? " (" + status + ")" : ""}`,
       );
     }
   }
