@@ -16,7 +16,7 @@
 - GitHub 公开仓库：`PlutoKeating/Project.Rota`，AGPL-3.0-or-later。
 - Cloudflare Worker 已创建，生产认证已启用。
 - 业务数据库、设置、身份会话和文件已全部迁入 ECS 独立容器；Worker 已移除 D1/KV 绑定。真实地址、账号身份和秘密仅记录在私有运维侧。
-- GitHub Actions 验证工作流已准备；Workers Builds 需完成控制台连接并验证一次 Git 推送触发的成功构建。
+- GitHub Actions 检查与 ECS 自动部署已实测成功；Workers Builds 仍需控制台连接并验证 Git 推送触发 Worker 发布。
 
 ## 验证边界
 
@@ -39,9 +39,14 @@ v1 明确不包含邮件/短信通知、通用排课、跨校多租户、全局�
 ## 待收口
 
 - Workers Builds 的 GitHub 连接尚未得到完成确认；目前发布由已登录 Wrangler 执行，不能称为已验证自动部署。
-- ECS 自动部署工作流已配置受限 SSH 与 GitHub Secrets，首次推送后的执行结果待核验。
+- 用户 Cloudflare 控制台遇 Turnstile 300010，Worker Builds 连接受阻；现有 Wrangler 登录仍可手动发布。
 - 真实用户完成邮箱验证码或第三方登录后的回调验收尚待进行。
 
 ## ECS 数据迁移验证
 
 原数据库导出迁入 SQLite，integrity_check 和 foreign_key_check 通过，保留唯一初始所有者与应用设置。数据容器在线快照已完成恢复完整性检查。服务测试覆盖认证、批量回滚、RETURNING、设置重启持久化、文件路径与大小限制；Worker HTTP 适配器测试通过。
+
+- 迁移后线上已复验会话、学期、成员、试排/分配、公平、CSV、设置和原件上传/解析/确认入库。测试业务行与临时会话均清理，初始所有者保留。
+- 原 D1/KV 已在备份并验证迁移后移除，生产不再持有 Cloudflare 数据存储绑定；旧文件存储 Secrets 已移除。
+- 提交 `c6987d1` 的 [GitHub Actions](https://github.com/PlutoKeating/Project.Rota/actions/runs/41607191904) 中 check 和 deploy-data 均成功，ECS 已更新到该提交。源码使用 Git bundle 经受限 SSH 传输并核对 SHA，不依赖 ECS 直接访问 GitHub。
+- 自动部署曾发现非 root 镜像权限问题，健康检查成功回滚；修复后增加镜像启动预检。ECS 直连 GitHub 的 TLS 错误已通过 bundle 传输方案消除该依赖。
