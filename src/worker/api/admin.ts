@@ -18,6 +18,8 @@ import {
   asString,
   badRequest,
   dbAll,
+  dbBatch,
+  conflict,
   dbOne,
   dbRun,
   notFound,
@@ -161,6 +163,147 @@ admin.put("/model-order", async (c) => {
     ids: body.ids,
   });
   return c.json({ ok: true });
+});
+
+// Read rows and ordering in one SQLite transaction; CONFIG uses the same app_kv table.
+async function modelSnapshot(env: Env) {
+  const results = await dbBatch(env.DB, [
+    { sql: `select ${PROVIDER_COLUMNS} from llm_provider order by id` },
+    { sql: "select value from app_kv where key = 'llm:order'" },
+  ]);
+  const rows = results[0].results as unknown as (Omit<
+    ProviderRow,
+    "baseUrl" | "apiKeySecret" | "updatedAt"
+  > & {
+    base_url: string | null;
+    api_key_secret: string | null;
+    updated_at: string | null;
+  })[];
+  // dbBatch returns SQL column names, unlike dbAll's camel-case mapping.
+  const mapped = rows.map((r) => ({
+    ...r,
+    baseUrl: r.base_url,
+    apiKeySecret: r.api_key_secret,
+    updatedAt: r.updated_at,
+  }));
+  const order =
+    (results[1].results[0] as { value: string } | undefined)?.value ?? "[]";
+  const stamps = JSON.stringify(mapped.map((r) => [r.id, r.updatedAt]));
+  return {
+    rows: mapped,
+    order,
+    stamps,
+    version: JSON.stringify([stamps, order]),
+  };
+}
+function snapshotView(s: Awaited<ReturnType<typeof modelSnapshot>>) {
+  const ids: string[] = JSON.parse(s.order);
+  return {
+    version: s.version,
+    items: s.rows.map(providerView).sort((a, b) => {
+      const rank = (id: string) => (ids.includes(id) ? ids.indexOf(id) : 999);
+      return rank(a.id) - rank(b.id);
+    }),
+  };
+}
+admin.get("/model-config", async (c) =>
+  c.json(snapshotView(await modelSnapshot(c.env))),
+);
+admin.put("/model-config", async (c) => {
+  const body = await readObjectBody(c);
+  if (!Array.isArray(body.items) || body.items.length > 200)
+    throw badRequest("最多配置 200 个模型");
+  const previous = await modelSnapshot(c.env);
+  if (body.expectedVersion !== previous.version)
+    throw conflict(
+      "配置已被其他操作更新。草稿仍保留，请放弃更改以载入最新配置后重试。",
+    );
+  const ids = new Set<string>();
+  const statements = [];
+  const timestamp = new Date(
+    Math.max(
+      Date.now(),
+      ...previous.rows
+        .map((r) => Date.parse(r.updatedAt ?? "") + 1)
+        .filter(Number.isFinite),
+    ),
+  ).toISOString();
+  for (const item of body.items) {
+    if (!item || typeof item !== "object") throw badRequest("模型配置无效");
+    const id = asString(item.id, "id", 100);
+    if (ids.has(id)) throw badRequest("模型 ID 重复");
+    ids.add(id);
+    const old = previous.rows.find((r) => r.id === id);
+    const kind = oneOf(item.kind, PROVIDER_KINDS, "kind");
+    const baseUrl = normalizeBaseUrl(item.baseUrl, kind);
+    const params = providerParams(item.params) ?? {};
+    const stored =
+      parseJson<Record<string, unknown>>(old?.params ?? "{}") ?? {};
+    if (stored.encryptedKey) {
+      if (baseUrl !== old?.baseUrl && !item.apiKey)
+        throw badRequest("更改服务地址时需要重新填写密钥");
+      params.encryptedKey = stored.encryptedKey;
+    }
+    if (item.apiKey !== undefined)
+      params.encryptedKey = await seal(
+        c.env,
+        asString(item.apiKey, "apiKey", 4096),
+      );
+    statements.push({
+      sql: "insert into llm_provider (id,name,kind,base_url,model,api_key_secret,enabled,params,updated_at) values (?,?,?,?,?,?,?,?,?) on conflict(id) do update set name=excluded.name,kind=excluded.kind,base_url=excluded.base_url,model=excluded.model,api_key_secret=excluded.api_key_secret,enabled=excluded.enabled,params=excluded.params,updated_at=excluded.updated_at",
+      params: [
+        id,
+        asString(item.name, "name", 100),
+        kind,
+        baseUrl,
+        asString(item.model, "model", 200),
+        providerSecretName(item.apiKeySecret),
+        asBool(item.enabled, true) ? 1 : 0,
+        JSON.stringify(params),
+        timestamp,
+      ],
+    });
+  }
+  const order = JSON.stringify([...ids]);
+  // A failed NOT NULL guard aborts the entire batch if another writer won the race.
+  statements.unshift({
+    sql: "insert into app_kv (key,value) values ('llm:config-guard', case when (select json_group_array(json_array(id,updated_at)) from (select id,updated_at from llm_provider order by id)) = ? and coalesce((select value from app_kv where key='llm:order'),'[]') = ? then 'ok' else null end) on conflict(key) do update set value=excluded.value",
+    params: [previous.stamps, previous.order],
+  });
+  statements.push({
+    sql: `delete from llm_provider ${ids.size ? "where id not in (" + [...ids].map(() => "?").join(",") + ")" : ""}`,
+    params: [...ids],
+  });
+  statements.push({
+    sql: "insert into app_kv (key,value) values ('llm:order',?) on conflict(key) do update set value=excluded.value",
+    params: [order],
+  });
+  statements.push({
+    sql: "insert into app_kv (key,value) values ('llm:version',?) on conflict(key) do update set value=excluded.value",
+    params: [timestamp],
+  });
+  statements.push({
+    sql: "insert into audit_event (id,actor_id,action,target_type,target_id,payload,created_at) values (?,?,?,?,?,?,?)",
+    params: [
+      ulid(),
+      c.get("user").id,
+      "admin.llm_config.update",
+      "settings",
+      "llm:config",
+      JSON.stringify({ ids: [...ids] }),
+      nowIso(),
+    ],
+  });
+  try {
+    await dbBatch(c.env.DB, statements);
+  } catch (e) {
+    if ((await modelSnapshot(c.env)).version !== previous.version)
+      throw conflict(
+        "配置已被其他操作更新。草稿仍保留，请载入最新配置后重试。",
+      );
+    throw e;
+  }
+  return c.json(snapshotView(await modelSnapshot(c.env)));
 });
 
 admin.get("/llm-providers", async (c) => {

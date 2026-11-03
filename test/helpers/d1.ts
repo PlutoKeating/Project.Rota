@@ -21,9 +21,16 @@ class Statement {
     return new Statement(this.db, this.sql, params);
   }
 
-  runSync(): { success: true; meta: Record<string, unknown> } {
-    this.db.prepare(this.sql).run(...this.params);
-    return { success: true, meta: {} };
+  runSync(): {
+    success: true;
+    meta: Record<string, unknown>;
+    results: unknown[];
+  } {
+    const stmt = this.db.prepare(this.sql);
+    const results = /^\s*(SELECT|WITH)\b/i.test(this.sql)
+      ? stmt.all(...this.params)
+      : (stmt.run(...this.params), []);
+    return { success: true, meta: {}, results };
   }
 
   async first<T>(column?: string): Promise<T | null> {
@@ -33,8 +40,16 @@ class Statement {
     return row as T;
   }
 
-  async all<T>(): Promise<{ results: T[]; success: true; meta: Record<string, unknown> }> {
-    return { results: this.db.prepare(this.sql).all(...this.params) as T[], success: true, meta: {} };
+  async all<T>(): Promise<{
+    results: T[];
+    success: true;
+    meta: Record<string, unknown>;
+  }> {
+    return {
+      results: this.db.prepare(this.sql).all(...this.params) as T[],
+      success: true,
+      meta: {},
+    };
   }
 
   async run(): Promise<{ success: true; meta: Record<string, unknown> }> {
@@ -84,7 +99,11 @@ export function createKv(): FakeKv {
   };
 }
 
-export function createFiles(): { put: () => Promise<unknown>; get: () => Promise<null>; delete: () => Promise<void> } {
+export function createFiles(): {
+  put: () => Promise<unknown>;
+  get: () => Promise<null>;
+  delete: () => Promise<void>;
+} {
   return {
     async put() {
       return {};

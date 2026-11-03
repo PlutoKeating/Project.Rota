@@ -14,3 +14,8 @@
 官方 HTTPS `opencode.ai` 的 `/zen/` 与 `/inference/` 请求自动携带 `User-Agent: Project.Rota/0.1.0` 和 `x-opencode-session`，适用于测试连接与实际识别。每个截图识别任务生成独立随机 ID，解析重试复用该 ID；不使用账号、密钥或全局固定值作为会话。其他域名不发送这组专用头，即使 catalogId 被设置为 opencode-go。无需修改或重新保存已有供应商。
 
 依据：[Go 客户端要求](https://opencode.ai/v2/docs/console/go/)、[Console 接入说明](https://opencode.ai/v2/docs/console/harnesses)。官方免费层客户端、账号、地区及额度限制仍然生效；本实现不伪装成 OpenCode 客户端。当前修复针对缺失会话头的 HTTP 400，不保证所有免费模型或历史端点可用。
+
+
+### 模型配置草稿与排序
+
+`model-config` 使用真实数据服务现有的 `app_kv` 表，与 provider 在同一 SQLite 事务中读快照和写配置；快照版本包括条目 id/updatedAt 和原始顺序。写入前检查版本，事务首条 NOT NULL 条件断言再次检查，避免检查后并发写入。所有配置项采用单调更新时间戳，密钥沿用服务端密文；更改地址必须重新填写密钥。事务还包含审计，只记录条目 ID。旧 API 保留兼容，网关仍通过 CONFIG 读取同表顺序。

@@ -192,3 +192,8 @@
 官方 HTTPS `opencode.ai` 的 `/zen/` 与 `/inference/` 请求自动携带 `User-Agent: Project.Rota/0.1.0` 和 `x-opencode-session`，适用于测试连接与实际识别。每个截图识别任务生成独立随机 ID，解析重试复用该 ID；不使用账号、密钥或全局固定值作为会话。其他域名不发送这组专用头，即使 catalogId 被设置为 opencode-go。无需修改或重新保存已有供应商。
 
 依据：[Go 客户端要求](https://opencode.ai/v2/docs/console/go/)、[Console 接入说明](https://opencode.ai/v2/docs/console/harnesses)。官方免费层客户端、账号、地区及额度限制仍然生效；本实现不伪装成 OpenCode 客户端。当前修复针对缺失会话头的 HTTP 400，不保证所有免费模型或历史端点可用。
+
+
+### 模型配置草稿与排序
+
+`GET /admin/model-config`（owner）返回 `{ version, items: LlmProvider[] }`，items 按调用顺序排列。`PUT /admin/model-config` 接收 `{ expectedVersion, items }`（最多 200 项，每项包含稳定 id，可选 apiKey）；省略旧项即删除，数组顺序为调用顺序。保存模型、顺序、审计为单事务，密钥加密且不返回。版本冲突返回 409，参数错误 400，失败不产生部分配置。旧逐项 CRUD 和 model-order 接口仍兼容；前端整页保存应只调用新接口。

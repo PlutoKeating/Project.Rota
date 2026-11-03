@@ -193,6 +193,7 @@ export function SettingsPage() {
           <Button
             key={id}
             variant={tab === id ? "primary" : "ghost"}
+            data-settings-tab={id}
             onClick={() => setTab(id)}
           >
             {label}
@@ -302,12 +303,17 @@ export function SettingsPage() {
                     }
                   >
                     <option value="">按模型顺序自动选择</option>
-                    {providerList.filter(provider=>provider.enabled && provider.params?.vision!==false).map((provider) => (
-                      <option key={provider.id} value={provider.id}>
-                        {provider.name}
-                        {provider.enabled ? "" : "（停用）"}
-                      </option>
-                    ))}
+                    {providerList
+                      .filter(
+                        (provider) =>
+                          provider.enabled && provider.params?.vision !== false,
+                      )
+                      .map((provider) => (
+                        <option key={provider.id} value={provider.id}>
+                          {provider.name}
+                          {provider.enabled ? "" : "（停用）"}
+                        </option>
+                      ))}
                   </Select>
                 </Field>
                 <div className="flex items-end pb-1">

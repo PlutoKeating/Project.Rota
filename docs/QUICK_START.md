@@ -66,3 +66,8 @@ LINKML_BIN=.venv/bin/linkml bash scripts/gen.sh
 新版本不需要数据库迁移。models.dev 目录由 Worker 请求固定 HTTPS 地址；离线时保留上次成功缓存，已有模型不依赖目录可用性。
 
 `pnpm exec playwright install chromium` 安装测试浏览器。在隔离本地数据服务和 `pnpm dev` 已启动时，`pnpm test:browser` 检查创建工作、分配、嵌套焦点、模型配置和响应式布局。该命令会写入测试数据，不要将测试 baseURL 指向生产。
+
+
+### 模型配置草稿与排序
+
+模型草稿版本引入 @dnd-kit/core、sortable、utilities（锁文件已更新），安装后按现有检查/构建/发布流程部署 Worker。数据服务已存在 app_kv，无需新迁移、Secret 或部署参数。浏览器测试新增草稿无写入、拖动/键盘排序、保存失败恢复和整页保存验证。

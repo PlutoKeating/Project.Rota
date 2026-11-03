@@ -104,3 +104,15 @@ input[type="range"] {
     scroll-behavior: auto !important;
   }
 }
+
+/* New draft rows enter once; sortable displacement uses transform separately. */
+@keyframes model-insert {
+  from {
+    opacity: 0.4;
+    translate: 0 8px;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
