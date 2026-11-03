@@ -57,7 +57,13 @@ export async function parseScreenshot(
         lastError = "模型输出不是合法 JSON";
         continue;
       }
-      return sanitizeModelOutput(payload, input);
+      const parsed = sanitizeModelOutput(payload, input);
+      const proposed = asRecord(payload)?.courses;
+      if (Array.isArray(proposed) && proposed.length > 0 && parsed.courses.length === 0) {
+        lastError = parsed.warnings.join("；") || "识别结果中的时段均无效";
+        continue;
+      }
+      return parsed;
     } catch (error) {
       // 422 / 502 值得重试；配置或鉴权错误重试也没用，直接抛。
       if (error instanceof HttpError && error.status !== 422 && error.status !== 502) {
@@ -93,18 +99,18 @@ function buildMessages(term: Term, periods: Period[], retry: boolean): ChatMessa
     `课表节次（编号: 起止时间）：${periodLines || "未配置，按图片中的数字节次填写"}`,
     "",
     "输出结构必须严格如下：",
-    '{"courses":[{"name":"课程名","teacher":"教师或null","meetings":[{"weekday":1,"periodFrom":1,"periodTo":2,"patternKind":"all","weekRanges":null,"location":"教室或null"}]}]}',
+    '{"courses":[{"name":"课程名","teacher":"教师或null","meetings":[{"weekday":1,"periodFrom":1,"periodTo":1,"patternKind":"all","weekRanges":null,"location":"教室或null"}]}]}',
     "",
     "字段约束：",
     "- weekday 是 1-7 的整数，1=周一、2=周二、3=周三、4=周四、5=周五、6=周六、7=周日。",
-    "- periodFrom / periodTo 是上面列出的节次编号（整数）；连续两节写 1 和 2，不要写时间。",
+    "- periodFrom / periodTo 是上面列出的节次编号（整数）；单节课必须让两者相等（例如第 1 节写 1 和 1），只有图片明确标明连续两节时才写 1 和 2；不要从示例推断节次，不要写时间。",
     "- patternKind 只能是 all、odd、even、ranges 之一。",
     "- 每周都上写 all；单周写 odd；双周写 even；指定周段写 ranges。",
     "- patternKind=ranges 时，weekRanges 写紧凑周段字符串，如 \"1-8,10-16\"；其它情况 weekRanges 为 null。",
     "- 同一门课有多个上课时间时，放在同一个 courses 元素的 meetings 数组里。",
     "- teacher、location 没有就写 null，不要写空字符串。",
     "- 不要输出学期外的时间，不要猜测看不清的课程。",
-    retry ? "上一次输出无法解析。这次必须只输出合法 JSON，且不要使用 ``` 代码块。" : "",
+    retry ? "上一次输出无法解析或时段无效。请重新核对图片与允许的节次编号，严格区分单节和连续节次，只输出合法 JSON，不要使用 ``` 代码块。" : "",
   ]
     .filter((line) => line !== "")
     .join("\n");
