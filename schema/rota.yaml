@@ -171,6 +171,12 @@ enums:
       cloudflare_ai:
         description: Workers AI，无需外部 key
 
+  EnrollmentStatus:
+    description: 选课状态
+    permissible_values:
+      active:
+      dropped:
+
   AdminRole:
     permissible_values:
       owner:
@@ -635,6 +641,30 @@ classes:
       status:
         range: OccurrenceStatus
         required: true
+
+  Enrollment:
+    description: >-
+      选课关系。一个学生选一门课；他的课表由 enrollment → course → meeting 展开。
+      没有这层关系，同一门课每个学生都要复制一份 Course。
+    in_subset:
+      - core
+    slots:
+      - id
+      - person_id
+      - course_id
+      - term_id
+      - status
+      - created_at
+    slot_usage:
+      status:
+        range: EnrollmentStatus
+        required: true
+    unique_keys:
+      person_course:
+        unique_key_name: person_course
+        unique_key_slots:
+          - person_id
+          - course_id
 
   # ===== 可用性 =====
 

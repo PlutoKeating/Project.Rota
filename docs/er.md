@@ -56,6 +56,11 @@ CourseOccurrence {
     string note  
     OccurrenceStatus status  
 }
+Enrollment {
+    string id  
+    datetime created_at  
+    EnrollmentStatus status  
+}
 FairnessStat {
     string id  
     float carry_over  
@@ -202,6 +207,9 @@ CourseMeeting ||--|o Course : "course_id"
 CourseMeeting ||--|| Term : "term_id"
 CourseOccurrence ||--|o CourseMeeting : "meeting_id"
 CourseOccurrence ||--|o Slot : "slot_id"
+Enrollment ||--|o Course : "course_id"
+Enrollment ||--|| Person : "person_id"
+Enrollment ||--|| Term : "term_id"
 FairnessStat ||--|o Organization : "org_id"
 FairnessStat ||--|| Person : "person_id"
 Membership ||--|o Organization : "org_id"

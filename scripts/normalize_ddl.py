@@ -29,6 +29,7 @@ CLASS_NAMES = [
     "Course",
     "CourseMeeting",
     "CourseOccurrence",
+    "Enrollment",
     "Unavailability",
     "Preference",
     "Task",

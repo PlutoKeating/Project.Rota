@@ -13,8 +13,8 @@ CREATE TABLE "term" (
 	PRIMARY KEY (id),
 	UNIQUE (name)
 );
-CREATE INDEX "ix_term_id" ON "term" (id);
 CREATE INDEX "term_name_idx" ON "term" (name);
+CREATE INDEX "ix_term_id" ON "term" (id);
 
 CREATE TABLE "person" (
 	id TEXT NOT NULL,
@@ -28,8 +28,8 @@ CREATE TABLE "person" (
 	PRIMARY KEY (id),
 	UNIQUE (student_no)
 );
-CREATE INDEX "ix_person_id" ON "person" (id);
 CREATE INDEX "person_student_no_idx" ON "person" (student_no);
+CREATE INDEX "ix_person_id" ON "person" (id);
 
 CREATE TABLE "organization" (
 	id TEXT NOT NULL,
@@ -44,8 +44,8 @@ CREATE TABLE "organization" (
 	UNIQUE (code),
 	FOREIGN KEY(parent_id) REFERENCES "organization" (id)
 );
-CREATE INDEX "ix_organization_id" ON "organization" (id);
 CREATE INDEX "organization_code_idx" ON "organization" (code);
+CREATE INDEX "ix_organization_id" ON "organization" (id);
 
 CREATE TABLE "skill" (
 	id TEXT NOT NULL,
@@ -122,8 +122,8 @@ CREATE TABLE "class_period" (
 	UNIQUE (term_id, period_index),
 	FOREIGN KEY(term_id) REFERENCES "term" (id)
 );
-CREATE INDEX "ix_class_period_id" ON "class_period" (id);
 CREATE INDEX "class_period_term_id_period_index_idx" ON "class_period" (term_id, period_index);
+CREATE INDEX "ix_class_period_id" ON "class_period" (id);
 
 CREATE TABLE "slot" (
 	id TEXT NOT NULL,
@@ -161,8 +161,8 @@ CREATE TABLE "person_skill" (
 	FOREIGN KEY(person_id) REFERENCES "person" (id),
 	FOREIGN KEY(skill_id) REFERENCES "skill" (id)
 );
-CREATE INDEX "ix_person_skill_id" ON "person_skill" (id);
 CREATE INDEX "person_skill_person_id_skill_id_idx" ON "person_skill" (person_id, skill_id);
+CREATE INDEX "ix_person_skill_id" ON "person_skill" (id);
 
 CREATE TABLE "course" (
 	id TEXT NOT NULL,
@@ -271,6 +271,22 @@ CREATE TABLE "course_meeting" (
 	FOREIGN KEY(term_id) REFERENCES "term" (id)
 );
 CREATE INDEX "ix_course_meeting_id" ON "course_meeting" (id);
+
+CREATE TABLE "enrollment" (
+	id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	course_id TEXT,
+	term_id TEXT NOT NULL,
+	status VARCHAR(7) NOT NULL,
+	created_at DATETIME NOT NULL,
+	PRIMARY KEY (id),
+	UNIQUE (person_id, course_id),
+	FOREIGN KEY(person_id) REFERENCES "person" (id),
+	FOREIGN KEY(course_id) REFERENCES "course" (id),
+	FOREIGN KEY(term_id) REFERENCES "term" (id)
+);
+CREATE INDEX "ix_enrollment_id" ON "enrollment" (id);
+CREATE INDEX "enrollment_person_id_course_id_idx" ON "enrollment" (person_id, course_id);
 
 CREATE TABLE "shift_pattern" (
 	id TEXT NOT NULL,

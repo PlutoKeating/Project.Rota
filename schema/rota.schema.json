@@ -381,6 +381,54 @@
             "title": "CourseOccurrence",
             "type": "object"
         },
+        "Enrollment": {
+            "additionalProperties": false,
+            "description": "\u9009\u8bfe\u5173\u7cfb\u3002\u4e00\u4e2a\u5b66\u751f\u9009\u4e00\u95e8\u8bfe\uff1b\u4ed6\u7684\u8bfe\u8868\u7531 enrollment \u2192 course \u2192 meeting \u5c55\u5f00\u3002 \u6ca1\u6709\u8fd9\u5c42\u5173\u7cfb\uff0c\u540c\u4e00\u95e8\u8bfe\u6bcf\u4e2a\u5b66\u751f\u90fd\u8981\u590d\u5236\u4e00\u4efd Course\u3002",
+            "properties": {
+                "course_id": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "created_at": {
+                    "format": "date-time",
+                    "type": "string"
+                },
+                "id": {
+                    "description": "\u4e3b\u952e\uff0cULID \u5b57\u7b26\u4e32\uff0c\u6309\u65f6\u95f4\u6709\u5e8f",
+                    "type": "string"
+                },
+                "person_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/$defs/EnrollmentStatus",
+                    "description": "\u5404\u5b9e\u4f53\u7528 slot_usage \u6536\u7a84\u5230\u81ea\u5df1\u7684\u679a\u4e3e"
+                },
+                "term_id": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "id",
+                "person_id",
+                "term_id",
+                "status",
+                "created_at"
+            ],
+            "title": "Enrollment",
+            "type": "object"
+        },
+        "EnrollmentStatus": {
+            "description": "\u9009\u8bfe\u72b6\u6001",
+            "enum": [
+                "active",
+                "dropped"
+            ],
+            "title": "EnrollmentStatus",
+            "type": "string"
+        },
         "FairnessStat": {
             "additionalProperties": false,
             "description": "\u516c\u5e73\u8d26\u672c\u3002\u6309 (\u4eba, \u7ec4\u7ec7, \u7a97\u53e3) \u7d2f\u8ba1\u6b21\u6570\u4e0e\u5de5\u65f6\uff0c\u5e76\u4fdd\u7559 carry_over\uff0c \u7528\u4e8e\u8de8\u5468 / \u8de8\u6708 / \u8de8\u5b66\u671f\u7ed3\u8f6c\uff0c\u907f\u514d\u300c\u67d0\u4eba\u8fde\u7740\u51e0\u4e2a\u6708\u6ca1\u88ab\u6392\u300d\u3002",

@@ -58,6 +58,9 @@ Person ──< Membership >── Organization
 
 这套表达与 iCalendar 的 `RRULE` 同构：`INTERVAL=2` 对应单双周，`UNTIL`/`COUNT` 对应周段。**但我们不存 RRULE 字符串**，而是在写库时展开成 `course_occurrence`（规则 × 周次 × 节次）。原因：RRULE 在 SQL 里没法参与冲突检测，展开后才能 `join slot` 做集合运算。
 
+一门课只存一份规则和一份 occurrence，谁选了它由 `enrollment`（人 × 课）表达。
+30 个人选同一门高数，不会复制 30 份课表——这是把「课程」和「某人的课表」分开的关键。
+
 调课对应 `course_occurrence.status`：
 
 - 停课 → `cancelled`（≡ EXDATE）
@@ -86,7 +89,7 @@ fairness_stat(person, org, window_key) → shift_count, minutes, carry_over, las
 | 校历 | `term` / `class_period` / `slot` | 时间的坐标系 |
 | 人员 | `person` / `organization` / `role` / `membership` | 谁、属于谁、什么身份 |
 | 能力 | `skill` / `person_skill` | 班次门槛 |
-| 课程 | `course` / `course_meeting` / `course_occurrence` | 课表与展开后的占用 |
+| 课程 | `course` / `course_meeting` / `course_occurrence` / `enrollment` | 课表与展开后的占用 |
 | 可用性 | `unavailability` / `preference` | 请假、黑名单、偏好 |
 | 任务 | `task` / `shift_pattern` / `shift` | 一件活、它的重复规则、它的具体时段 |
 | 结果 | `assignment` / `fairness_stat` | 谁上了、为什么、累计多少 |
