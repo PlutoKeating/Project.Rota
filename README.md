@@ -136,3 +136,7 @@ Agent 执行、文件读取和草稿位于用户浏览器；Cloudflare Worker �
 新增迁移 `0005_browser_agent_import.sql` 必须先应用再发布前端/Worker。`pnpm gen` 现在生成 `schema/rota.current.sql` 参考结构，不改写已经部署的初始迁移。
 
 导入 Agent 的长任务恢复、逐材料识别记忆、历史检索和诊断机制见 [Agent 导入说明](docs/AGENT_IMPORT.md#长任务稳定性与选型依据2026-11-04)。专项验证：`pnpm test:agent-browser`。
+
+### 导入实际材料回归修正
+
+导入支持先保存人员与结构化课程，再绑定学期和作息；待定课程也显示在审核页，可直接修订。提供浏览器本地 OCR，不向额外识字服务上传文件。开发与构建会运行 `pnpm assets:ocr` 准备本地资源。真实模型隔离验收命令与质量边界见 [Agent 导入说明](docs/AGENT_IMPORT.md#实际压缩包回归与结构化方案)。

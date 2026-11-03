@@ -30,3 +30,9 @@ React 19、Tailwind 4，原有 hash 地址继续兼容。首页直接进入排�
 文档与 WASM 仅在本地处理，模型凭据代理位于 Worker；新流程不调用旧模板解析器。格式能力与边界见根目录 `docs/AGENT_IMPORT.md`。专项验证 `pnpm test:agent-browser` 使用真实浏览器工具及拦截模型响应；不等同真实模型识别验收。
 
 导入处理区提供阶段、请求等待秒数、已保存材料数；可展开识别成果、模型诊断与完整工具历史。长任务交接失败保留原上下文；旧草稿继续可恢复。使用 `pnpm test:agent-browser` 验证多轮交接及刷新恢复。
+
+### 导入实际材料回归修正
+
+`Review.tsx` 展示待绑定的结构化课程及明确缺项，支持直接修改课程字段，避免用空周历掩盖已识别成果。`ProposalEntryEditor.tsx` 提供字段编辑。`ocr.ts` 串行复用本地 Tesseract Worker，空闲后释放。`pnpm dev/build/test:agent-browser` 会准备忽略 Git 的 OCR 资源，构建阶段须安装 devDependencies；无需额外环境变量。
+
+审核页区分“等待 Agent 回看核对”和“已回看核对，仍需人工复核”；没有学期时展示原始周次/节次方案，不显示空学期选择器。逐人核对尚未完成的方案不能直接提交。

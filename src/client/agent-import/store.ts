@@ -1,3 +1,4 @@
+import type { TimetableProposal } from "../../shared/agent-import/timetable";
 import { openDB } from "idb";
 import type {
   Observation,
@@ -35,7 +36,7 @@ export interface Job {
   notes: Record<string, string>;
   messages: ModelMessage[];
   pending: PendingCall[];
-  images?: { path: string; data: string }[];
+  images?: { path: string; data: string; description?: string }[];
   log: { at: number; text: string }[];
   summary: string;
   unresolved: string[];
@@ -49,7 +50,20 @@ export interface Job {
   harnessVersion?: number;
   observations?: Record<string, Observation>;
   observationRevision?: number;
+  timetables?: Record<string, TimetableProposal>;
+  timetableChecks?: Record<
+    string,
+    { signature: string; summary: string; at: number }
+  >;
+  verification?: {
+    id: string;
+    workMessages: ModelMessage[];
+    required: { path: string; pages: number }[];
+    seen: Record<string, number[]>;
+    complete?: boolean;
+  };
   unrecordedReads?: string[];
+  unrecordedImageViews?: Record<string, number>;
   handoff?: Handoff;
   preferredProvider?: string;
   cooldowns?: Record<string, number>;

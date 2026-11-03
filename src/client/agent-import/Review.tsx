@@ -1,13 +1,18 @@
+import { needsVerification } from "./verification";
 import { useMemo, useState } from "react";
+import { timetableWarnings } from "../../shared/agent-import/timetable";
 import { WeeksField, PeriodsField } from "./ScheduleFields";
 import type { Job } from "./store";
-import { changesFor, editRecord } from "./runtime";
+import { changesFor, editRecord, editProposalEntry } from "./runtime";
 import {
   relations,
   diff,
   type Entity,
   type Row,
+  type Evidence,
 } from "../../shared/agent-import/model";
+import { ProposalEntryEditor } from "./ProposalEntryEditor";
+import type { TimetableProposal } from "../../shared/agent-import/timetable";
 import { Button } from "../components/Button";
 import { Field, TextInput, Select } from "../components/Field";
 import { Modal } from "../components/Modal";
@@ -99,9 +104,16 @@ export function Review({
     [error, setError] = useState(""),
     [week, setWeek] = useState(1),
     [term, setTerm] = useState("");
+  const [proposalEditor, setProposalEditor] = useState<{
+    id: string;
+    index: number;
+    entry: TimetableProposal["entries"][number];
+  } | null>(null);
   const activeTerm = term || String(all.term[0]?.id ?? "");
   const changed = new Set(changes.map((c) => c.entity + ":" + c.id));
-  const affected = new Set<string>();
+  const affected = new Set(
+    Object.values(job.timetables ?? {}).map((p) => p.person.id),
+  );
   for (const c of diff(job.base, job.draft, job.evidence)) {
     if (c.entity === "person") affected.add(c.id);
     for (const r of [c.before, c.after])
@@ -127,8 +139,7 @@ export function Review({
     );
     setError("");
   };
-  const evidence = (entity: Entity, id: string) => {
-    const items = job.evidence[entity + ":" + id];
+  const evidenceList = (items: Evidence[] | undefined) => {
     if (!items?.length) return null;
     return (
       <details className="mt-2 text-xs text-slate-500">
@@ -155,12 +166,32 @@ export function Review({
       </details>
     );
   };
+  const evidence = (entity: Entity, id: string) =>
+    evidenceList(job.evidence[entity + ":" + id]);
   const editButton = (entity: Entity, row: Row) => (
     <Button
       size="sm"
       variant="ghost"
       disabled={["running", "applied", "cancelled"].includes(job.status)}
-      onClick={() => open(entity, row)}
+      onClick={() => {
+        if (entity === "timetable_entry") {
+          const plan = Object.values(job.timetables ?? {}).find((t) =>
+            t.entryIds.includes(row.id),
+          );
+          const index =
+            plan?.entries.findIndex((_, i) => `${plan.id}:${i}` === row.id) ??
+            -1;
+          if (plan && index >= 0) {
+            setProposalEditor({
+              id: plan.id,
+              index,
+              entry: plan.entries[index],
+            });
+            return;
+          }
+        }
+        open(entity, row);
+      }}
     >
       修改
     </Button>
@@ -201,35 +232,151 @@ export function Review({
           </label>
         </div>
         {evidence("person", p.id)}
-        <div className="grid grid-cols-1 gap-px border border-slate-200 bg-slate-200 sm:grid-cols-7 dark:border-slate-700 dark:bg-slate-700">
-          {["一", "二", "三", "四", "五", "六", "日"].map((day, i) => (
-            <div key={day} className="min-w-0 bg-white p-3 dark:bg-slate-900">
-              <p className="mb-3 text-xs text-slate-500">周{day}</p>
-              {all.timetable_entry
-                .filter(
-                  (e) =>
-                    e.person_id === p.id &&
-                    e.term_id === activeTerm &&
-                    e.weekday === i + 1 &&
-                    (JSON.parse(String(e.weeks)) as number[]).includes(week),
-                )
-                .map((e) => (
-                  <div key={e.id} className="mb-4 text-sm">
-                    <p className="font-medium break-words">{display(e)}</p>
-                    <p className="text-xs text-slate-500">
-                      第 {e.period_from}–{e.period_to} 节
-                    </p>
-                    <p className="text-xs text-slate-500">
-                      {String(e.location ?? "")}
-                      {String(e.teacher ?? "")}
-                    </p>
-                    {editButton("timetable_entry", e)}
-                    {evidence("timetable_entry", e.id)}
-                  </div>
-                ))}
-            </div>
+        {Object.values(job.timetables ?? {})
+          .filter((t) => t.person.id === p.id)
+          .map((t) => (
+            <p key={t.id} className="text-xs text-slate-500">
+              {job.excluded.includes(p.id)
+                ? "本次不导入此人。"
+                : !needsVerification(job, t)
+                  ? "Agent 已回看核对，仍需人工复核。"
+                  : "等待 Agent 逐人回看核对。"}
+            </p>
           ))}
-        </div>
+        {Object.values(job.timetables ?? {})
+          .filter((t) => t.person.id === p.id)
+          .flatMap((t) => timetableWarnings(t.entries))
+          .map((warning, i) => (
+            <p key={i} className="text-sm text-amber-700">
+              {warning}
+            </p>
+          ))}
+        {Object.values(job.timetables ?? {})
+          .filter(
+            (t) =>
+              t.person.id === p.id &&
+              (!t.bound || t.entries.length !== t.entryIds.length),
+          )
+          .map((t) => (
+            <section key={t.id} className="space-y-3">
+              <p className="text-sm font-medium">
+                {t.term_name || "学期待确认"} · 已识别 {t.entries.length}{" "}
+                条课程记录 · 待确认学期与作息
+              </p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr>
+                      <th>课程</th>
+                      <th>星期</th>
+                      <th>节次</th>
+                      <th>教学周</th>
+                      <th>地点 / 教师</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {t.entries.map((e, i) => (
+                      <tr key={i} className="border-t border-slate-200">
+                        <td className="py-2">
+                          {e.name}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={[
+                              "running",
+                              "applied",
+                              "cancelled",
+                            ].includes(job.status)}
+                            onClick={() =>
+                              setProposalEditor({
+                                id: t.id,
+                                index: i,
+                                entry: e,
+                              })
+                            }
+                          >
+                            修改课程
+                          </Button>
+                          {e.note && (
+                            <p className="text-xs text-slate-500">{e.note}</p>
+                          )}
+                        </td>
+                        <td>
+                          {e.weekday
+                            ? "周" +
+                              ["一", "二", "三", "四", "五", "六", "日"][
+                                e.weekday - 1
+                              ]
+                            : "待确认"}
+                        </td>
+                        <td>
+                          {e.period_from === null
+                            ? "待确认"
+                            : `${e.period_from}–${e.period_to ?? "?"}`}
+                        </td>
+                        <td>{e.weeks?.join("、") ?? "待确认"}</td>
+                        <td>
+                          {e.location} {e.teacher}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {evidenceList(t.sources)}
+            </section>
+          ))}
+
+        {Object.values(job.timetables ?? {})
+          .filter((t) => t.person.id === p.id)
+          .flatMap((t) => t.unresolved)
+          .map((issue, i) => (
+            <p key={i} className="text-sm text-amber-700">
+              {issue}
+            </p>
+          ))}
+
+        {all.timetable_entry.some(
+          (e) => e.person_id === p.id && e.term_id === activeTerm,
+        ) && (
+          <div className="grid grid-cols-1 gap-px border border-slate-200 bg-slate-200 sm:grid-cols-7 dark:border-slate-700 dark:bg-slate-700">
+            {["一", "二", "三", "四", "五", "六", "日"].map((day, i) => (
+              <div key={day} className="min-w-0 bg-white p-3 dark:bg-slate-900">
+                <p className="mb-3 text-xs text-slate-500">周{day}</p>
+                {all.timetable_entry
+                  .filter(
+                    (e) =>
+                      e.person_id === p.id &&
+                      e.term_id === activeTerm &&
+                      e.weekday === i + 1 &&
+                      (JSON.parse(String(e.weeks)) as number[]).includes(week),
+                  )
+                  .map((e) => (
+                    <div key={e.id} className="mb-4 text-sm">
+                      <p className="font-medium break-words">{display(e)}</p>
+                      <p className="text-xs text-slate-500">
+                        第 {e.period_from}–{e.period_to} 节
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {String(e.location ?? "")}
+                        {String(e.teacher ?? "")}
+                      </p>
+                      {editButton("timetable_entry", e)}
+                      {evidence("timetable_entry", e.id)}
+                    </div>
+                  ))}
+              </div>
+            ))}
+          </div>
+        )}
+        {!all.timetable_entry.some((e) => e.person_id === p.id) &&
+          !Object.values(job.timetables ?? {}).some(
+            (t) => t.person.id === p.id,
+          ) && (
+            <p className="text-sm text-amber-700">
+              尚未保存此人的结构化课表，不能据此判断没有课程。
+            </p>
+          )}
         {all.membership
           .filter((m) => m.person_id === p.id)
           .map((m) => (
@@ -345,42 +492,53 @@ export function Review({
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap gap-3">
-        <label className="text-xs">
-          查看学期
-          <Select
-            value={activeTerm}
-            onChange={(e) => {
-              setTerm(e.target.value);
-              setWeek(1);
-            }}
-          >
-            {all.term.map((t) => (
-              <option key={t.id} value={t.id}>
-                {display(t)}
-              </option>
-            ))}
-          </Select>
-        </label>
-        <label className="text-xs">
-          教学周
-          <Select
-            value={week}
-            onChange={(e) => setWeek(Number(e.target.value))}
-          >
-            {Array.from(
-              {
-                length: Number(
-                  all.term.find((t) => t.id === activeTerm)?.week_count ?? 1,
-                ),
-              },
-              (_, i) => (
-                <option key={i} value={i + 1}>
-                  第 {i + 1} 周
-                </option>
-              ),
-            )}
-          </Select>
-        </label>
+        {!all.term.length && (
+          <p className="text-sm text-slate-500">
+            学期尚待确认，已识别的课程按原始节次和周次展示。
+          </p>
+        )}
+        {!!all.term.length && (
+          <>
+            <label className="text-xs">
+              查看学期
+              <Select
+                value={activeTerm}
+                disabled={!all.term.length}
+                onChange={(e) => {
+                  setTerm(e.target.value);
+                  setWeek(1);
+                }}
+              >
+                {all.term.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {display(t)}
+                  </option>
+                ))}
+              </Select>
+            </label>
+            <label className="text-xs">
+              教学周
+              <Select
+                value={week}
+                onChange={(e) => setWeek(Number(e.target.value))}
+              >
+                {Array.from(
+                  {
+                    length: Number(
+                      all.term.find((t) => t.id === activeTerm)?.week_count ??
+                        1,
+                    ),
+                  },
+                  (_, i) => (
+                    <option key={i} value={i + 1}>
+                      第 {i + 1} 周
+                    </option>
+                  ),
+                )}
+              </Select>
+            </label>
+          </>
+        )}
       </div>
       <details>
         <summary className="cursor-pointer font-medium">学期与作息方案</summary>
@@ -460,6 +618,21 @@ export function Review({
           ))}
         </div>
       </details>
+      {proposalEditor && (
+        <ProposalEntryEditor
+          entry={proposalEditor.entry}
+          onClose={() => setProposalEditor(null)}
+          onSave={async (value) => {
+            await editProposalEntry(
+              job,
+              proposalEditor.id,
+              proposalEditor.index,
+              value,
+            );
+            onChange({ ...job });
+          }}
+        />
+      )}
       {editor && (
         <Modal
           onClose={() => setEditor(null)}

@@ -236,3 +236,9 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 `metrics` 包含 `requestId`、`purpose`、`durationMs`、可用的 `inputTokens/outputTokens`，以及各候选尝试的 `providerId/model/durationMs/status/code/httpStatus`。模型失败响应为 HTTP 502，除标准 `error` 外附 `metrics`；不回传供应商原始错误正文或密钥。网关未返回结构化诊断时，浏览器记录带 `client-` 前缀的本地编号，不冒充上游请求编号。
 
 每供应商尝试最多 90 秒，单次模型请求的候选执行窗口最多 120 秒，SDK 不对同一供应商隐式重试。浏览器请求截止 130 秒，对网络、限流或临时上游故障最多延迟 2 秒重试一次。业务提交不随模型重试，仍仅由操作员触发。503 的通用提示不推断数据库迁移状态。
+
+### 导入实际材料回归修正
+
+浏览器工具协议新增 `save_timetable`（replace/append）、`read_timetables`、`bind_timetables` 和 `ocr_image`；这些工具仅操作本地材料与隔离草稿。`observe_material` 需要明确 `kind`，课表观察不能代替结构化保存。正式 apply 的事务语义不变。单轮响应在返回前验证完整工具名称、参数和调用 ID，拒绝 invalid 调用及截断输出并尝试后续供应商。metrics 额外提供可用的 `reasoningTokens` 与 `finishReason`。无数据库迁移，前端与 Worker 须同步发布。
+
+导入单轮代理支持 `work`、`compact`、`checkpoint`：保存成果阶段仅提供持久化与查询工具，暂不提供新文件读取工具，返回调用须属于当轮开放工具集合。逐人复核继续使用同一 Agent，通过 `revise_timetable` 增量纠正、`confirm_timetable_check` 记录来源回看与方案签名。

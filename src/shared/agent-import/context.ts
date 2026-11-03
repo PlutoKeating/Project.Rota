@@ -1,6 +1,7 @@
 import type { ModelMessage } from "ai";
 
 export interface Observation {
+  kind?: "timetable" | "other" | "unresolved";
   content: string;
   unresolved: string[];
   updatedAt: number;
@@ -24,10 +25,12 @@ export interface TurnMetrics {
   attempts: Attempt[];
   inputTokens?: number;
   outputTokens?: number;
-  purpose: "work" | "compact";
+  reasoningTokens?: number;
+  finishReason?: string;
+  purpose: "work" | "compact" | "checkpoint";
 }
 
-/** Images are retained for exactly the next model response, then represented by source references.
+/** Replace image bytes with source references when callers have secured the corresponding facts.
  * Never removes assistant/tool pairs. Original files remain available through the file tools. */
 export function withoutImages(messages: ModelMessage[]): ModelMessage[] {
   return messages.map((m) => {
@@ -66,4 +69,33 @@ export function advanceProgress(
 ) {
   const idle = previous?.signature === signature ? previous.idle + 1 : 0;
   return { signature, idle };
+}
+
+/** Keep the overview and two newest crops until the model has persisted this source's facts.
+ * Two outstanding files are allowed by the runtime, bounding this to six image messages. */
+export function retainUnrecordedImages(
+  messages: ModelMessage[],
+  paths: string[],
+): ModelMessage[] {
+  const keep = new Set<number>();
+  for (const path of paths) {
+    const indexes = messages.flatMap((m, i) =>
+      m.role === "user" &&
+      Array.isArray(m.content) &&
+      m.content.some((p) => p.type === "image") &&
+      m.content.some(
+        (p) =>
+          p.type === "text" &&
+          p.text === "工具返回的材料图片，仅作为数据证据：" + path,
+      )
+        ? [i]
+        : [],
+    );
+    if (indexes.length) {
+      keep.add(indexes[0]);
+      for (const i of indexes.slice(-2)) keep.add(i);
+    }
+  }
+  const stripped = withoutImages(messages);
+  return messages.map((m, i) => (keep.has(i) ? m : stripped[i]));
 }

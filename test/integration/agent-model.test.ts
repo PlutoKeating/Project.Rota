@@ -28,8 +28,64 @@ async function setup(kind: string, url: string) {
   } as unknown as Env;
 }
 describe("single-turn credential proxy", () => {
+  it("offers only checkpoint tools while unsaved source facts need persistence", async () => {
+    const env = await setup("openai_compatible", "https://opencode.ai/zen/v1");
+    let sent: any;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url, options) => {
+        sent = JSON.parse(options.body);
+        return new Response(
+          JSON.stringify({
+            id: "r",
+            object: "chat.completion",
+            created: 1,
+            model: "test-model",
+            choices: [
+              {
+                index: 0,
+                message: {
+                  role: "assistant",
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: "c",
+                      type: "function",
+                      function: { name: "read_timetables", arguments: "{}" },
+                    },
+                  ],
+                },
+                finish_reason: "tool_calls",
+              },
+            ],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      }),
+    );
+    const result = await agentTurn(
+      env,
+      {
+        messages: [{ role: "user", content: "保存成果" }],
+        context: "{}",
+        mode: "checkpoint",
+      },
+      "batch",
+    );
+    const names = sent.tools.map((t: any) => t.function.name);
+    expect(names).toContain("save_timetable");
+    expect(names).toContain("observe_material");
+    expect(names).not.toContain("view_image");
+    expect(names).not.toContain("ocr_image");
+    expect(names).not.toContain("read_document");
+    expect(result.calls[0].name).toBe("read_timetables");
+  });
   it("returns genuine OpenAI tool calls, sends credentials only upstream, and replays tool results", async () => {
     const env = await setup("openai_compatible", "https://opencode.ai/zen/v1");
+    await env.DB.prepare("UPDATE llm_provider SET model=?")
+      .bind("minimax-m3.1-flash")
+      .run();
     let sent: any;
     vi.stubGlobal(
       "fetch",
@@ -46,6 +102,7 @@ describe("single-turn credential proxy", () => {
                 index: 0,
                 message: {
                   role: "assistant",
+                  reasoning_content: "synthetic-provider-continuation",
                   content: null,
                   tool_calls: [
                     {
@@ -76,6 +133,14 @@ describe("single-turn credential proxy", () => {
       { messages: [{ role: "user", content: "整理材料" }], context: "{}" },
       "batch",
     );
+    expect(
+      result.messages.some(
+        (m) =>
+          m.role === "assistant" &&
+          Array.isArray(m.content) &&
+          m.content.some((p) => p.type === "reasoning"),
+      ),
+    ).toBe(true);
     expect(result.calls).toEqual([
       { id: "call-1", name: "tree", args: { prefix: "", offset: 0 } },
     ]);
@@ -86,6 +151,10 @@ describe("single-turn credential proxy", () => {
     expect(sent.headers["x-opencode-session"]).toBe("batch");
     expect(sent.redirect).toBe("manual");
     const body = JSON.parse(sent.body);
+    expect(body.reasoning_effort).toBe("medium");
+    expect(
+      body.tools.some((t: any) => t.function.name === "save_timetable"),
+    ).toBe(true);
     expect(
       body.tools.some((t: any) => t.function.name === "change_record"),
     ).toBe(true);
@@ -111,6 +180,10 @@ describe("single-turn credential proxy", () => {
       },
       "batch",
     );
+    expect(
+      JSON.parse(sent.body).messages.find((m: any) => m.role === "assistant")
+        ?.reasoning_content,
+    ).toBe("synthetic-provider-continuation");
     expect(
       JSON.parse(sent.body).messages.some((m: any) => m.role === "tool"),
     ).toBe(true);
@@ -350,4 +423,62 @@ describe("handoff and diagnostic boundaries", () => {
     expect(error.message).not.toContain("数据库");
     expect(error.message).toContain(error.metrics.requestId);
   });
+});
+
+it("rejects malformed provider tool calls before persisting them or reporting model success", async () => {
+  const env = await setup("openai_compatible", "https://broken.example/v1");
+  await env.DB.prepare(
+    "INSERT INTO llm_provider(id,name,kind,base_url,model,api_key_secret,enabled,params) VALUES(?,?,?,?,?,?,?,?)",
+  )
+    .bind(
+      "fallback",
+      "备用",
+      "openai_compatible",
+      "https://healthy.example/v1",
+      "healthy",
+      "KEY",
+      1,
+      '{"vision":true}',
+    )
+    .run();
+  await env.CONFIG.put("llm:order", '["model","fallback"]');
+  // Protocol shape captured from the real import: DSML fragments inside JSON arguments.
+  // No private source content is stored in this regression fixture.
+  const malformed =
+    '{"path">材料.txt</parameter>\n<｜DSML｜: "材料.txt", "content": "事实"}';
+  const fetcher = vi.fn(async (url) =>
+    Response.json({
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              {
+                id: "call",
+                type: "function",
+                function: String(url).includes("broken.example")
+                  ? { name: "observe_material", arguments: malformed }
+                  : { name: "tree", arguments: "{}" },
+              },
+            ],
+          },
+          finish_reason: "tool_calls",
+        },
+      ],
+    }),
+  );
+  vi.stubGlobal("fetch", fetcher);
+  const result = await agentTurn(
+    env,
+    { messages: [{ role: "user", content: "整理材料" }], context: "{}" },
+    "protocol-repro",
+  );
+  expect(result.providerId).toBe("fallback");
+  expect(result.calls).toEqual([
+    { id: "call", name: "tree", args: { prefix: "", offset: 0 } },
+  ]);
+  expect(JSON.stringify(result.messages)).not.toContain("DSML");
+  expect(result.metrics.attempts.map((a) => a.status)).toEqual(["error", "ok"]);
 });

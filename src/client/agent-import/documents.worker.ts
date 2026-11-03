@@ -1,3 +1,5 @@
+import { outsideTableText } from "../../shared/agent-import/html";
+import { decodeDocumentText } from "../../shared/agent-import/encoding";
 import SevenZip from "7z-wasm";
 import wasmUrl from "7z-wasm/7zz.wasm?url";
 import * as XLSX from "xlsx";
@@ -140,16 +142,39 @@ scope.onmessage = async ({ data }) => {
                 : "image/jpeg",
           });
       }
-      const book = XLSX.read(bytes, {
-        type: "array",
+      // Many school systems export GBK HTML tables with an .xls suffix.
+      // SheetJS's binary path ignores the tool's encoding and corrupts those names.
+      const header = decodeDocumentText(
+        bytes.slice(0, 4096),
+        args.encoding ?? "auto",
+      ).text;
+      const textual =
+        suffix === "csv" ||
+        /^\s*(?:<!doctype\s+html|<html|<table)/i.test(header);
+      const decoded = textual
+        ? decodeDocumentText(bytes, args.encoding ?? "auto")
+        : null;
+      const book = XLSX.read(decoded?.text ?? bytes, {
+        type: decoded ? "string" : "array",
         cellStyles: true,
         cellHTML: false,
         cellNF: true,
       });
-      const sheet = args.sheet || book.SheetNames[0];
+      const qualified = args.range?.match(
+        /^(?:'((?:[^']|'')+)'|([^!]+))!(.+)$/,
+      );
+      const qualifiedSheet = qualified
+        ? (qualified[1]?.replace(/''/g, "'") ?? qualified[2])
+        : undefined;
+      if (args.sheet && qualifiedSheet && args.sheet !== qualifiedSheet)
+        throw Error("sheet 与 range 指向不同工作表");
+      const sheet =
+        args.sheet || qualifiedSheet || book.SheetNames[(args.page ?? 1) - 1];
       if (!book.Sheets[sheet]) throw Error("工作表不存在");
       const ws = book.Sheets[sheet];
-      const range = XLSX.utils.decode_range(args.range || ws["!ref"] || "A1");
+      const range = XLSX.utils.decode_range(
+        qualified?.[3] || args.range || ws["!ref"] || "A1",
+      );
       if ((range.e.r - range.s.r + 1) * (range.e.c - range.s.c + 1) > 2000) {
         range.e.r = Math.min(range.e.r, range.s.r + 49);
         range.e.c = Math.min(range.e.c, range.s.c + 19);
@@ -168,8 +193,26 @@ scope.onmessage = async ({ data }) => {
               comment: cell.c,
             });
         }
+      const outside =
+        decoded && suffix !== "csv"
+          ? outsideTableText(decoded.text)
+          : undefined;
       result = {
+        outsideTables:
+          outside === undefined
+            ? undefined
+            : {
+                text: outside.slice(args.offset, args.offset + 12000),
+                total: outside.length,
+                nextOffset:
+                  args.offset + 12000 < outside.length
+                    ? args.offset + 12000
+                    : null,
+              },
+        encoding: decoded?.encoding,
         sheets: book.SheetNames,
+        pages: book.SheetNames.length,
+        page: book.SheetNames.indexOf(sheet) + 1,
         sheet,
         extent: ws["!ref"],
         range: XLSX.utils.encode_range(range),
@@ -270,7 +313,7 @@ scope.onmessage = async ({ data }) => {
           : null,
       };
     } else {
-      const text = new TextDecoder(args.encoding || "utf-8").decode(bytes);
+      const text = decodeDocumentText(bytes, args.encoding ?? "auto").text;
       result = {
         text: text.slice(args.offset, args.offset + 24000),
         total: text.length,

@@ -129,6 +129,21 @@ export function ImportsPage() {
     if (!job) return;
     setBusy(true);
     try {
+      const files = await materials(job.id);
+      if (!files.some((f) => f.path === path)) {
+        const children = files.filter((f) =>
+          f.path.startsWith(path.replace(/\/$/, "") + "/"),
+        );
+        if (children.length) {
+          setSource({
+            path,
+            text:
+              "目录名称作为来源依据；目录中的材料：\n" +
+              children.map((f) => f.path).join("\n"),
+          });
+          return;
+        }
+      }
       const result = await documentTool(job, "read_document", {
         path,
         page,
@@ -262,8 +277,13 @@ export function ImportsPage() {
               </p>
               <p className="mt-2 text-xs text-slate-500">
                 {job.model ? `${job.model} · ` : ""}已完成 {job.turns} 轮 ·
-                已保存 {Object.keys(job.observations ?? {}).length}{" "}
-                份材料识别成果。关闭页面会暂停，重新打开后可恢复。
+                已保存 {Object.keys(job.timetables ?? {}).length} 份课表方案（
+                {Object.values(job.timetables ?? {}).reduce(
+                  (sum, t) => sum + t.entries.length,
+                  0,
+                )}{" "}
+                条课程记录），{Object.keys(job.observations ?? {}).length}{" "}
+                份材料笔记。关闭页面会暂停，重新打开后可恢复。
                 {job.requestStartedAt && (
                   <RequestClock startedAt={job.requestStartedAt} />
                 )}

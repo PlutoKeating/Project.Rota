@@ -39,3 +39,6 @@ playwright-report/
 test-results/
 .impeccable/review/
 .impeccable/questions/
+
+# Pinned OCR assets copied from dependencies by scripts/prepare-ocr.mjs
+public/vendor/ocr/

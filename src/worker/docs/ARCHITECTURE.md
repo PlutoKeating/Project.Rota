@@ -36,3 +36,9 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 正式提交校验完整差异、原值、引用和派班冲突，派生数据及审计同事务写入。普通 CRUD 也受租约触发器保护，租约过期可恢复。独立课表实际时间纳入 availability、人员周课表/可用时长和 scheduler，支持全局节次之外的占用。新增迁移 `0005_browser_agent_import.sql`，无新增环境变量。详见 `docs/AGENT_IMPORT.md` 与 `docs/API.md`。
 
 Agent 代理在 `compact` 模式仅开放 `save_handoff`；普通模式不开放该工具。候选首轮按全局顺序，之后可复用本批成功配置并暂时跳过失败项。SDK 隐式重试关闭；每候选最多 90 秒、候选执行窗口最多 120 秒。诊断保留具体模型、错误类别与状态码，不返回原始上游错误正文。业务读取/租约/提交边界不变。
+
+### 导入实际材料回归修正
+
+单轮代理兼容适配器使用供应商命名空间 `compatible`，保留推理续接字段。校验发生在返回浏览器前，不能仅依赖 generateText 抛异常：AI SDK 可能把无效调用包装为结果。原生 Anthropic/Google 和 Workers AI 仍使用既有适配器。代理没有正式业务写权限；新增 save/read/bind_timetables 和 OCR 工具由浏览器执行。协议变更要求前后端同步发布。
+
+导入单轮代理支持 `work`、`compact`、`checkpoint`：保存成果阶段仅提供持久化与查询工具，暂不提供新文件读取工具，返回调用须属于当轮开放工具集合。逐人复核继续使用同一 Agent，通过 `revise_timetable` 增量纠正、`confirm_timetable_check` 记录来源回看与方案签名。

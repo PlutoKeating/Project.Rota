@@ -7,7 +7,8 @@ export default defineConfig({
   use: { baseURL: "http://127.0.0.1:5178" },
   webServer: {
     cwd: new URL("../..", import.meta.url).pathname,
-    command: "pnpm exec vite --config test/browser/vite.config.ts",
+    command:
+      "pnpm assets:ocr && pnpm exec vite --config test/browser/vite.config.ts",
     url: "http://127.0.0.1:5178",
     reuseExistingServer: !process.env.CI,
     timeout: 30000,

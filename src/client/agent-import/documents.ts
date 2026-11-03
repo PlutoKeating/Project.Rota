@@ -20,72 +20,96 @@ async function bitmap(blob: Blob, args: Args) {
     height: number;
   let pages: number | undefined;
   let cleanup = () => {};
-  if (args.format === "pdf" || /\.pdf$/i.test(args.path)) {
-    const pdfjs = await import("pdfjs-dist");
-    pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
-    const loading = pdfjs.getDocument({
-      data: await blob.arrayBuffer(),
-      useSystemFonts: true,
-    });
-    const pdf = await loading.promise;
-    pages = pdf.numPages;
-    const page = await pdf.getPage(args.page ?? 1),
-      viewport = page.getViewport({ scale: 1.5 });
-    canvas.width = Math.ceil(viewport.width);
-    canvas.height = Math.ceil(viewport.height);
-    await page.render({
-      canvas,
-      canvasContext: canvas.getContext("2d")!,
-      viewport,
-    }).promise;
-    source = canvas;
-    width = canvas.width;
-    height = canvas.height;
-    cleanup = () => {
-      void loading.destroy();
+  try {
+    if (args.format === "pdf" || /\.pdf$/i.test(args.path)) {
+      const pdfjs = await import("pdfjs-dist");
+      pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
+      const loading = pdfjs.getDocument({
+        data: await blob.arrayBuffer(),
+        useSystemFonts: true,
+      });
+      cleanup = () => {
+        void loading.destroy();
+      };
+      const pdf = await loading.promise;
+      pages = pdf.numPages;
+      const page = await pdf.getPage(args.page ?? 1),
+        viewport = page.getViewport({ scale: 1.5 });
+      canvas.width = Math.ceil(viewport.width);
+      canvas.height = Math.ceil(viewport.height);
+      await page.render({
+        canvas,
+        canvasContext: canvas.getContext("2d")!,
+        viewport,
+      }).promise;
+      source = canvas;
+      width = canvas.width;
+      height = canvas.height;
+      cleanup = () => {
+        void loading.destroy();
+      };
+    } else {
+      const img = await createImageBitmap(blob);
+      source = img;
+      width = img.width;
+      height = img.height;
+      cleanup = () => img.close();
+    }
+    const requested = args.crop ?? { x: 0, y: 0, width, height };
+    if (
+      requested.x < 0 ||
+      requested.y < 0 ||
+      requested.x >= width ||
+      requested.y >= height ||
+      requested.width <= 0 ||
+      requested.height <= 0
+    )
+      throw Error(
+        `裁剪起点超出原图范围：原图 ${width} × ${height}，x 须小于 ${width}，y 须小于 ${height}，宽高须为正数。`,
+      );
+    const crop = {
+      ...requested,
+      width: Math.min(requested.width, width - requested.x),
+      height: Math.min(requested.height, height - requested.y),
     };
-  } else {
-    const img = await createImageBitmap(blob);
-    source = img;
-    width = img.width;
-    height = img.height;
-    cleanup = () => img.close();
-  }
-  const crop = args.crop ?? { x: 0, y: 0, width, height };
-  if (crop.x + crop.width > width || crop.y + crop.height > height)
-    throw Error("裁剪超出图片范围");
-  const factor = Math.min(
-    args.scale ?? 1,
-    4096 / Math.max(crop.width, crop.height),
-  );
-  const output = document.createElement("canvas");
-  output.width = Math.ceil(crop.width * factor);
-  output.height = Math.ceil(crop.height * factor);
-  output
-    .getContext("2d")!
-    .drawImage(
-      source,
-      crop.x,
-      crop.y,
-      crop.width,
-      crop.height,
-      0,
-      0,
-      output.width,
-      output.height,
+    const factor = Math.min(
+      args.scale ?? 1,
+      4096 / Math.max(crop.width, crop.height),
     );
-  cleanup();
-  return {
-    result: {
-      path: args.path,
-      width,
-      height,
-      crop,
-      page: args.page ?? 1,
-      pages,
-    },
-    image: output.toDataURL("image/png"),
-  };
+    const output = document.createElement("canvas");
+    output.width = Math.ceil(crop.width * factor);
+    output.height = Math.ceil(crop.height * factor);
+    output
+      .getContext("2d")!
+      .drawImage(
+        source,
+        crop.x,
+        crop.y,
+        crop.width,
+        crop.height,
+        0,
+        0,
+        output.width,
+        output.height,
+      );
+    return {
+      result: {
+        path: args.path,
+        width,
+        height,
+        crop,
+        clipped:
+          crop.width !== requested.width || crop.height !== requested.height,
+        renderedWidth: output.width,
+        renderedHeight: output.height,
+        page: args.page ?? 1,
+        pages,
+      },
+      image: output.toDataURL("image/png"),
+    };
+  } finally {
+    cleanup();
+  }
 }
 export async function documentTool(
   job: Job,
@@ -106,18 +130,38 @@ export async function documentTool(
   if (isPdf) args = { ...args, format: "pdf" };
   if (
     action === "view_image" ||
+    action === "ocr_image" ||
     isPdf ||
     isImage ||
     /\.(png|jpe?g|webp|gif|bmp|pdf)$/i.test(file.path)
   ) {
     const value = await bitmap(file.blob, args);
-    const info = value.result as { pages?: number };
+    const info = value.result as { pages?: number; page?: number };
     await putMaterial(job.id, {
       ...file,
       inspected: true,
       totalPages: info.pages ?? file.totalPages,
-      pagesRead: [...new Set([...(file.pagesRead ?? []), args.page ?? 1])],
+      pagesRead: [
+        ...new Set([...(file.pagesRead ?? []), info.page ?? args.page ?? 1]),
+      ],
     });
+    if (action === "ocr_image") {
+      const { recognizeImage } = await import("./ocr");
+      const ocr = await recognizeImage(
+        value.image,
+        args.language as "chi_sim" | "eng" | "chi_sim+eng" | undefined,
+        args.layout as "auto" | "sparse" | "block" | undefined,
+      );
+      return {
+        ...value,
+        result: {
+          ...value.result,
+          ocr,
+          coordinateSpace:
+            "OCR 行坐标相对此次裁剪后渲染图 renderedWidth × renderedHeight；crop 表示原图区域。OCR 可能错字，须与原图核对。",
+        },
+      };
+    }
     return value;
   }
   if (action === "unpack" && file.path.split("!/").length > 8)
@@ -181,12 +225,14 @@ export async function documentTool(
       blob: new Blob([new Uint8Array(asset.bytes)], { type: asset.mime }),
     });
   }
-  const info = value.result as { pages?: number };
+  const info = value.result as { pages?: number; page?: number };
   await putMaterial(job.id, {
     ...file,
     inspected: true,
     totalPages: info.pages ?? file.totalPages,
-    pagesRead: [...new Set([...(file.pagesRead ?? []), args.page ?? 1])],
+    pagesRead: [
+      ...new Set([...(file.pagesRead ?? []), info.page ?? args.page ?? 1]),
+    ],
   });
   return {
     result: {

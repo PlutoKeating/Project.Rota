@@ -19,22 +19,6 @@ function calls() {
   return [
     { name: "tree", args: {} },
     { name: "read_document", args: { path: "说明.txt" } },
-    {
-      name: "observe_material",
-      args: {
-        path: "说明.txt",
-        content: "张同学，会计2601，新媒体部门，高等数学每周一第1节，共2周。",
-        unresolved: [],
-      },
-    },
-    {
-      name: "mark_file",
-      args: {
-        path: "说明.txt",
-        status: "done",
-        reason: "已读取并记录名单及课表",
-      },
-    },
     change("organization", "org", { name: "新媒体" }),
     change("person", "p", { full_name: "张同学", class_name: "会计2601" }),
     change("membership", "m", { person_id: "p", org_id: "org" }),
@@ -54,16 +38,29 @@ function calls() {
       name: "校内作息",
       periods: '[{"index":1,"start":"08:00","end":"08:45"}]',
     }),
-    change("timetable_entry", "entry", {
-      person_id: "p",
-      term_id: "term",
-      profile_id: "profile",
-      name: "高等数学",
-      weekday: 1,
-      period_from: 1,
-      period_to: 1,
-      weeks: "[1,2]",
-    }),
+    {
+      name: "save_timetable",
+      args: {
+        id: "plan",
+        person: { id: "p", full_name: "张同学", class_name: "会计2601" },
+        organization_ids: ["org"],
+        term_name: "2026 秋",
+        term_id: "term",
+        profile_id: "profile",
+        entries: [
+          {
+            name: "高等数学",
+            weekday: 1,
+            period_from: 1,
+            period_to: 1,
+            weeks: [1, 2],
+          },
+        ],
+        sources: evidence,
+        completed_sources: ["说明.txt"],
+        unresolved: [],
+      },
+    },
     { name: "validate_draft", args: {} },
     {
       name: "finish_review",
@@ -92,7 +89,23 @@ test("browser Agent reads files, stages relational preview and applies only afte
     else if (path === "/api/agent-imports") data = { id: "batch-browser" };
     else if (path.endsWith("/turn")) {
       turns++;
-      const list = calls();
+      const context = JSON.parse(route.request().postDataJSON().context);
+      const list = context.verification
+        ? [
+            {
+              id: "verify-read",
+              name: "read_document",
+              args: { path: "说明.txt" },
+            },
+            {
+              id: "verify-confirm",
+              name: "confirm_timetable_check",
+              args: { id: "plan", summary: "已逐项核对合成来源" },
+            },
+          ]
+        : turns > 1
+          ? calls().slice(-2)
+          : calls();
       data = {
         messages: [
           {
@@ -142,11 +155,34 @@ test("browser Agent reads files, stages relational preview and applies only afte
     page.getByRole("button", { name: "审核无误，导入全部选中内容" }),
   ).toBeVisible({ timeout: 30000 });
   expect(applies).toBe(0);
-  expect(turns).toBe(1);
+  expect(turns).toBe(3);
   await page.getByText("张同学", { exact: false }).first().click();
   await expect(
     page.getByText("高等数学", { exact: true }).first(),
   ).toBeVisible();
+  await page
+    .getByText("高等数学", { exact: true })
+    .first()
+    .locator("..")
+    .getByRole("button", { name: "修改", exact: true })
+    .click();
+  await page.getByLabel("课程名称", { exact: true }).fill("高等数学（复核）");
+  await page.getByRole("button", { name: "保存修改", exact: true }).click();
+  await expect(
+    page.getByText("高等数学（复核）", { exact: true }).first(),
+  ).toBeVisible();
+  const edited = await page.evaluate(async () => {
+    const s = await import("/src/client/agent-import/store.ts");
+    const j = (await s.listJobs("owner"))[0];
+    return {
+      proposal: j.timetables?.plan.entries[0].name,
+      formal: j.draft.timetable_entry[0].name,
+    };
+  });
+  expect(edited).toEqual({
+    proposal: "高等数学（复核）",
+    formal: "高等数学（复核）",
+  });
   const include = page.getByRole("checkbox", { name: "包含此人的变更" });
   await include.uncheck();
   await expect(include).toBeVisible();
@@ -163,7 +199,7 @@ test("browser Agent reads files, stages relational preview and applies only afte
   await expect(
     page.getByRole("button", { name: "审核无误，导入全部选中内容" }),
   ).toBeVisible();
-  expect(turns).toBe(1);
+  expect(turns).toBe(3);
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.screenshot({
     path: ".impeccable/review/import-review-desktop.png",
@@ -358,6 +394,23 @@ test("personal course editor exposes validation failures inside its dialog", asy
     const args = call.args as any;
     mutate(snapshot, args.entity, "create", args.data, args.id);
   }
+  mutate(
+    snapshot,
+    "timetable_entry",
+    "create",
+    {
+      id: "entry",
+      person_id: "p",
+      term_id: "term",
+      profile_id: "profile",
+      name: "高等数学",
+      weekday: 1,
+      period_from: 1,
+      period_to: 1,
+      weeks: "[1,2]",
+    },
+    "entry",
+  );
   const term = {
     id: "term",
     name: "2026 秋",

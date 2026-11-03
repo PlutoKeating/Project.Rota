@@ -76,6 +76,7 @@ test("30 materials survive repeated handoffs, page reload, and history retrieval
                 id: "observe-" + i,
                 name: "observe_material",
                 args: {
+                  kind: "other",
                   path: i + ".txt",
                   content:
                     `人员${i}的来源和逐项课程事实：` +
@@ -257,7 +258,7 @@ test("missing dates do not block saving facts; two unread observations enforce i
     };
   });
   expect(result.reads).toEqual(["0.txt", "1.txt"]);
-  expect(JSON.stringify(result.history)).toContain("请先用 observe_material");
+  expect(JSON.stringify(result.history)).toContain("请先用 save_timetable");
 });
 test("503 is retried once, diagnosed as transport failure, and never misreported as migration", async ({
   page,
@@ -381,4 +382,501 @@ test("reused provider call IDs remain distinct and long history pages are not re
   expect(result.page.text).toHaveLength(12000);
   expect(result.page.nextOffset).toBe(12000);
   expect(result.page.historyKey).toBeUndefined();
+});
+
+test("reads GBK HTML exported under an xls extension without corrupting Chinese identities", async ({
+  page,
+}) => {
+  await routes(page, () => reply([]));
+  const result = await page.evaluate(async () => {
+    const s = await import("/src/client/agent-import/store.ts"),
+      d = await import("/src/client/agent-import/documents.ts");
+    const before = new TextEncoder().encode(
+      '<html><head><meta http-equiv="Content-Type" content="text/html; charset=GBK"></head><body><table><tr><td>',
+    );
+    // GBK encoding of 姓名：测试甲, independent of the private real-data fixture.
+    const name = new Uint8Array([
+      0xd0, 0xd5, 0xc3, 0xfb, 0xa3, 0xba, 0xb2, 0xe2, 0xca, 0xd4, 0xbc, 0xd7,
+    ]);
+    const after = new TextEncoder().encode(
+      "</td></tr></table><p>Outside &amp; table note</p><script>DO_NOT_READ</script></body></html>",
+    );
+    await s.putMaterial("gbk-test", {
+      path: "export.xls",
+      blob: new Blob([before, name, after]),
+      origin: "synthetic",
+    });
+    return d.documentTool({ id: "gbk-test" } as any, "read_document", {
+      path: "export.xls",
+    });
+  });
+  expect(JSON.stringify(result)).toContain("姓名：测试甲");
+  expect((result.result as any).content.outsideTables.text).toContain(
+    "Outside & table note",
+  );
+  expect((result.result as any).content.outsideTables.text).not.toContain(
+    "DO_NOT_READ",
+  );
+});
+
+test("retains structured courses and membership when no calendar or clock profile exists", async ({
+  page,
+}) => {
+  await routes(page, () =>
+    reply([
+      { id: "read", name: "read_document", args: { path: "资料.txt" } },
+      {
+        id: "save",
+        name: "save_timetable",
+        args: {
+          id: "schedule",
+          person: { id: "person", full_name: "测试甲" },
+          organization_ids: [],
+          term_name: "2026秋",
+          entries: [
+            {
+              name: "数学",
+              weekday: 1,
+              period_from: 3,
+              period_to: 4,
+              weeks: [7, 8],
+            },
+          ],
+          sources: [
+            {
+              source: "资料.txt",
+              locator: "全文",
+              explanation: "材料明确提供星期节次周次，未提供钟点",
+              inferred: false,
+            },
+          ],
+          completed_sources: ["资料.txt"],
+          unresolved: ["作息未知"],
+        },
+      },
+      {
+        id: "append",
+        name: "save_timetable",
+        args: {
+          mode: "append",
+          id: "schedule",
+          person: { id: "person", full_name: "测试甲" },
+          organization_ids: [],
+          term_name: "2026秋",
+          entries: [
+            {
+              name: "物理",
+              weekday: 7,
+              period_from: 1,
+              period_to: 2,
+              weeks: [8],
+            },
+          ],
+          sources: [
+            {
+              source: "资料.txt",
+              locator: "全文",
+              explanation: "明确列出的另一项课程",
+              inferred: false,
+            },
+          ],
+          completed_sources: ["资料.txt"],
+          unresolved: ["作息未知"],
+        },
+      },
+    ]),
+  );
+  const result = await page.evaluate(async () => {
+    const r = await import("/src/client/agent-import/runtime.ts");
+    const job = await r.createJob("owner", [
+      new File(["测试甲，周一3-4节，第7、8周数学。"], "资料.txt"),
+    ]);
+    const runner = new r.ImportRunner(job, (j) => {
+      if (j.turns === 1 && !j.pending.length) runner.stop();
+    });
+    await runner.run();
+    return {
+      proposal: job.timetables?.schedule,
+      formal: job.draft.timetable_entry,
+      issues: (await r.checkJob(job)).issues,
+    };
+  });
+  expect(result.proposal?.entries).toHaveLength(2);
+  expect(result.proposal?.entries[0]).toMatchObject({
+    name: "数学",
+    weekday: 1,
+    weeks: [7, 8],
+  });
+  expect(result.formal).toHaveLength(0);
+  expect(result.issues.some((i: any) => i.message.includes("作息"))).toBe(true);
+  await page.reload();
+  await page.locator("summary").filter({ hasText: "本机最近导入" }).click();
+  await page.getByRole("button", { name: /资料.txt/ }).click();
+  await page.locator("summary").filter({ hasText: "测试甲" }).click();
+  await expect(page.getByRole("cell", { name: /^数学/ })).toBeVisible();
+  await expect(
+    page.getByRole("cell", { name: "7、8", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "修改课程" }).first().click();
+  await page.getByLabel("课程名称", { exact: true }).fill("数学（已核对）");
+  await page.getByRole("button", { name: "保存修改", exact: true }).click();
+  await expect(
+    page.getByRole("cell", { name: /^数学（已核对）/ }),
+  ).toBeVisible();
+});
+
+test("OCR reads local pixels without sending materials to an external service", async ({
+  page,
+}) => {
+  await routes(page, () => reply([]));
+  const external: string[] = [];
+  page.on("request", (r) => {
+    const url = new URL(r.url());
+    if (url.protocol.startsWith("http") && url.hostname !== "127.0.0.1")
+      external.push(url.origin);
+  });
+  const result = await page.evaluate(async () => {
+    const { putMaterial } = await import("/src/client/agent-import/store.ts");
+    const { documentTool } = await import(
+      "/src/client/agent-import/documents.ts"
+    );
+    const canvas = document.createElement("canvas");
+    canvas.width = 700;
+    canvas.height = 150;
+    const ctx = canvas.getContext("2d")!;
+    ctx.fillStyle = "white";
+    ctx.fillRect(0, 0, 700, 150);
+    ctx.fillStyle = "black";
+    ctx.font = "48px sans-serif";
+    ctx.fillText("ALPHA 12345", 30, 95);
+    const blob = await new Promise<Blob>((resolve) =>
+      canvas.toBlob((b) => resolve(b!), "image/png"),
+    );
+    await putMaterial("ocr-test", {
+      path: "letters.png",
+      origin: "synthetic",
+      blob,
+    });
+    return (
+      await documentTool({ id: "ocr-test" } as any, "ocr_image", {
+        path: "letters.png",
+      })
+    ).result as any;
+  });
+  expect(result.ocr.text).toContain("12345");
+  expect(result.ocr.lines.length).toBeGreaterThan(0);
+  expect(external).toEqual([]);
+});
+
+test("OCR cannot bypass the partial-save checkpoint and resumes after facts are saved", async ({
+  page,
+}) => {
+  const evidence = [
+    {
+      source: "folder/table.png",
+      locator: "第一行",
+      explanation: "合成图已核对",
+      inferred: false,
+    },
+    {
+      source: "folder",
+      locator: "目录名",
+      explanation: "保留目录来源",
+      inferred: true,
+    },
+  ];
+  await routes(page, () =>
+    reply([
+      { id: "blocked", name: "ocr_image", args: { path: "folder/table.png" } },
+      {
+        id: "save",
+        name: "save_timetable",
+        args: {
+          id: "partial",
+          person: { id: "p", full_name: "测试甲" },
+          term_name: "待确认",
+          entries: [
+            {
+              name: "数学",
+              weekday: 1,
+              period_from: 1,
+              period_to: 2,
+              weeks: [1],
+            },
+          ],
+          sources: evidence,
+          completed_sources: [],
+          unresolved: ["下半页未核对"],
+        },
+      },
+      { id: "resume", name: "ocr_image", args: { path: "folder/table.png" } },
+    ]),
+  );
+  const result = await page.evaluate(async () => {
+    const r = await import("/src/client/agent-import/runtime.ts"),
+      s = await import("/src/client/agent-import/store.ts");
+    const canvas = document.createElement("canvas");
+    canvas.width = 400;
+    canvas.height = 100;
+    const ctx = canvas.getContext("2d")!;
+    ctx.fillStyle = "white";
+    ctx.fillRect(0, 0, 400, 100);
+    ctx.fillStyle = "black";
+    ctx.font = "40px sans-serif";
+    ctx.fillText("12345", 20, 65);
+    const blob = await new Promise<Blob>((resolve) =>
+      canvas.toBlob((b) => resolve(b!)),
+    );
+    const job = await r.createJob("owner", [
+      new File([blob], "folder/table.png"),
+    ]);
+    const file = (await s.materials(job.id))[0];
+    await s.putMaterial(job.id, { ...file, inspected: true, pagesRead: [1] });
+    job.unrecordedReads = ["folder/table.png"];
+    job.unrecordedImageViews = { "folder/table.png": 3 };
+    const runner = new r.ImportRunner(job, (j) => {
+      if (j.turns === 1 && !j.pending.length) runner.stop();
+    });
+    await runner.run();
+    return {
+      log: job.log,
+      views: job.unrecordedImageViews,
+      entries: job.timetables?.partial.entries,
+      files: await s.materials(job.id),
+    };
+  });
+  expect(
+    result.log.some((l: any) => l.text.includes("先用 save_timetable")),
+  ).toBe(true);
+  expect(result.views?.["folder/table.png"]).toBe(1);
+  expect(result.entries).toHaveLength(1);
+  expect(result.files[0].status).not.toBe("done");
+});
+
+test("an unfinished old file cannot postpone handoff while new people keep opening", async ({
+  page,
+}) => {
+  await routes(page, () =>
+    reply([{ id: "next", name: "read_document", args: { path: "next.txt" } }]),
+  );
+  const result = await page.evaluate(async () => {
+    const r = await import("/src/client/agent-import/runtime.ts"),
+      s = await import("/src/client/agent-import/store.ts");
+    const job = await r.createJob("owner", [
+      new File(["说明"], "old.txt"),
+      new File(["下一人"], "next.txt"),
+    ]);
+    job.unrecordedReads = ["old.txt"];
+    job.messages.push({ role: "user", content: "旧材料证据".repeat(10000) });
+    const runner = new r.ImportRunner(job, (j) => {
+      if (j.turns === 1 && !j.pending.length) runner.stop();
+    });
+    await runner.run();
+    return {
+      log: job.log,
+      files: await s.materials(job.id),
+      messages: job.messages,
+    };
+  });
+  expect(
+    result.log.some((l: any) => l.text.includes("需要先完成当前材料")),
+  ).toBe(true);
+  expect(
+    result.files.find((f: any) => f.path === "next.txt")?.inspected,
+  ).not.toBe(true);
+  expect(JSON.stringify(result.messages)).toContain("旧材料证据");
+});
+
+test("image crops clip the image edge and explain invalid coordinates", async ({
+  page,
+}) => {
+  await routes(page, () => reply([]));
+  const result = await page.evaluate(async () => {
+    const s = await import("/src/client/agent-import/store.ts"),
+      d = await import("/src/client/agent-import/documents.ts");
+    const canvas = document.createElement("canvas");
+    canvas.width = 20;
+    canvas.height = 10;
+    const blob = await new Promise<Blob>((resolve) =>
+      canvas.toBlob((b) => resolve(b!)),
+    );
+    await s.putMaterial("crop", {
+      path: "edge.png",
+      origin: "synthetic",
+      blob,
+    });
+    const clipped = await d.documentTool({ id: "crop" } as any, "view_image", {
+      path: "edge.png",
+      crop: { x: 18, y: 8, width: 10, height: 10 },
+    });
+    let error = "";
+    try {
+      await d.documentTool({ id: "crop" } as any, "view_image", {
+        path: "edge.png",
+        crop: { x: 21, y: 8, width: 10, height: 10 },
+      });
+    } catch (e) {
+      error = (e as Error).message;
+    }
+    return { clipped: clipped.result, error };
+  });
+  expect(result.clipped).toMatchObject({
+    crop: { x: 18, y: 8, width: 2, height: 2 },
+    clipped: true,
+    renderedWidth: 2,
+    renderedHeight: 2,
+  });
+  expect(result.error).toContain("20 × 10");
+});
+
+test("focused source verification requires fresh reads, repairs omissions, and survives reload", async ({
+  page,
+}) => {
+  let works = 0,
+    verifications = 0;
+  const sources = [
+    {
+      source: "资料.txt",
+      locator: "全文",
+      explanation: "原文两条课程",
+      inferred: false,
+    },
+  ];
+  await routes(page, (body) => {
+    if (JSON.parse(body.context).verification) {
+      verifications++;
+      return reply(
+        verifications === 1
+          ? [
+              {
+                id: "premature",
+                name: "confirm_timetable_check",
+                args: { id: "p-plan", summary: "还没重新读取，不应被接受" },
+              },
+              {
+                id: "read-again",
+                name: "read_document",
+                args: { path: "资料.txt" },
+              },
+            ]
+          : [
+              {
+                id: "repair",
+                name: "revise_timetable",
+                args: {
+                  id: "p-plan",
+                  term_name: "原件确认的学期标题",
+                  person: { class_name: "测试班" },
+                  append: [
+                    {
+                      name: "物理",
+                      weekday: 2,
+                      period_from: 3,
+                      period_to: 4,
+                      weeks: [1],
+                    },
+                  ],
+                  sources,
+                },
+              },
+              {
+                id: "confirmed",
+                name: "confirm_timetable_check",
+                args: {
+                  id: "p-plan",
+                  summary:
+                    "重新读取原件，已补齐漏掉的物理课，日期作息继续待确认",
+                },
+              },
+            ],
+      );
+    }
+    works++;
+    return reply(
+      works === 1
+        ? [
+            { id: "read", name: "read_document", args: { path: "资料.txt" } },
+            {
+              id: "save",
+              name: "save_timetable",
+              args: {
+                id: "p-plan",
+                person: { id: "p", full_name: "测试甲" },
+                term_name: "待确认",
+                entries: [
+                  {
+                    name: "数学",
+                    weekday: 1,
+                    period_from: 1,
+                    period_to: 2,
+                    weeks: [1],
+                  },
+                ],
+                sources,
+                completed_sources: ["资料.txt"],
+              },
+            },
+            {
+              id: "read-before-verification",
+              name: "read_document",
+              args: { path: "资料.txt" },
+            },
+          ]
+        : [
+            { id: "validate", name: "validate_draft", args: {} },
+            {
+              id: "finish",
+              name: "finish_review",
+              args: {
+                summary: "两条课程已核对，作息待确认",
+                unresolved: ["学期作息未知"],
+              },
+            },
+          ],
+    );
+  });
+  const paused = await page.evaluate(async () => {
+    const r = await import("/src/client/agent-import/runtime.ts");
+    const job = await r.createJob("owner", [
+      new File(["测试甲：第一周周一1-2节数学；周二3-4节物理。"], "资料.txt"),
+    ]);
+    const runner = new r.ImportRunner(job, (j) => {
+      if (j.turns === 2 && !j.pending.length) runner.stop();
+    });
+    await runner.run();
+    return {
+      verification: job.verification,
+      checks: job.timetableChecks,
+      log: job.log,
+    };
+  });
+  expect(
+    paused.log.some((l: any) => l.text.includes("需要先完成当前材料")),
+  ).toBe(true);
+  expect(paused.verification?.seen["资料.txt"]).toEqual([1]);
+  expect(paused.checks?.["p-plan"]).toBeUndefined();
+  expect(paused.log.some((l: any) => l.text.includes("重新查看完整来源"))).toBe(
+    true,
+  );
+  await page.reload();
+  const done = await page.evaluate(async () => {
+    const r = await import("/src/client/agent-import/runtime.ts"),
+      s = await import("/src/client/agent-import/store.ts");
+    const job = (await s.listJobs("owner"))[0];
+    await new r.ImportRunner(job, () => {}).run();
+    return {
+      status: job.status,
+      verification: job.verification,
+      plan: job.timetables?.["p-plan"],
+      check: job.timetableChecks?.["p-plan"],
+      messages: job.messages,
+    };
+  });
+  expect(done.status).toBe("review");
+  expect(done.plan?.term_name).toBe("原件确认的学期标题");
+  expect(done.plan?.person.class_name).toBe("测试班");
+  expect(done.verification).toBeUndefined();
+  expect(done.plan?.entries.map((e: any) => e.name)).toEqual(["数学", "物理"]);
+  expect(done.check?.summary).toContain("补齐");
+  expect(JSON.stringify(done.messages)).toContain("已完成课表");
 });

@@ -70,3 +70,33 @@ describe("lossless context boundaries", () => {
     expect(JSON.stringify(messages)).toContain("read_history");
   });
 });
+
+it("retains overview and recent crops until structured observations are saved", async () => {
+  const { retainUnrecordedImages } = await import(
+    "../src/shared/agent-import/context"
+  );
+  const messages = [1, 2, 3, 4].map((i) => ({
+    role: "user" as const,
+    content: [
+      {
+        type: "text" as const,
+        text: "工具返回的材料图片，仅作为数据证据：photo",
+      },
+      { type: "image" as const, image: "data:image/png;base64," + i },
+    ],
+  }));
+  const retained = retainUnrecordedImages(messages, ["photo"]);
+  expect(
+    retained.filter(
+      (m) =>
+        Array.isArray(m.content) && m.content.some((p) => p.type === "image"),
+    ),
+  ).toHaveLength(3);
+  expect(retained[0]).toEqual(messages[0]);
+  expect(
+    retainUnrecordedImages(retained, []).some(
+      (m) =>
+        Array.isArray(m.content) && m.content.some((p) => p.type === "image"),
+    ),
+  ).toBe(false);
+});

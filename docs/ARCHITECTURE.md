@@ -100,3 +100,7 @@ LLM 网关把上游已知错误转换为固定中文诊断，保留当前模型�
 OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/go/v1/models` 的交集。官方目录不可达时保留上次验证过的型号；首次失败暂不提供 Go 新增选项并返回提示，不影响其他供应商或已有配置。目录缓存升级为 `llm:catalog:v2`，避免继续使用未校验的旧列表；无需数据库迁移。官方目录仅证明型号存在，不保证账号、地区和额度权限。
 
 浏览器导入执行器采用持久识别成果 + 外置工具历史 + 同 Agent 交接摘要，替代截断式上下文。原 IndexedDB 保持兼容，独立历史库与批次共同清理；Worker 仅提供有界的单轮模型代理。研究依据与故障恢复边界见 [AGENT_IMPORT.md](AGENT_IMPORT.md)。
+
+### 导入实际材料回归修正
+
+浏览器新增独立于正式课表表结构的 TimetableProposal：先保存来源中的身份与星期/节次/周次事实，缺少日历或钟点仍可复核；绑定已确认学期和作息后，原子生成正式结构的草稿。格式解码与本地 Tesseract OCR 只提供文本/坐标，业务判断仍由 Agent 完成。兼容模型使用 AI SDK 的 openai-compatible 适配器，保留供应商推理续接字段。实现与验收边界见 [AGENT_IMPORT.md](AGENT_IMPORT.md)。

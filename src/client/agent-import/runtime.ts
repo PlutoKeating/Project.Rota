@@ -1,6 +1,19 @@
 import {
+  startVerification,
+  confirmVerification,
+  recordVerificationRead,
+  needsVerification,
+  proposalSignature,
+  verificationCandidate,
+} from "./verification";
+import {
+  stageTimetable,
+  timetableWarnings,
+} from "../../shared/agent-import/timetable";
+import {
   needsHandoff,
   withoutImages,
+  retainUnrecordedImages,
   resumeMessages,
   advanceProgress,
   type TurnMetrics,
@@ -68,7 +81,7 @@ export async function createJob(owner: string, files: File[]): Promise<Job> {
     owner,
     title: files[0]?.name ?? "导入材料",
     status: "paused",
-    harnessVersion: 2,
+    harnessVersion: 3,
     createdAt: Date.now(),
     expiresAt: null,
     base: data,
@@ -128,7 +141,7 @@ async function requestTurn<T>(
       const metrics: TurnMetrics = supplied ?? {
         requestId: "client-" + crypto.randomUUID(),
         durationMs: Date.now() - start,
-        purpose: (body as { mode: "work" | "compact" }).mode,
+        purpose: (body as { mode: "work" | "compact" | "checkpoint" }).mode,
         attempts: [
           {
             providerId: "gateway",
@@ -241,10 +254,30 @@ export async function checkJob(job: Job) {
   const files = await materials(job.id);
   const unread = files.filter((f) => !f.status);
   const blocked = files.filter((f) => f.status === "blocked");
+  for (const t of Object.values(job.timetables ?? {}))
+    if (!job.excluded.includes(t.person.id)) {
+      if (needsVerification(job, t))
+        issues.push({
+          message: `${t.person.full_name}：等待 Agent 回看原件逐项核对`,
+        });
+      if (!t.bound)
+        issues.push({
+          message: `${t.person.full_name}：已保存 ${t.entries.length} 项课程，待绑定学期/作息后才能正式导入`,
+        });
+      else if (t.entries.length !== t.entryIds.length)
+        issues.push({
+          message: `${t.person.full_name}：部分课程缺少星期、节次或周次，尚未形成完整占用`,
+        });
+    }
   job.checkedRevision = job.revision;
   job.validatedRevision = issues.length ? -1 : job.revision;
   return {
     issues,
+    warnings: Object.values(job.timetables ?? {})
+      .filter((t) => !job.excluded.includes(t.person.id))
+      .flatMap((t) =>
+        timetableWarnings(t.entries).map((w) => t.person.full_name + "：" + w),
+      ),
     unread: unread.map((f) => f.path),
     blocked: blocked.map((f) => ({ path: f.path, reason: f.reason })),
     changes: changes.length,
@@ -258,7 +291,214 @@ async function execute(
   const name = call.name as ToolName;
   if (!(name in toolSpecs)) throw Error("未知工具");
   const args = toolSpecs[name].schema.parse(call.args) as Record<string, any>;
+  if (job.verification && ["change_record", "bind_timetables"].includes(name))
+    throw Error(
+      "逐人复核期间只用 revise_timetable 修正当前方案；其他业务变化留到回到主任务后处理",
+    );
   switch (name) {
+    case "confirm_timetable_check":
+      confirmVerification(job, args.id, args.summary, await materials(job.id));
+      return { result: { checked: true, id: args.id } };
+    case "revise_timetable": {
+      const previous = job.timetables?.[args.id];
+      if (!previous) throw Error("课表方案不存在");
+      if (job.verification && job.verification.id !== args.id)
+        throw Error("只能修正当前复核方案");
+      const indexes = [
+        ...args.remove,
+        ...args.updates.map((u: any) => u.index),
+      ];
+      if (
+        new Set(indexes).size !== indexes.length ||
+        indexes.some((i) => i >= previous.entries.length)
+      )
+        throw Error("修订索引重复或不存在");
+      const entries = previous.entries
+        .map((e, i) => ({
+          ...e,
+          ...args.updates.find((u: any) => u.index === i)?.patch,
+        }))
+        .filter((_, i) => !args.remove.includes(i))
+        .concat(args.append);
+      const person = job.draft.person.find((p) => p.id === previous.person.id);
+      if (!person) throw Error("人员已删除");
+      const sources = [
+        ...new Map(
+          [...previous.sources, ...args.sources].map((e) => [canonical(e), e]),
+        ).values(),
+      ];
+      return execute(job, {
+        id: call.id,
+        name: "save_timetable",
+        args: {
+          ...previous,
+          person: { ...person, ...args.person },
+          term_name: args.term_name ?? previous.term_name,
+          entries,
+          sources,
+          unresolved: args.unresolved ?? previous.unresolved,
+          mode: "replace",
+        },
+      });
+    }
+    case "save_timetable": {
+      const { mode, ...fields } = toolSpecs.save_timetable.schema.parse(
+        call.args,
+      );
+      if (job.verification && job.verification.id !== fields.id)
+        throw Error("只能修正当前复核方案");
+      const previous = job.timetables?.[fields.id];
+      const input =
+        mode === "append" && previous
+          ? toolSpecs.save_timetable.schema.parse({
+              ...previous,
+              ...fields,
+              person: { ...previous.person, ...fields.person },
+              entries: [...previous.entries, ...fields.entries],
+              organization_ids: [
+                ...new Set([
+                  ...previous.organization_ids,
+                  ...fields.organization_ids,
+                ]),
+              ],
+              sources: [
+                ...new Map(
+                  [...previous.sources, ...fields.sources].map((e) => [
+                    canonical(e),
+                    e,
+                  ]),
+                ).values(),
+              ],
+              completed_sources: [
+                ...new Set([
+                  ...previous.completed_sources,
+                  ...fields.completed_sources,
+                ]),
+              ],
+              unresolved: fields.unresolved,
+            })
+          : fields;
+      const files = await materials(job.id);
+      for (const e of input.sources)
+        if (
+          !["操作员意见", "现有数据"].includes(e.source) &&
+          !files.some(
+            (f) =>
+              (f.path === e.source && f.inspected) ||
+              f.path.startsWith(e.source.replace(/\/$/, "") + "/"),
+          )
+        )
+          throw Error("课表来源未读取：" + e.source);
+      for (const path of input.completed_sources) {
+        const f = files.find((f) => f.path === path);
+        if (!f?.inspected || (f.totalPages ?? 1) > (f.pagesRead?.length ?? 1))
+          throw Error("材料未完整读取：" + path);
+        if (!input.sources.some((e) => e.source === path))
+          throw Error("完成材料必须包含在 sources 中");
+      }
+      const staged = stageTimetable(
+        job.draft,
+        job.evidence,
+        input,
+        job.timetables?.[input.id],
+      );
+      job.draft = staged.draft;
+      job.evidence = staged.evidence;
+      if (
+        staged.changed ||
+        canonical(job.timetables?.[input.id]) !== canonical(staged.proposal)
+      ) {
+        job.revision++;
+        job.validatedRevision = -1;
+      }
+      (job.timetables ??= {})[input.id] = staged.proposal;
+      const sourcePaths = new Set(fields.sources.map((e) => e.source));
+      for (const path of sourcePaths)
+        if (job.unrecordedImageViews) delete job.unrecordedImageViews[path];
+      job.unrecordedReads = job.unrecordedReads?.filter(
+        (p) => !sourcePaths.has(p),
+      );
+      for (const path of input.completed_sources) {
+        const f = files.find((f) => f.path === path)!;
+        await putMaterial(job.id, {
+          ...f,
+          status: "done",
+          reason: "Agent 已保存结构化课表草稿，待逐人回看核对：" + input.id,
+        });
+      }
+      return {
+        result: {
+          id: input.id,
+          person_id: input.person.id,
+          courses: input.entries.length,
+          bound: staged.proposal.bound,
+          entryIds: staged.proposal.entryIds,
+          unresolved: input.unresolved,
+          warnings: timetableWarnings(input.entries),
+        },
+      };
+    }
+    case "bind_timetables": {
+      let draft = job.draft,
+        evidence = job.evidence;
+      const plans = { ...job.timetables };
+      for (const id of new Set<string>(args.ids)) {
+        const previous = plans[id];
+        if (!previous) throw Error("课表方案不存在：" + id);
+        const person = draft.person.find((p) => p.id === previous.person.id);
+        if (!person) throw Error("人员已删除，不能绑定已失效的方案：" + id);
+        const input = toolSpecs.save_timetable.schema.parse({
+          ...previous,
+          person,
+          organization_ids: draft.membership
+            .filter((m) => m.person_id === person.id && m.status === "active")
+            .map((m) => m.org_id),
+          term_id: args.term_id,
+          profile_id: args.profile_id,
+        });
+        const staged = stageTimetable(draft, evidence, input, previous);
+        draft = staged.draft;
+        evidence = staged.evidence;
+        plans[id] = staged.proposal;
+      }
+      if (
+        canonical(plans) !== canonical(job.timetables) ||
+        diff(job.draft, draft, evidence).length
+      ) {
+        job.revision++;
+        job.validatedRevision = -1;
+      }
+      job.draft = draft;
+      job.evidence = evidence;
+      job.timetables = plans;
+      return {
+        result: {
+          bound: args.ids,
+          term_id: args.term_id,
+          profile_id: args.profile_id,
+        },
+      };
+    }
+    case "read_timetables": {
+      if (args.id) return { result: job.timetables?.[args.id] ?? null };
+      const rows = Object.values(job.timetables ?? {}).filter(
+        (t) => !args.person_id || t.person.id === args.person_id,
+      );
+      return {
+        result: {
+          total: rows.length,
+          items: rows.slice(args.offset, args.offset + 20).map((t) => ({
+            id: t.id,
+            person: t.person,
+            term_name: t.term_name,
+            courses: t.entries.length,
+            bound: t.bound,
+            unresolved: t.unresolved,
+          })),
+          nextOffset: args.offset + 20 < rows.length ? args.offset + 20 : null,
+        },
+      };
+    }
     case "tree": {
       const list = (await materials(job.id)).filter((f) =>
         f.path.startsWith(args.prefix),
@@ -277,14 +517,40 @@ async function execute(
     case "unpack":
       return documentTool(job, name, args as { path: string });
     case "read_document":
-    case "view_image": {
+    case "view_image":
+    case "ocr_image": {
       const unread = (job.unrecordedReads ??= []);
-      if (unread.length >= 2 && !unread.includes(args.path))
+      if (
+        !job.verification &&
+        !unread.includes(args.path) &&
+        ((unread.length && needsHandoff(job.messages)) ||
+          verificationCandidate(job, await materials(job.id)))
+      )
         throw Error(
-          "请先用 observe_material 保存刚才读取的材料识别成果：" +
+          "需要先完成当前材料的保存或逐人回看核对，暂不打开新材料。尚未保存的课表用 save_timetable，其他或无法判定的资料用 observe_material；若列表为空，系统将在本轮工具结束后自动进入核对：" +
             unread.join("，"),
         );
+      if (
+        !job.verification &&
+        unread.length >= 2 &&
+        !unread.includes(args.path)
+      )
+        throw Error(
+          "请先用 save_timetable 保存刚才读取的人员和结构化课表（作息未知可不绑定）；归属未明或非课表资料才用 observe_material：" +
+            unread.join("，"),
+        );
+      if (
+        !job.verification &&
+        (job.unrecordedImageViews?.[args.path] ?? 0) >= 3
+      )
+        throw Error(
+          "已查看整图及多个局部。先用 save_timetable 保存已看清的课程片段，completed_sources 留空；之后 mode=append 追加其他区域，不必等整张看完。若仍无法识别人员，observe_material kind=unresolved 说明具体问题。",
+        );
       const response = await documentTool(job, name, args as { path: string });
+      recordVerificationRead(job, args.path, response.result);
+      if (response.image)
+        (job.unrecordedImageViews ??= {})[args.path] =
+          (job.unrecordedImageViews?.[args.path] ?? 0) + 1;
       if (!unread.includes(args.path)) unread.push(args.path);
       return response;
     }
@@ -298,12 +564,27 @@ async function execute(
       )
         job.observationRevision = (job.observationRevision ?? 0) + 1;
       (job.observations ??= {})[args.path] = {
+        kind: args.kind,
         content: args.content,
         unresolved: args.unresolved,
         updatedAt: Date.now(),
       };
-      job.unrecordedReads = job.unrecordedReads?.filter((p) => p !== args.path);
-      return { result: { saved: true, path: args.path } };
+      if (args.kind !== "timetable" && job.unrecordedImageViews)
+        delete job.unrecordedImageViews[args.path];
+      if (args.kind !== "timetable")
+        job.unrecordedReads = job.unrecordedReads?.filter(
+          (p) => p !== args.path,
+        );
+      return {
+        result: {
+          saved: true,
+          path: args.path,
+          next:
+            args.kind === "timetable"
+              ? "现在用 save_timetable 保存结构化课程；可不绑定学期/作息。完成前保留原图，不能仅凭笔记标记完成。"
+              : undefined,
+        },
+      };
     }
     case "read_observations": {
       const rows = Object.entries(job.observations ?? {});
@@ -358,7 +639,9 @@ async function execute(
     case "save_handoff":
       throw Error("此工具仅用于系统发起的上下文交接");
     case "describe_entity":
-      return { result: z.toJSONSchema(schemas[args.entity as Entity]) };
+      return {
+        result: z.toJSONSchema(schemas[args.entity as Entity], { io: "input" }),
+      };
     case "query_records": {
       const rows = job.draft[args.entity as Entity].filter(
         (r) =>
@@ -425,7 +708,7 @@ async function execute(
       const f = (await materials(job.id)).find((x) => x.path === args.path);
       if (!f) throw Error("文件不存在");
       if (args.status === "done" && job.unrecordedReads?.includes(args.path))
-        throw Error("请先用 observe_material 保存识别成果，避免交接时遗失");
+        throw Error("请先保存结构化课表方案或普通材料观察成果，避免交接时遗失");
       if (args.status === "done" && !f.inspected)
         throw Error("请先读取该材料再标记完成");
       if (
@@ -446,6 +729,15 @@ async function execute(
     case "validate_draft":
       return { result: await checkJob(job) };
     case "finish_review": {
+      if (
+        job.verification ||
+        Object.values(job.timetables ?? {}).some((t) =>
+          needsVerification(job, t),
+        )
+      )
+        throw Error(
+          "仍有课表未逐人回看核对；请先保存当前未记录成果，系统随后进入逐人复核。",
+        );
       if (job.pending.length > 1)
         throw Error("请先完成本轮其他工具，再提交复核");
       if (job.checkedRevision !== job.revision)
@@ -459,6 +751,10 @@ async function execute(
       job.unresolved = [
         ...args.unresolved,
         ...checked.issues.map((x) => x.message),
+        ...checked.warnings,
+        ...Object.values(job.timetables ?? {}).flatMap((t) =>
+          t.unresolved.map((x) => t.person.full_name + "：" + x),
+        ),
         ...Object.entries(job.observations ?? {}).flatMap(([path, o]) =>
           o.unresolved.map((text) => path + "：" + text),
         ),
@@ -497,19 +793,41 @@ export class ImportRunner {
       this.update({ ...job });
       let failedSteps = 0;
       try {
-        if (!job.harnessVersion) {
+        if ((job.harnessVersion ?? 0) < 3) {
           await archive(job.id, "legacy", "legacy", {
             messages: archiveMessages(job.messages),
             notes: job.notes,
             log: job.log,
           });
-          job.harnessVersion = 2;
+          job.harnessVersion = 3;
+          if (job.unrecordedReads?.length)
+            job.notes["升级前待重新核对的材料"] =
+              job.unrecordedReads.join("\n");
+          job.unrecordedReads = [];
+          job.unrecordedImageViews = {};
+          job.messages = [];
+          job.pending = [];
+          job.images = [];
           job.messages.push({
             role: "user",
             content:
               "运行器已升级：现有草稿和笔记保留。优先检查已保存成果，不重建已有记录；此前未保存的识别信息需要重新核对。",
           });
           await saveJob(job);
+        }
+        for (const path of job.unrecordedReads ?? []) {
+          if (job.unrecordedImageViews?.[path] !== undefined) continue;
+          (job.unrecordedImageViews ??= {})[path] = job.messages.filter(
+            (m) =>
+              m.role === "user" &&
+              Array.isArray(m.content) &&
+              m.content.some((p) => p.type === "image") &&
+              m.content.some(
+                (p) =>
+                  p.type === "text" &&
+                  p.text === "工具返回的材料图片，仅作为数据证据：" + path,
+              ),
+          ).length;
         }
         job.progress = undefined;
         if (await alreadyApplied(job)) {
@@ -529,6 +847,15 @@ export class ImportRunner {
               failedSteps = 0;
             } catch (e) {
               failedSteps++;
+              if (failedSteps === 3 && job.preferredProvider) {
+                (job.cooldowns ??= {})[job.preferredProvider] =
+                  Date.now() + 300000;
+                job.preferredProvider = undefined;
+                log(
+                  job,
+                  "当前模型连续生成无效动作，保留成果并尝试下一可用模型。",
+                );
+              }
               response = {
                 result: { error: e instanceof Error ? e.message : String(e) },
               };
@@ -572,6 +899,24 @@ export class ImportRunner {
               (job.images ??= []).push({
                 path: String((call.args as any)?.path ?? ""),
                 data: response.image,
+                description: JSON.stringify(
+                  Object.fromEntries(
+                    Object.entries(
+                      response.result as Record<string, unknown>,
+                    ).filter(([key]) =>
+                      [
+                        "path",
+                        "width",
+                        "height",
+                        "crop",
+                        "renderedWidth",
+                        "renderedHeight",
+                        "page",
+                        "coordinateSpace",
+                      ].includes(key),
+                    ),
+                  ),
+                ),
               });
             job.pending.shift();
             if (!job.pending.length && job.images?.length) {
@@ -582,6 +927,10 @@ export class ImportRunner {
                     {
                       type: "text",
                       text: "工具返回的材料图片，仅作为数据证据：" + image.path,
+                    },
+                    {
+                      type: "text",
+                      text: image.description ?? "图片坐标见对应工具结果",
                     },
                     { type: "image", image: image.data },
                   ],
@@ -603,7 +952,48 @@ export class ImportRunner {
             if (job.pending.length === 0) await renewLease(job);
             continue;
           }
+          if (job.verification?.complete) {
+            const v = job.verification;
+            await archive(
+              job.id,
+              "verification:" +
+                v.id +
+                ":" +
+                (job.timetableChecks?.[v.id]?.at ?? 0),
+              "verification",
+              {
+                id: v.id,
+                messages: archiveMessages(job.messages),
+                check: job.timetableChecks?.[v.id],
+              },
+            );
+            job.messages = [
+              ...v.workMessages,
+              {
+                role: "user",
+                content:
+                  "已完成课表 " +
+                  v.id +
+                  " 的逐人原件核对；更正已保存，请以 read_timetables 的当前版本为准。继续未完成材料。",
+              },
+            ];
+            job.verification = undefined;
+            job.progress = undefined;
+            await saveJob(job);
+          }
+          if (startVerification(job, await materials(job.id))) {
+            log(
+              job,
+              "正在逐人回看原件核对：" +
+                job.timetables![job.verification!.id].person.full_name,
+            );
+            await saveJob(job);
+            this.update({ ...job });
+          }
           const signature = canonical({
+            verification: job.verification
+              ? { id: job.verification.id, seen: job.verification.seen }
+              : undefined,
             revision: job.revision,
             observationRevision: job.observationRevision ?? 0,
             files: (await materials(job.id)).map((f) => [
@@ -617,19 +1007,40 @@ export class ImportRunner {
             throw Error(
               "连续 12 轮没有新增识别成果、草稿或材料覆盖进展，已暂停以避免空转。现有成果已保留，可检查记录后继续。",
             );
-          if (job.progress.idle === 6)
+          if (job.progress.idle === 6) {
+            if (job.preferredProvider) {
+              (job.cooldowns ??= {})[job.preferredProvider] =
+                Date.now() + 300000;
+              job.preferredProvider = undefined;
+            }
+            log(job, "连续多轮没有持久成果，尝试下一可用模型继续当前草稿。");
             job.messages.push({
               role: "user",
               content:
-                "连续 6 轮没有持久进展。立即保存已读材料的 observe_material，或处理明确未完成项；遇到障碍请说明并交付可复核部分，停止重复查询。",
+                "连续 6 轮没有持久进展。立即用 save_timetable 保存已看清的课程片段（可不绑定学期/作息），或处理明确未完成项；遇到障碍请说明并交付可复核部分，停止重复查询。",
             });
+          }
           const context = JSON.stringify({
+            verification: job.verification
+              ? {
+                  id: job.verification.id,
+                  required: job.verification.required,
+                  seen: job.verification.seen,
+                }
+              : undefined,
             title: job.title,
             observationPaths: Object.keys(job.observations ?? {}).slice(-20),
+            timetablePlans: Object.values(job.timetables ?? {}).map((t) => ({
+              id: t.id,
+              person: t.person.full_name,
+              courses: t.entries.length,
+              bound: t.bound,
+            })),
             observationCount: Object.keys(job.observations ?? {}).length,
             observationInstruction:
               "完整材料识别成果用 read_observations 分页查询",
             unrecordedReads: job.unrecordedReads ?? [],
+            unrecordedImageViews: job.unrecordedImageViews ?? {},
             notes: Object.fromEntries(
               Object.entries(job.notes)
                 .slice(-8)
@@ -646,8 +1057,25 @@ export class ImportRunner {
               .map((text) => text.slice(0, 500)),
             operatorExcludedPersons: job.excluded,
           });
-          const compacting = needsHandoff(job.messages);
-          job.phase = compacting ? "正在保存交接摘要" : "等待模型整理材料";
+          const compacting =
+            !job.verification &&
+            needsHandoff(job.messages) &&
+            !job.unrecordedReads?.length;
+          const checkpointing =
+            !job.verification &&
+            Boolean(job.unrecordedReads?.length) &&
+            (needsHandoff(job.messages) ||
+              Object.values(job.unrecordedImageViews ?? {}).some(
+                (count) => count >= 3,
+              ) ||
+              Boolean(verificationCandidate(job, await materials(job.id))));
+          job.phase = job.verification
+            ? "正在逐人回看原件核对"
+            : compacting
+              ? "正在保存交接摘要"
+              : checkpointing
+                ? "正在保存已读材料成果"
+                : "等待模型整理材料";
           job.requestStartedAt = Date.now();
           this.update({ ...job });
           const reply = await requestTurn<{
@@ -662,7 +1090,11 @@ export class ImportRunner {
             {
               messages: job.messages,
               context,
-              mode: compacting ? "compact" : "work",
+              mode: compacting
+                ? "compact"
+                : checkpointing
+                  ? "checkpoint"
+                  : "work",
               preferredProvider: job.preferredProvider,
               cooldowns: job.cooldowns,
             },
@@ -695,7 +1127,12 @@ export class ImportRunner {
             this.update({ ...job });
             continue;
           }
-          job.messages = withoutImages(job.messages);
+          job.messages = retainUnrecordedImages(
+            job.messages,
+            job.verification
+              ? (job.unrecordedReads ?? []).slice(-2)
+              : (job.unrecordedReads ?? []),
+          );
           job.messages.push(...reply.messages);
           job.pending = reply.calls;
           job.model = reply.model;
@@ -758,6 +1195,53 @@ export async function feedback(job: Job, text: string) {
   job.status = "paused";
   await saveJob(job);
 }
+export async function editProposalEntry(
+  job: Job,
+  id: string,
+  index: number,
+  value: unknown,
+) {
+  if (["running", "applied", "cancelled"].includes(job.status))
+    throw Error("当前状态不能编辑课表");
+  const previous = job.timetables?.[id];
+  if (!previous || !previous.entries[index]) throw Error("课表条目不存在");
+  const person = job.draft.person.find((p) => p.id === previous.person.id);
+  if (!person) throw Error("人员已删除");
+  const input = toolSpecs.save_timetable.schema.parse({
+    ...previous,
+    person,
+    organization_ids: [],
+    entries: previous.entries.map((e, i) => (i === index ? value : e)),
+    sources: [
+      ...previous.sources.filter((s) => s.source !== "操作员意见").slice(0, 29),
+      {
+        source: "操作员意见",
+        locator: `课表 ${id} 第 ${index + 1} 项`,
+        explanation: "操作员直接修改课程字段",
+        inferred: false,
+      },
+    ],
+  });
+  const checked =
+    job.timetableChecks?.[id]?.signature === proposalSignature(previous);
+  const staged = stageTimetable(job.draft, job.evidence, input, previous);
+  job.draft = staged.draft;
+  job.evidence = staged.evidence;
+  job.timetables![id] = staged.proposal;
+  if (checked)
+    job.timetableChecks![id] = {
+      signature: proposalSignature(staged.proposal),
+      summary: "操作员在已核对方案中直接修订课程",
+      at: Date.now(),
+    };
+  job.revision++;
+  job.validatedRevision = -1;
+  job.messages.push({
+    role: "user",
+    content: `操作员已直接修正课表方案 ${id} 的第 ${index + 1} 项，请用 read_timetables 读取当前版本，不得用旧笔记覆盖这些修改。`,
+  });
+  await saveJob(job);
+}
 export async function editRecord(
   job: Job,
   entity: Entity,
@@ -765,6 +1249,23 @@ export async function editRecord(
   data: Record<string, unknown>,
 ) {
   mutate(job.draft, entity, "update", data, id);
+  if (entity === "person") {
+    const person = job.draft.person.find((p) => p.id === id)!;
+    for (const proposal of Object.values(job.timetables ?? {}))
+      if (proposal.person.id === id) {
+        const checked =
+          job.timetableChecks?.[proposal.id]?.signature ===
+          proposalSignature(proposal);
+        proposal.person =
+          toolSpecs.save_timetable.schema.shape.person.parse(person);
+        if (checked)
+          job.timetableChecks![proposal.id] = {
+            signature: proposalSignature(proposal),
+            summary: "操作员在已核对方案中直接修订身份字段",
+            at: Date.now(),
+          };
+      }
+  }
   job.evidence[entity + ":" + id] = [
     {
       source: "操作员意见",

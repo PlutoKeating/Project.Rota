@@ -44,8 +44,12 @@ export function HistoryPanel({ job }: { job: Job }) {
             {job.metrics.map((m) => (
               <li key={m.requestId}>
                 <p>
-                  {m.purpose === "compact" ? "交接" : "整理"} ·{" "}
-                  {(m.durationMs / 1000).toFixed(1)} 秒 · 输入{" "}
+                  {m.purpose === "compact"
+                    ? "交接"
+                    : m.purpose === "checkpoint"
+                      ? "保存成果"
+                      : "整理"}{" "}
+                  · {(m.durationMs / 1000).toFixed(1)} 秒 · 输入{" "}
                   {m.inputTokens ?? "未知"} / 输出 {m.outputTokens ?? "未知"}{" "}
                   tokens
                 </p>
