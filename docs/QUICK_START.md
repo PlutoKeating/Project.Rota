@@ -39,7 +39,7 @@ DATA_SERVICE_URL 是私有 HTTPS 基础 URL；DATA_SERVICE_AUTHORIZATION 是完�
 
 Cloudflare Worker → Settings → Builds → Connect，连接 GitHub main。构建命令 `pnpm run check && pnpm run build`，部署命令 `pnpm exec wrangler deploy`，Node 24；安装命令 `corepack enable && pnpm install --frozen-lockfile`。构建令牌仅需 Worker 发布权限，不需要 D1。Wrangler OAuth 不一定允许配置 Builds；此时需控制台连接。不要复制 OAuth token 到 CI。
 
-GitHub Validate 检查与构建通过后，可通过受限 SSH 部署数据容器：设置仓库变量 `ECS_DEPLOY_ENABLED=true`，以及 Secrets `ECS_HOST`、`ECS_PORT`、`ECS_USER`、`ECS_DEPLOY_KEY`、`ECS_KNOWN_HOSTS`。服务器上的专用公钥必须配置 forced command 和 restrict；命令只更新本项目，执行备份、构建、启动及健康检查。私有脚本与实际主机信息不提交。PR 不运行部署。部署服务和 Worker 的协议/迁移须向后兼容，避免两个流水线先后顺序造成中断。
+GitHub Validate 检查与构建通过后，可通过受限 SSH 部署数据容器：设置仓库变量 `ECS_DEPLOY_ENABLED=true`，以及 Secrets `ECS_HOST`、`ECS_PORT`、`ECS_USER`、`ECS_DEPLOY_KEY`、`ECS_KNOWN_HOSTS`。服务器上的专用公钥必须配置 forced command 和 restrict；命令仅接受 main 历史内的 40 位提交 SHA，只部署通过该次检查的版本，执行备份、构建、镜像预检、启动及健康检查。私有脚本与实际主机信息不提交。PR 不运行部署。部署服务和 Worker 的协议/迁移须向后兼容，避免两个流水线先后顺序造成中断。
 
 推送后分别核对 GitHub 与 Cloudflare Builds 成功记录，再验证健康、匿名 401、登录及业务操作。手动部署成功不等于自动部署已验证。
 

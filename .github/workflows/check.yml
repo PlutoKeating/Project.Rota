@@ -27,6 +27,7 @@ jobs:
     steps:
       - name: Deploy data service through a restricted SSH command
         env:
+          DEPLOY_SHA: ${{ github.sha }}
           ECS_HOST: ${{ secrets.ECS_HOST }}
           ECS_PORT: ${{ secrets.ECS_PORT }}
           ECS_USER: ${{ secrets.ECS_USER }}
@@ -37,4 +38,4 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' "$ECS_DEPLOY_KEY" > ~/.ssh/rota_deploy
           printf '%s\n' "$ECS_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          ssh -i ~/.ssh/rota_deploy -p "$ECS_PORT" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$ECS_USER@$ECS_HOST" deploy-rota
+          ssh -i ~/.ssh/rota_deploy -p "$ECS_PORT" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$ECS_USER@$ECS_HOST" "deploy-rota $DEPLOY_SHA"
