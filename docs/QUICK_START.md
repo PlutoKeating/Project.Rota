@@ -34,6 +34,8 @@ http://localhost:5173
 
 `db: "down"` 是正常的——还没建本地库。
 
+> **Android / proot 环境**：workerd 需要 1 GB 对齐内存，在 proot 下会因 mmap 限制启动失败（tcmalloc 报 `MmapAligned() failed`）。此时 `pnpm dev` 不可用，改用 `pnpm test` / `pnpm typecheck` / `pnpm build` 做验证；要看真实页面就直接 `pnpm deploy` 到 Cloudflare。普通 Linux / macOS 不受影响。
+
 ## 3. 建本地数据库
 
 ```bash
