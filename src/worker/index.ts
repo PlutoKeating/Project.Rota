@@ -1,9 +1,29 @@
 import { Hono } from "hono";
-import type { Env, HealthResponse } from "./env";
+import type { HealthResponse } from "../shared/types";
+import { admin } from "./api/admin";
+import { auth } from "./api/auth";
+import { courses } from "./api/courses";
+import { exportApi } from "./api/export";
+import { fairness } from "./api/fairness";
+import { imports } from "./api/imports";
+import { people } from "./api/people";
+import { schedule } from "./api/schedule";
+import { tasks } from "./api/tasks";
+import { terms } from "./api/terms";
+import type { Env } from "./env";
+import { HttpError } from "./lib/core";
 
-const api = new Hono<{ Bindings: Env }>();
+const app = new Hono<{ Bindings: Env }>();
 
-api.get("/health", async (c) => {
+app.onError((err, c) => {
+  if (err instanceof HttpError) {
+    return c.json({ error: { code: err.code, message: err.message } }, err.status as 400);
+  }
+  console.error("[unhandled]", err);
+  return c.json({ error: { code: "internal", message: "服务器内部错误" } }, 500);
+});
+
+app.get("/api/health", async (c) => {
   let db: "up" | "down" = "down";
   try {
     const row = await c.env.DB.prepare("select 1 as ok").first<{ ok: number }>();
@@ -20,18 +40,22 @@ api.get("/health", async (c) => {
   return c.json(body, db === "up" ? 200 : 503);
 });
 
-api.get("/terms", async (c) => {
-  try {
-    const { results } = await c.env.DB.prepare(
-      "select id, name, start_date, week_count, status from term order by start_date desc",
-    ).all();
-    return c.json({ items: results ?? [] });
-  } catch (error) {
-    return c.json({ items: [], error: String(error) }, 500);
-  }
-});
+app.route("/api", terms);
+app.route("/api", people);
+app.route("/api", courses);
+app.route("/api/imports", imports);
+app.route("/api/admin", admin);
+app.route("/api/auth", auth);
+app.route("/api", tasks);
+app.route("/api", schedule);
+app.route("/api", fairness);
+app.route("/api", exportApi);
 
-const app = new Hono<{ Bindings: Env }>();
-app.route("/api", api);
+app.notFound((c) => {
+  if (c.req.path.startsWith("/api/")) {
+    return c.json({ error: { code: "not_found", message: `接口不存在：${c.req.path}` } }, 404);
+  }
+  return c.text("Not Found", 404);
+});
 
 export default app;
