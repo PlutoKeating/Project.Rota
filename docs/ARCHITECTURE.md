@@ -175,5 +175,5 @@ wrangler deploy     # 或 pnpm deploy
 3. **并发排班**：两人同时排同一班次，靠 `assignment(shift_id, person_id)` 唯一键与「人数已满」检查兜底；跨班次的"同一人同一时刻"没有数据库级约束，靠试排时的占用检查，极端并发下仍有窗口。
 4. **导入 apply 非整单事务**：按 meeting 分批写，中途失败可能留下部分课程（状态仍为 `needs_review`，可重试）。
 5. **公平口径**：权重是拍出来的，后台可调，改动会写审计。
-6. **本机无法运行 workerd**：`pnpm dev` 在 Android/proot 下起不来，验证依赖 46 个测试（含真实 SQL 的端到端）。
+6. **本机无法运行 workerd**：`pnpm dev` 在 Android/proot 下起不来，验证依赖 48 个测试（含真实 SQL 的端到端）。
 7. **通知**：只做 CSV 导出，邮件/短信未实现。

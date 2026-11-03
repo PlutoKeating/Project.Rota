@@ -47,7 +47,7 @@ pnpm db:local
 ## 4. 验证
 
 ```bash
-pnpm test        # 46 个测试：单测 + 真实 SQL 的端到端流程
+pnpm test        # 48 个测试：单测 + 真实 SQL 的端到端流程
 pnpm typecheck   # Worker 与 Client 两套 tsconfig
 pnpm build       # 前端 + Worker 产物
 ```

@@ -27,7 +27,7 @@
 | 账号体系（id.plutokeating.beer OIDC） | 🚧 占位，见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#7-鉴权) |
 | 邮件 / 短信通知 | ❌ 未做，v1 只做导出 |
 
-当前是 **v1：功能闭环**。本机验证覆盖 46 个测试（含真实 SQL 的端到端流程），但 `pnpm dev` 在 Android/proot 下起不来（workerd 限制），见 QUICK_START。
+当前是 **v1：功能闭环**。本机验证覆盖 48 个测试（含真实 SQL 的端到端流程），但 `pnpm dev` 在 Android/proot 下起不来（workerd 限制），见 QUICK_START。
 
 ## 五分钟上手
 

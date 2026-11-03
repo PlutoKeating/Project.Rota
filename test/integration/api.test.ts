@@ -262,3 +262,41 @@ describe("周期班次与编辑后导入", () => {
     expect((courses.data.items as any[]).map((c) => c.name)).toContain("新名字");
   });
 });
+
+describe("管理后台", () => {
+  it("模型供应商 CRUD 不回传密钥内容", async () => {
+    const env = makeEnv();
+    const created = await call(env, "POST", "/api/admin/llm-providers", {
+      name: "默认视觉模型",
+      kind: "openai_compatible",
+      baseUrl: "https://api.example.com/v1",
+      model: "gpt-4o-mini",
+      apiKeySecret: "LLM_API_KEY",
+      enabled: true,
+    });
+    expect([200, 201]).toContain(created.status);
+    expect(created.data.apiKeySecret).toBe("LLM_API_KEY");
+    expect(JSON.stringify(created.data)).not.toContain("sk-");
+
+    const patched = await call(env, "PATCH", `/api/admin/llm-providers/${created.data.id}`, { enabled: false });
+    expect(patched.status).toBe(200);
+
+    const listed = await call(env, "GET", "/api/admin/llm-providers");
+    expect(listed.data.items).toHaveLength(1);
+    expect(listed.data.items[0].enabled).toBe(false);
+
+    const removed = await call(env, "DELETE", `/api/admin/llm-providers/${created.data.id}`);
+    expect(removed.status).toBe(200);
+    expect((await call(env, "GET", "/api/admin/llm-providers")).data.items).toHaveLength(0);
+  });
+
+  it("设置可读写并落到 KV", async () => {
+    const env = makeEnv();
+    const current = await call(env, "GET", "/api/admin/settings");
+    const next = { ...current.data, defaultCooldownDays: 5, weights: { ...current.data.weights, fairness: 0.6 } };
+    const saved = await call(env, "PUT", "/api/admin/settings", next);
+    expect(saved.status).toBe(200);
+    expect(saved.data.defaultCooldownDays).toBe(5);
+    expect(saved.data.weights.fairness).toBe(0.6);
+  });
+});
