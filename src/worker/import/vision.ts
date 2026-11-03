@@ -41,13 +41,14 @@ export async function parseScreenshot(
   const base64 = bytesToBase64(input.bytes);
   const image = { mime: normalizeImageMime(input.mime), base64 };
   let lastError = "";
+  const sessionId = crypto.randomUUID();
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const messages = buildMessages(input.term, input.periods, attempt > 0);
     try {
       const text = await complete(env, {
         providerId,
-        messages,
+        sessionId,        messages,
         json: true,
         temperature: attempt === 0 ? 0.1 : 0,
         images: [image],

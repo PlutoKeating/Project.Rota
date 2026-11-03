@@ -24,6 +24,8 @@ export interface ChatImage {
 
 export interface CompleteOptions {
   providerId?: string | null;
+  /** Stable for one logical conversation, including OCR retries. Never a user ID. */
+  sessionId?: string;
   messages: ChatMessage[];
   json?: boolean;
   temperature?: number;
@@ -190,6 +192,16 @@ export async function complete(
     return text;
   }
   const request = buildRequest(provider, options, temperature);
+  const upstream = new URL(provider.baseUrl);
+  if (
+    upstream.protocol === "https:" &&
+    upstream.hostname === "opencode.ai" &&
+    /^\/(?:zen|inference)(?:\/|$)/.test(upstream.pathname)
+  ) {
+    request.headers["user-agent"] = "Project.Rota/0.1.0";
+    request.headers["x-opencode-session"] =
+      options.sessionId ?? crypto.randomUUID();
+  }
 
   let response: Response;
   try {

@@ -76,3 +76,5 @@ Cloudflare Worker 同时部署前端与 API，Workers AI 绑定见 `wrangler.jso
 首页直接排班；班次、人员与初始化配置在侧栏完成。`POST /work` 将任务与显式日期班次合并为单事务写入；人员批量导入也整批校验、整批提交。
 
 模型目录从 models.dev 获取，缓存一小时，手动刷新失败保留旧目录并提示过期。模型密钥可通过管理界面粘贴，以独立 Secret 加密后保存在现有 params JSON，密文不出 API。模型排序保存在设置存储并影响未指定 provider 的首选。已有 Secret 名称与默认模型配置兼容。详见 [Worker 模块架构](../src/worker/docs/ARCHITECTURE.md)。
+
+OpenCode 网关出站补充客户端标识和每次逻辑操作的稳定会话头，识别重试复用会话；范围限定官方 HTTPS 主机，具体约定见 Worker 模块文档。
