@@ -8,6 +8,7 @@ import {
 } from "./verification";
 import {
   stageTimetable,
+  proposalForModel,
   timetableWarnings,
 } from "../../shared/agent-import/timetable";
 import {
@@ -141,7 +142,9 @@ async function requestTurn<T>(
       const metrics: TurnMetrics = supplied ?? {
         requestId: "client-" + crypto.randomUUID(),
         durationMs: Date.now() - start,
-        purpose: (body as { mode: "work" | "compact" | "checkpoint" }).mode,
+        purpose: (
+          body as { mode: "work" | "compact" | "checkpoint" | "verify" }
+        ).mode,
         attempts: [
           {
             providerId: "gateway",
@@ -288,6 +291,8 @@ async function execute(
   job: Job,
   call: PendingCall,
 ): Promise<{ result: unknown; image?: string }> {
+  if (call.validationError)
+    throw Error("工具未执行，请修正参数：" + call.validationError);
   const name = call.name as ToolName;
   if (!(name in toolSpecs)) throw Error("未知工具");
   const args = toolSpecs[name].schema.parse(call.args) as Record<string, any>;
@@ -391,7 +396,7 @@ async function execute(
           throw Error("课表来源未读取：" + e.source);
       for (const path of input.completed_sources) {
         const f = files.find((f) => f.path === path);
-        if (!f?.inspected || (f.totalPages ?? 1) > (f.pagesRead?.length ?? 1))
+        if (!f?.inspected || (f.totalPages ?? 1) > (f.pagesRead?.length ?? 0))
           throw Error("材料未完整读取：" + path);
         if (!input.sources.some((e) => e.source === path))
           throw Error("完成材料必须包含在 sources 中");
@@ -480,7 +485,17 @@ async function execute(
       };
     }
     case "read_timetables": {
-      if (args.id) return { result: job.timetables?.[args.id] ?? null };
+      if (args.id) {
+        const plan = job.timetables?.[args.id];
+        return {
+          result: plan
+            ? proposalForModel(plan)
+            : {
+                error: "方案不存在",
+                availableIds: Object.keys(job.timetables ?? {}),
+              },
+        };
+      }
       const rows = Object.values(job.timetables ?? {}).filter(
         (t) => !args.person_id || t.person.id === args.person_id,
       );
@@ -518,7 +533,8 @@ async function execute(
       return documentTool(job, name, args as { path: string });
     case "read_document":
     case "view_image":
-    case "ocr_image": {
+    case "ocr_image":
+    case "render_sheet": {
       const unread = (job.unrecordedReads ??= []);
       if (
         !job.verification &&
@@ -713,11 +729,10 @@ async function execute(
         throw Error("请先读取该材料再标记完成");
       if (
         args.status === "done" &&
-        f.totalPages &&
-        f.totalPages > (f.pagesRead?.length ?? 0)
+        (f.totalPages ?? 1) > (f.pagesRead?.length ?? 0)
       )
         throw Error(
-          `此文件共 ${f.totalPages} 页，已读 ${f.pagesRead?.join(",")}，请检查余下页面或说明为何无法处理`,
+          `此文件共 ${f.totalPages ?? 1} 页，完整覆盖 ${f.pagesRead?.join(",")}，请检查余下页面或说明为何无法处理`,
         );
       await putMaterial(job.id, {
         ...f,
@@ -876,7 +891,15 @@ export class ImportRunner {
             const fullText = JSON.stringify(response.result);
             const output =
               fullText.length > 12000 &&
-              !["read_history", "read_observations"].includes(call.name)
+              ![
+                "read_history",
+                "read_observations",
+                "read_document",
+                "view_image",
+                "ocr_image",
+                "render_sheet",
+                "read_timetables",
+              ].includes(call.name)
                 ? {
                     preview: fullText.slice(0, 10000),
                     historyKey,
@@ -974,7 +997,7 @@ export class ImportRunner {
                 content:
                   "已完成课表 " +
                   v.id +
-                  " 的逐人原件核对；更正已保存，请以 read_timetables 的当前版本为准。继续未完成材料。",
+                  " 的逐人原件核对；更正已保存，不要重复调用 confirm_timetable_check。请以 read_timetables 的当前版本为准。继续未完成材料；全部材料已交代时 validate_draft 后 finish_review，缺日期或作息可集中交给操作员补充。",
               },
             ];
             job.verification = undefined;
@@ -1027,7 +1050,7 @@ export class ImportRunner {
                   required: job.verification.required,
                   seen: job.verification.seen,
                 }
-              : undefined,
+              : null,
             title: job.title,
             observationPaths: Object.keys(job.observations ?? {}).slice(-20),
             timetablePlans: Object.values(job.timetables ?? {}).map((t) => ({
@@ -1035,6 +1058,7 @@ export class ImportRunner {
               person: t.person.full_name,
               courses: t.entries.length,
               bound: t.bound,
+              sourceChecked: !needsVerification(job, t),
             })),
             observationCount: Object.keys(job.observations ?? {}).length,
             observationInstruction:
@@ -1090,11 +1114,13 @@ export class ImportRunner {
             {
               messages: job.messages,
               context,
-              mode: compacting
-                ? "compact"
-                : checkpointing
-                  ? "checkpoint"
-                  : "work",
+              mode: job.verification
+                ? "verify"
+                : compacting
+                  ? "compact"
+                  : checkpointing
+                    ? "checkpoint"
+                    : "work",
               preferredProvider: job.preferredProvider,
               cooldowns: job.cooldowns,
             },
@@ -1105,15 +1131,40 @@ export class ImportRunner {
           job.preferredProvider = reply.providerId;
           job.model = reply.model;
           if (compacting) {
-            const call = reply.calls.find((c) => c.name === "save_handoff");
-            if (!call)
-              throw Error(
-                "模型未生成交接摘要，完整上下文已保留；继续处理将重试交接。",
-              );
-            const handoff = {
-              ...toolSpecs.save_handoff.schema.parse(call.args),
-              at: Date.now(),
-            };
+            const call = reply.calls.find(
+              (c) => c.name === "save_handoff" && !c.validationError,
+            );
+            const parsed = call
+              ? toolSpecs.save_handoff.schema.safeParse(call.args)
+              : undefined;
+            if (reply.calls.length !== 1 || !parsed?.success) {
+              job.messages.push(...reply.messages);
+              for (const rejected of reply.calls)
+                job.messages.push({
+                  role: "tool",
+                  content: [
+                    {
+                      type: "tool-result",
+                      toolCallId: rejected.id,
+                      toolName: rejected.name,
+                      output: {
+                        type: "json",
+                        value: {
+                          error:
+                            rejected.validationError ??
+                            "本轮未执行任何工具。交接必须单独调用 save_handoff 并提供 summary、nextSteps。",
+                        },
+                      },
+                    },
+                  ],
+                });
+              job.turns++;
+              log(job, "交接调用需要修正，完整上下文已保留并反馈模型。");
+              await saveJob(job);
+              this.update({ ...job });
+              continue;
+            }
+            const handoff = { ...parsed.data, at: Date.now() };
             await archive(job.id, "context:" + crypto.randomUUID(), "context", {
               messages: archiveMessages(job.messages),
               handoff,

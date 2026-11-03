@@ -42,7 +42,7 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
     .object({
       messages: z.array(z.unknown()).min(1).max(1000),
       context: z.string().max(100000),
-      mode: z.enum(["work", "compact", "checkpoint"]).default("work"),
+      mode: z.enum(["work", "compact", "checkpoint", "verify"]).default("work"),
       preferredProvider: z.string().max(100).optional(),
       cooldowns: z.record(z.string(), z.number()).optional(),
     })
@@ -195,26 +195,40 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
           .filter(([name]) =>
             body.mode === "compact"
               ? name === "save_handoff"
-              : body.mode === "checkpoint"
+              : body.mode === "verify"
                 ? [
-                    "save_timetable",
+                    "read_document",
+                    "view_image",
+                    "ocr_image",
+                    "render_sheet",
                     "revise_timetable",
-                    "observe_material",
+                    "save_timetable",
                     "read_timetables",
-                    "query_records",
-                    "describe_entity",
-                    "read_notes",
-                    "read_observations",
+                    "confirm_timetable_check",
                     "read_history",
-                    "note",
                   ].includes(name)
-                : name !== "save_handoff",
+                : body.mode === "checkpoint"
+                  ? [
+                      "save_timetable",
+                      "revise_timetable",
+                      "observe_material",
+                      "read_timetables",
+                      "query_records",
+                      "read_observations",
+                      "read_history",
+                    ].includes(name)
+                  : !["save_handoff", "confirm_timetable_check"].includes(name),
           )
           .map(([name, s]) => [
             name,
             tool({
               description: s.description,
-              inputSchema: s.schema as z.ZodType,
+              inputSchema: (body.mode === "checkpoint" &&
+              name === "read_history"
+                ? toolSpecs.read_history.schema.extend({
+                    key: z.string().min(1),
+                  })
+                : s.schema) as z.ZodType,
             }),
           ]),
       );
@@ -244,7 +258,10 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
             body.context,
           messages,
           tools,
-          toolChoice: "required",
+          toolChoice:
+            body.mode === "compact"
+              ? { type: "tool", toolName: "save_handoff" }
+              : "required",
           maxOutputTokens: body.mode === "compact" ? 4096 : 16384,
           providerOptions:
             effort && p.kind === "openai_compatible"
@@ -259,21 +276,38 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
         throw Error("model_output_truncated");
       if (!result.toolCalls.length) throw Error("模型没有返回可执行工具调用");
       // AI SDK can return invalid tool calls plus synthetic error results instead of throwing.
-      // Reject the whole response: never persist malformed provider syntax as agent history.
+      // Malformed JSON is a protocol failure. Valid JSON with bad tool arguments is
+      // a recoverable agent mistake: return feedback without executing it.
       const ids = new Set<string>();
       const calls = result.toolCalls.map((t) => {
         const spec = toolSpecs[t.toolName as keyof typeof toolSpecs];
         if (
           !spec ||
-          !Object.hasOwn(tools, t.toolName) ||
-          ("invalid" in t && t.invalid) ||
+          typeof t.input !== "object" ||
+          t.input === null ||
+          Array.isArray(t.input) ||
           ids.has(t.toolCallId)
         )
           throw Error("invalid_tool_protocol");
         ids.add(t.toolCallId);
         const parsed = spec.schema.safeParse(t.input);
-        if (!parsed.success) throw Error("invalid_tool_protocol");
-        return { id: t.toolCallId, name: t.toolName, args: parsed.data };
+        const validationError = !Object.hasOwn(tools, t.toolName)
+          ? "当前阶段不允许此工具。可用工具：" + Object.keys(tools).join("、")
+          : body.mode === "checkpoint" &&
+              t.toolName === "read_history" &&
+              !(t.input as { key?: string }).key
+            ? "保存成果阶段只能按工具返回的 historyKey 读取特定结果，不遍历整批历史。请保存当前已读材料成果。"
+            : !parsed.success
+              ? JSON.stringify(parsed.error.issues)
+              : "invalid" in t && t.invalid
+                ? "工具调用未通过供应商适配校验，请根据工具契约重新生成参数"
+                : undefined;
+        return {
+          id: t.toolCallId,
+          name: t.toolName,
+          args: parsed.success ? parsed.data : t.input,
+          ...(validationError ? { validationError } : {}),
+        };
       });
       metrics.attempts.push({
         providerId: row.id,
@@ -290,7 +324,11 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
       return {
         metrics,
         providerId: row.id,
-        messages: result.response.messages,
+        // SDK synthesizes tool errors for invalid inputs; the browser persists its own
+        // one result per call, so do not replay a duplicate SDK error result.
+        messages: result.response.messages.filter(
+          (m) => m.role === "assistant",
+        ),
         calls,
         text: result.text,
         model: p.name + " / " + p.model,

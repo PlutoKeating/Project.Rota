@@ -1,11 +1,19 @@
+import {
+  recordCoverage,
+  completePages,
+} from "../../shared/agent-import/coverage";
 import { withoutImages } from "../../shared/agent-import/context";
 import type { Job, Material } from "./store";
 import { canonical } from "../../shared/agent-import/model";
-import type { TimetableProposal } from "../../shared/agent-import/timetable";
+import {
+  proposalForModel,
+  type TimetableProposal,
+} from "../../shared/agent-import/timetable";
 export const proposalSignature = (plan: TimetableProposal) =>
   canonical({
-    verificationPolicy: 2,
+    verificationPolicy: 3,
     person: plan.person,
+    term_name: plan.term_name,
     entries: plan.entries,
     sources: plan.sources,
     unresolved: plan.unresolved,
@@ -48,8 +56,11 @@ export function startVerification(job: Job, files: Material[]) {
     {
       role: "user",
       content:
-        "现在执行同一 Agent 的逐人原件复核。以下已存草稿可能漏课、错字或串行，不要假设正确。重新读取列出的全部来源，与草稿逐格/逐行对照。单周截图明确第 N 周时，weeks 必须为 [N]，不是 null，也不能扩展为整学期。标题/身份修正可用 revise_timetable 的 term_name/person 字段。尤其是边缘、跨页、周次、单双周、相邻行及底部附注。用 revise_timetable 只修正差异，避免重复抄写。来源确实看不清的字段保持待定并列明，不能补造。完成后 confirm_timetable_check。只核对当前人，不处理其他人。\n" +
-        JSON.stringify({ plan, requiredSources: job.verification.required }),
+        "现在执行同一 Agent 的逐人原件复核。以下已存草稿可能漏课、错字或串行，不要假设正确。重新读取列出的全部来源，与草稿逐格/逐行对照。单周截图明确第 N 周时，weeks 必须为 [N]，不是 null，也不能扩展为整学期。标题/身份修正可用 revise_timetable 的 term_name/person 字段。尤其是边缘、跨页、周次、单双周、相邻行及底部附注。逐条核对 weeks 与来源原文，既查漏周也查多周；不能只核对课程名称。修改 entries 使用返回的 index，不要凭记忆数数组位置。用 revise_timetable 只修正差异，避免重复抄写。来源确实看不清的字段保持待定并列明，不能补造。完成后 confirm_timetable_check。只核对当前人，不处理其他人。\n" +
+        JSON.stringify({
+          plan: proposalForModel(plan),
+          requiredSources: job.verification.required,
+        }),
     },
   ];
   job.progress = undefined;
@@ -59,16 +70,9 @@ export function recordVerificationRead(job: Job, path: string, result: any) {
   const v = job.verification;
   if (!v || !v.required.some((f) => f.path === path)) return;
   const info = result?.content ?? result;
-  if (
-    info?.crop &&
-    (info.crop.x !== 0 ||
-      info.crop.y !== 0 ||
-      info.crop.width !== info.width ||
-      info.crop.height !== info.height)
-  )
-    return;
-  const page = info?.page ?? 1;
-  v.seen[path] = [...new Set([...(v.seen[path] ?? []), page])];
+  const coverage = ((v.coverage ??= {})[path] ??= {});
+  recordCoverage(coverage, info?.coverage ?? []);
+  v.seen[path] = completePages(coverage);
 }
 export function confirmVerification(
   job: Job,
@@ -92,7 +96,7 @@ export function confirmVerification(
   );
   if (missing.length)
     throw Error(
-      "须在本次复核中重新查看完整来源页面：" +
+      "须在本次复核中完整覆盖来源：图片不能遗漏区域，表格须覆盖 extent 全部行列，文本须读完全部分段。去掉 range 可读取完整小表；大表按 extent 分块补齐：" +
         missing.map((f) => f.path).join("，"),
     );
   (job.timetableChecks ??= {})[id] = {

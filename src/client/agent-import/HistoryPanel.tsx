@@ -48,7 +48,9 @@ export function HistoryPanel({ job }: { job: Job }) {
                     ? "交接"
                     : m.purpose === "checkpoint"
                       ? "保存成果"
-                      : "整理"}{" "}
+                      : m.purpose === "verify"
+                        ? "逐人核对"
+                        : "整理"}{" "}
                   · {(m.durationMs / 1000).toFixed(1)} 秒 · 输入{" "}
                   {m.inputTokens ?? "未知"} / 输出 {m.outputTokens ?? "未知"}{" "}
                   tokens

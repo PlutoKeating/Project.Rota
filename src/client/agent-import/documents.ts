@@ -1,3 +1,8 @@
+import {
+  recordCoverage,
+  completePages,
+  type CoverageRead,
+} from "../../shared/agent-import/coverage";
 import { materials, putMaterial, type Job } from "./store";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
@@ -49,6 +54,9 @@ async function bitmap(blob: Blob, args: Args) {
         void loading.destroy();
       };
     } else {
+      if ((args.page ?? 1) !== 1)
+        throw Error("单张图片只有 page=1；图片内的多页排版请用 crop 坐标查看，不存在独立的 page=2");
+      pages = 1;
       const img = await createImageBitmap(blob);
       source = img;
       width = img.width;
@@ -104,6 +112,13 @@ async function bitmap(blob: Blob, args: Args) {
         renderedHeight: output.height,
         page: args.page ?? 1,
         pages,
+        coverage: [
+          {
+            key: `page:${args.page ?? 1}`,
+            extent: [0, 0, width, height],
+            region: [crop.x, crop.y, crop.x + crop.width, crop.y + crop.height],
+          },
+        ] satisfies CoverageRead[],
       },
       image: output.toDataURL("image/png"),
     };
@@ -129,6 +144,40 @@ export async function documentTool(
     (signature.startsWith("RIFF") && signature.slice(8, 12) === "WEBP");
   if (isPdf) args = { ...args, format: "pdf" };
   if (
+    action === "render_sheet" ||
+    (["view_image", "ocr_image"].includes(action) &&
+      /\.(xlsx?|csv)$/i.test(file.path))
+  ) {
+    if (args.crop)
+      throw Error(
+        "表格请用 render_sheet 的 range 按单元格区域放大，不使用图片像素 crop",
+      );
+    const value = await documentTool(job, "read_document", args);
+    const content = (value.result as { content?: any }).content;
+    if (!content?.cells || !content?.range)
+      throw Error("此文档不是可渲染的工作表，请用 read_document 读取");
+    const { renderSheet } = await import("./sheet-image");
+    const rendered = await renderSheet(content);
+    if (action === "ocr_image") {
+      const { recognizeImage } = await import("./ocr");
+      return {
+        image: rendered.image,
+        result: {
+          ...(value.result as object),
+          ocr: await recognizeImage(rendered.image),
+        },
+      };
+    }
+    return {
+      image: rendered.image,
+      result: {
+        ...(value.result as object),
+        renderedWidth: rendered.width,
+        renderedHeight: rendered.height,
+      },
+    };
+  }
+  if (
     action === "view_image" ||
     action === "ocr_image" ||
     isPdf ||
@@ -136,14 +185,19 @@ export async function documentTool(
     /\.(png|jpe?g|webp|gif|bmp|pdf)$/i.test(file.path)
   ) {
     const value = await bitmap(file.blob, args);
-    const info = value.result as { pages?: number; page?: number };
+    const info = value.result as {
+      pages?: number;
+      page?: number;
+      coverage?: CoverageRead[];
+    };
+    const readCoverage = structuredClone(file.readCoverage ?? {});
+    recordCoverage(readCoverage, info.coverage ?? []);
     await putMaterial(job.id, {
       ...file,
       inspected: true,
       totalPages: info.pages ?? file.totalPages,
-      pagesRead: [
-        ...new Set([...(file.pagesRead ?? []), info.page ?? args.page ?? 1]),
-      ],
+      readCoverage,
+      pagesRead: completePages(readCoverage),
     });
     if (action === "ocr_image") {
       const { recognizeImage } = await import("./ocr");
@@ -225,14 +279,19 @@ export async function documentTool(
       blob: new Blob([new Uint8Array(asset.bytes)], { type: asset.mime }),
     });
   }
-  const info = value.result as { pages?: number; page?: number };
+  const info = value.result as {
+    pages?: number;
+    page?: number;
+    coverage?: CoverageRead[];
+  };
+  const readCoverage = structuredClone(file.readCoverage ?? {});
+  recordCoverage(readCoverage, info.coverage ?? []);
   await putMaterial(job.id, {
     ...file,
     inspected: true,
     totalPages: info.pages ?? file.totalPages,
-    pagesRead: [
-      ...new Set([...(file.pagesRead ?? []), info.page ?? args.page ?? 1]),
-    ],
+    readCoverage,
+    pagesRead: completePages(readCoverage),
   });
   return {
     result: {

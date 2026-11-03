@@ -27,7 +27,7 @@ export interface TurnMetrics {
   outputTokens?: number;
   reasoningTokens?: number;
   finishReason?: string;
-  purpose: "work" | "compact" | "checkpoint";
+  purpose: "work" | "compact" | "checkpoint" | "verify";
 }
 
 /** Replace image bytes with source references when callers have secured the corresponding facts.

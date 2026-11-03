@@ -44,6 +44,9 @@ importers:
       hono:
         specifier: ^4.6.14
         version: 4.13.16
+      html-to-image:
+        specifier: 1.11.13
+        version: 1.11.13
       idb:
         specifier: ^8.0.4
         version: 8.0.4
@@ -1278,6 +1281,9 @@ packages:
   hono@4.13.16:
     resolution: {integrity: sha512-AOLOEhvrV+iH92xXCnFr/5+3KjPKcI3xP63XJtX5spAnkznPdHijlIsUTpi7/9EhWqrTCekw5c5zh1K+YsVw7A==}
     engines: {node: '>=16.9.0'}
+
+  html-to-image@1.11.13:
+    resolution: {integrity: sha512-cuOPoI7WApyhBElTTb9oqsawRvZ0rHhaHwghRLlTuffoD1B2aDemlCruLeZrUIIdvG7gs9xeELEPm6PhuASqrg==}
 
   idb-keyval@6.3.0:
     resolution: {integrity: sha512-um+2dgAWmYsu615EXpWVwSmapJhON0G43t3Ka/EVaohzPQXSMqKEqeDK/oIW3Ow+BXaF2PvSc+oBTFp793A5Ow==}
@@ -2738,6 +2744,8 @@ snapshots:
   graceful-fs@4.2.11: {}
 
   hono@4.13.16: {}
+
+  html-to-image@1.11.13: {}
 
   idb-keyval@6.3.0: {}
 

@@ -11,7 +11,7 @@ const job = raw.job ?? raw;
 const proposals = Object.values(job.timetables ?? {});
 const normalized = (value) =>
   String(value).normalize("NFKC").replace(/\s+/gu, "").toLowerCase();
-function facts(entries, includeName = true) {
+function facts(entries, includeName = true, aliases = new Map()) {
   const counts = new Map();
   for (const e of entries) {
     if (
@@ -24,7 +24,9 @@ function facts(entries, includeName = true) {
     for (const w of new Set(e.weeks))
       for (let p = e.period_from; p <= e.period_to; p++) {
         const key = JSON.stringify([
-          ...(includeName ? [normalized(e.name)] : []),
+          ...(includeName
+            ? [aliases.get(normalized(e.name)) ?? normalized(e.name)]
+            : []),
           e.weekday,
           w,
           p,
@@ -70,14 +72,30 @@ for (const file of expectedPaths) {
     matches.every((p) =>
       Object.entries(expected.person).every(([k, v]) => p.person[k] === v),
     );
-  const named = compare(facts(expected.scheduled), facts(entries));
+  const aliases = new Map();
+  for (const [name, variants] of Object.entries(expected.nameAliases ?? {}))
+    for (const variant of variants) {
+      const key = normalized(variant),
+        value = normalized(name);
+      if (aliases.has(key) && aliases.get(key) !== value)
+        throw Error("Ambiguous expected name alias");
+      aliases.set(key, value);
+    }
+  const named = compare(
+    facts(expected.scheduled, true, aliases),
+    facts(entries, true, aliases),
+  );
   const occupied = compare(
     facts(expected.scheduled, false),
     facts(entries, false),
   );
   const absentUnscheduled = (expected.unscheduled ?? []).filter(
     (name) =>
-      !entries.some((e) => normalized(e.name) === normalized(name)) &&
+      !entries.some(
+        (e) =>
+          (aliases.get(normalized(e.name)) ?? normalized(e.name)) ===
+          normalized(name),
+      ) &&
       !matches.some((p) =>
         p.unresolved.some((u) => normalized(u).includes(normalized(name))),
       ),

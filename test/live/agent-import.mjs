@@ -6,6 +6,7 @@ import { chromium } from "@playwright/test";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import { createHash } from "node:crypto";
 const [archivePath, outputPath, snapshotPath] = process.argv.slice(2);
 if (!archivePath || !outputPath)
   throw Error(
@@ -13,8 +14,39 @@ if (!archivePath || !outputPath)
   );
 const port = Number(process.env.ROTA_LIVE_PORT ?? 5188);
 const out = path.resolve(outputPath);
+const testSession =
+  "rota-live-" + createHash("sha256").update(out).digest("hex").slice(0, 32);
 await fs.mkdir(out, { recursive: true, mode: 0o700 });
 await fs.chmod(out, 0o700);
+if (process.env.ROTA_CAPTURE_PROVIDER_RESPONSES === "1") {
+  const nativeFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const response = await nativeFetch(input, init);
+    const url = new URL(
+      typeof input === "string" || input instanceof URL ? input : input.url,
+    );
+    if (url.pathname.endsWith("/chat/completions")) {
+      const value = await response
+        .clone()
+        .json()
+        .catch(() => null);
+      if (value?.choices)
+        await fs.writeFile(
+          path.join(out, `provider-${Date.now()}-${crypto.randomUUID()}.json`),
+          JSON.stringify({
+            model: value.model,
+            choices: value.choices.map((c) => ({
+              finish_reason: c.finish_reason,
+              tool_calls: c.message?.tool_calls,
+              content: c.message?.content,
+            })),
+          }),
+          { mode: 0o600 },
+        );
+    }
+    return response;
+  };
+}
 const privateConfig = JSON.parse(
   await fs.readFile(
     process.env.ROTA_DATA_CONFIG ??
@@ -42,6 +74,7 @@ const vite = await createServer({
       "pdfjs-dist",
       "tesseract.js",
       "parse5",
+      "html-to-image",
     ],
   },
 });
@@ -75,6 +108,52 @@ try {
       throw Error("Live verification forbids configuration writes");
     },
   };
+  // Optional isolated provider comparison; never changes stored provider configuration.
+  if (process.env.ROTA_LIVE_MODEL) {
+    const source = await env.DB.prepare(
+      "SELECT * FROM llm_provider WHERE id = ?",
+    )
+      .bind(process.env.ROTA_LIVE_PROVIDER_ID)
+      .first();
+    if (!source) throw Error("Comparison source provider not found");
+    const baseUrl = process.env.ROTA_LIVE_BASE_URL || source.base_url;
+    if (new URL(baseUrl).origin !== new URL(source.base_url).origin)
+      throw Error("Comparison must use the credential's existing origin");
+    const provider = {
+      ...source,
+      name: "隔离对照",
+      model: process.env.ROTA_LIVE_MODEL,
+      kind: process.env.ROTA_LIVE_KIND || source.kind,
+      base_url: baseUrl,
+      params: JSON.stringify({
+        ...JSON.parse(source.params || "{}"),
+        vision: true,
+        toolCalling: true,
+      }),
+    };
+    env.DB = {
+      prepare(sql) {
+        if (!/^\s*select\b/i.test(sql) || !/\bfrom\s+llm_provider\b/i.test(sql))
+          throw Error("Comparison permits provider reads only");
+        const statement = {
+          bind: () => statement,
+          first: async (column) => (column ? provider[column] : provider),
+          all: async () => ({ results: [provider] }),
+        };
+        return statement;
+      },
+    };
+    env.CONFIG = {
+      ...env.CONFIG,
+      get: (key) =>
+        key === "llm:order"
+          ? Promise.resolve(JSON.stringify([provider.id]))
+          : config.get(key),
+    };
+    console.log(
+      JSON.stringify({ comparisonModel: provider.model, kind: provider.kind }),
+    );
+  }
   const snapshot = snapshotPath
     ? JSON.parse(await fs.readFile(snapshotPath, "utf8"))
     : emptySnapshot();
@@ -91,7 +170,7 @@ try {
         user: { id: "live-test", role: "owner", name: "隔离验收" },
       };
     else if (p.endsWith("/snapshot")) data = { data: snapshot };
-    else if (p === "/api/agent-imports") data = { id: "isolated-real-import" };
+    else if (p === "/api/agent-imports") data = { id: testSession };
     else if (p.endsWith("/turn")) {
       const n = ++requests,
         start = Date.now();
@@ -100,7 +179,7 @@ try {
         data = await agentTurn(
           env,
           route.request().postDataJSON(),
-          "isolated-real-import",
+          testSession,
         );
         console.log(
           JSON.stringify({

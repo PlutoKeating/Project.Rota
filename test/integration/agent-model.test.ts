@@ -28,59 +28,76 @@ async function setup(kind: string, url: string) {
   } as unknown as Env;
 }
 describe("single-turn credential proxy", () => {
-  it("offers only checkpoint tools while unsaved source facts need persistence", async () => {
-    const env = await setup("openai_compatible", "https://opencode.ai/zen/v1");
-    let sent: any;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (_url, options) => {
-        sent = JSON.parse(options.body);
-        return new Response(
-          JSON.stringify({
-            id: "r",
-            object: "chat.completion",
-            created: 1,
-            model: "test-model",
-            choices: [
-              {
-                index: 0,
-                message: {
-                  role: "assistant",
-                  content: null,
-                  tool_calls: [
-                    {
-                      id: "c",
-                      type: "function",
-                      function: { name: "read_timetables", arguments: "{}" },
-                    },
-                  ],
+  it.each(["checkpoint", "verify"])(
+    "offers scoped tools in %s mode",
+    async (mode) => {
+      const env = await setup(
+        "openai_compatible",
+        "https://opencode.ai/zen/v1",
+      );
+      let sent: any;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url, options) => {
+          sent = JSON.parse(options.body);
+          return new Response(
+            JSON.stringify({
+              id: "r",
+              object: "chat.completion",
+              created: 1,
+              model: "test-model",
+              choices: [
+                {
+                  index: 0,
+                  message: {
+                    role: "assistant",
+                    content: null,
+                    tool_calls: [
+                      {
+                        id: "c",
+                        type: "function",
+                        function: { name: "read_timetables", arguments: "{}" },
+                      },
+                    ],
+                  },
+                  finish_reason: "tool_calls",
                 },
-                finish_reason: "tool_calls",
+              ],
+              usage: {
+                prompt_tokens: 1,
+                completion_tokens: 1,
+                total_tokens: 2,
               },
-            ],
-            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-          }),
-          { headers: { "content-type": "application/json" } },
-        );
-      }),
-    );
-    const result = await agentTurn(
-      env,
-      {
-        messages: [{ role: "user", content: "保存成果" }],
-        context: "{}",
-        mode: "checkpoint",
-      },
-      "batch",
-    );
-    const names = sent.tools.map((t: any) => t.function.name);
-    expect(names).toContain("save_timetable");
-    expect(names).toContain("observe_material");
-    expect(names).not.toContain("view_image");
-    expect(names).not.toContain("ocr_image");
-    expect(names).not.toContain("read_document");
-    expect(result.calls[0].name).toBe("read_timetables");
-  });
+            }),
+            { headers: { "content-type": "application/json" } },
+          );
+        }),
+      );
+      const result = await agentTurn(
+        env,
+        {
+          messages: [{ role: "user", content: "保存成果" }],
+          context: "{}",
+          mode,
+        },
+        "batch",
+      );
+      const names = sent.tools.map((t: any) => t.function.name);
+      expect(names).toContain("save_timetable");
+      if (mode === "checkpoint") {
+        expect(names).toContain("observe_material");
+        expect(names).not.toContain("view_image");
+        expect(names).not.toContain("ocr_image");
+        expect(names).not.toContain("read_document");
+      } else {
+        expect(names).toContain("view_image");
+        expect(names).toContain("confirm_timetable_check");
+        expect(names).not.toContain("read_notes");
+        expect(names).not.toContain("query_records");
+      }
+      expect(result.calls[0].name).toBe("read_timetables");
+    },
+  );
   it("returns genuine OpenAI tool calls, sends credentials only upstream, and replays tool results", async () => {
     const env = await setup("openai_compatible", "https://opencode.ai/zen/v1");
     await env.DB.prepare("UPDATE llm_provider SET model=?")
@@ -158,6 +175,7 @@ describe("single-turn credential proxy", () => {
     expect(
       body.tools.some((t: any) => t.function.name === "change_record"),
     ).toBe(true);
+    expect(body.tools.some((t: any) => t.function.name === "confirm_timetable_check")).toBe(false);
     expect(body.messages[0].content).toContain("没有固定的解析流程");
     await agentTurn(
       env,
@@ -482,3 +500,51 @@ it("rejects malformed provider tool calls before persisting them or reporting mo
   expect(JSON.stringify(result.messages)).not.toContain("DSML");
   expect(result.metrics.attempts.map((a) => a.status)).toEqual(["error", "ok"]);
 });
+
+it.each([
+  { mode: "work", name: "query_records", args: { entity: "departments" } },
+  {
+    mode: "verify",
+    name: "note",
+    args: { key: "x", text: "must not execute" },
+  },
+])(
+  "returns actionable feedback for JSON-valid $name mistakes instead of discarding the model turn",
+  async ({ mode, name, args }) => {
+    const env = await setup("openai_compatible", "https://example.com/v1");
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: null,
+              tool_calls: [
+                {
+                  id: "repair",
+                  type: "function",
+                  function: { name, arguments: JSON.stringify(args) },
+                },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    const result = await agentTurn(
+      env,
+      { messages: [{ role: "user", content: "整理" }], context: "{}", mode },
+      "repair-test",
+    );
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(result.calls[0]).toMatchObject({
+      name,
+      args,
+      validationError: expect.any(String),
+    });
+    expect(result.messages.every((m) => m.role === "assistant")).toBe(true);
+  },
+);

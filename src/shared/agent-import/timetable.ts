@@ -190,3 +190,11 @@ export function timetableWarnings(
     }
   return warnings;
 }
+
+/** Explicit indexes for model patch calls; never persisted as business fields. */
+export function proposalForModel(plan: TimetableProposal) {
+  return {
+    ...plan,
+    entries: plan.entries.map((entry, index) => ({ index, ...entry })),
+  };
+}

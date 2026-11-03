@@ -123,9 +123,9 @@ pnpm test:agent-live /path/to/archive.zip /private/output-directory /path/to/sna
 
 运行器只在已读材料成果保存后才整理上下文；未保存材料保留整图和最近两张局部图（最多两份材料、六张图）。普通笔记工具由 Agent 显式标记材料类型；已识别课表的文字观察不会解除保存门槛，须继续写结构化方案。`describe_entity` 返回输入契约，自动生成的默认字段不再误列为必填。Excel 工作表支持独立 sheet 或标准带表名的 range，并按实际工作表记录阅览页号。
 
-参考：[AI SDK 工具错误与修复](https://ai-sdk.dev/docs/ai-sdk-core/tools-and-tool-calling)、[generateText 返回契约](https://ai-sdk.dev/docs/reference/ai-sdk-core/generate-text)。本项目额外检查已安装 SDK 实际返回的 invalid 调用，不能只依靠 try/catch 或文档概述。
+参考：[AI SDK 工具错误与修复](https://ai-sdk.dev/docs/ai-sdk-core/tools-and-tool-calling)、[generateText 返回契约](https://ai-sdk.dev/docs/reference/ai-sdk-core/generate-text)。本项目额外检查已安装 SDK 实际返回的 invalid 调用，不能只依靠 try/catch 或文档概述。合法 JSON 的参数错误通过 `validationError` 回到浏览器，拒绝执行并将具体错误反馈同一 Agent；只有未知工具、损坏 JSON 等协议错误才切换供应商。SDK 合成的错误工具响应不与浏览器响应重复入库。
 
-兼容端点使用 `@ai-sdk/openai-compatible` 2.x（匹配 AI SDK 6），保留并回传供应商的 `reasoning_content`；不能用只面向 OpenAI 协议的适配器静默丢弃它。MiniMax M3.1 默认思考强度由代理显式设为 `medium`，管理员 `params.reasoning_effort` / `reasoningEffort` 优先；该调整仍须以真实材料质量回归为准。[MiniMax 官方参数说明](https://platform.minimax.io/docs/guides/text-generation)。无效工具调用或截断输出不会进入活动历史。连续无效动作或没有成果时先尝试其他已配置模型，仍无进展才暂停。
+兼容端点使用 `@ai-sdk/openai-compatible` 2.x（匹配 AI SDK 6），保留并回传供应商的 `reasoning_content`；不能用只面向 OpenAI 协议的适配器静默丢弃它。MiniMax M3.1 默认思考强度由代理显式设为 `medium`，管理员 `params.reasoning_effort` / `reasoningEffort` 优先；该调整仍须以真实材料质量回归为准。[MiniMax 官方参数说明](https://platform.minimax.io/docs/guides/text-generation)。损坏 JSON、未知工具名及截断输出不会进入活动历史；可修正的参数错误作为工具反馈保留。连续无效动作或没有成果时先尝试其他已配置模型，仍无进展才暂停。
 
 `ocr_image` 使用 Tesseract.js 在浏览器本地识字，返回文本、行坐标及原始截图；OCR 可能错字，不参与业务判断。WASM、Worker 和中文/英文语言数据均来自锁定依赖，通过 `pnpm assets:ocr` 复制到忽略 Git 的 `public/vendor/ocr`，开发、构建与浏览器验收命令会准备这些资源，运行时不使用第三方 CDN。语言数据为构建依赖，须在构建阶段安装 devDependencies。`tesseract.js` 的募捐 postinstall 显式禁用，运行本身无需该脚本。
 
@@ -139,7 +139,7 @@ pnpm test:agent-live /path/to/archive.zip /private/output-directory /path/to/sna
 node test/live/compare.mjs /private/result.json /private/expected-person.json
 ```
 
-expected JSON 包含 `person`（姓名及可选学号等明确身份字段）、`scheduled`（name、weekday、period_from、period_to、weeks）及可选 `unscheduled` 课程名列表。标注必须由原件人工核对，不能用被测模型的输出生成。比较器将明确课程展开为课程/星期/教学周/节次多重集合，同时报告身份、名称和占用遗漏、额外占用、重复记录；只规范化 Unicode、空格及英文大小写，不将近义课程名视为正确。比较器只用于验收，不参与导入业务处理。人工标注、运行结果及个人材料均留在仓库外。
+expected JSON 包含 `person`（姓名及可选学号等明确身份字段）、`scheduled`（name、weekday、period_from、period_to、weeks）及可选 `unscheduled` 课程名列表。标注必须由原件人工核对，不能用被测模型的输出生成。比较器将明确课程展开为课程/星期/教学周/节次多重集合，同时报告身份、名称和占用遗漏、额外占用、重复记录；默认只规范化 Unicode、空格及英文大小写；可选 nameAliases 显式列出经原件核对的同名格式变体（例如课程代码前缀），不将近义课程名视为正确。由开发 Agent 独立转录的标注必须注明来源，不能称为操作员已验收。比较器只用于验收，不参与导入业务处理。人工标注、运行结果及个人材料均留在仓库外。
 
 达到交接阈值却仍有未保存材料时，执行器阻止打开下一份材料，要求先持久化当前事实；避免某份旧文档长期阻止交接，导致后续每轮上下文不断增长。保存失败仍保留原图和原始响应，不能把“工具被调用”当成“草稿写入成功”。
 
@@ -156,3 +156,21 @@ expected JSON 包含 `person`（姓名及可选学号等明确身份字段）、
 达到未保存读取阈值时，代理进入 `checkpoint` 工具集合，只允许持久化成果与必要查询；保存完成后恢复读取，减少模型重复调用被禁止读取工具的空转。
 
 `revise_timetable` 同时允许增量修订 `term_name` 与除 ID 外的人员身份字段。单周截图中明确第 N 周的课程保存为 `weeks: [N]`，不能误用 null 丢掉已知占用，也不能扩展成整学期。未显示的后续节次继续待定。
+
+逐人复核的 `verify` 模式只提供原件读取、当前课表查询/修订、核对确认与必要历史读取；避免在复核过程中转向全局笔记和通用业务查询。核对签名包括学期标题，标题修正也纳入复核版本。
+
+隔离真实模型诊断可设置 `ROTA_CAPTURE_PROVIDER_RESPONSES=1`，仅将供应商返回的工具调用与正文写入指定私有输出目录（可能包含人员信息），不记录请求头或密钥，不进入 Git。默认关闭。
+
+对照模型验收可显式设置 `ROTA_LIVE_PROVIDER_ID`、`ROTA_LIVE_MODEL`、`ROTA_LIVE_KIND`、`ROTA_LIVE_BASE_URL`，仅在测试进程中替换指定配置，并强制复用凭据的原有 origin；不会修改全局配置。结果必须与沿用全局模型顺序的验收分开报告。计时同时输出本次进程耗时及从批次创建到结果的累计墙钟时间，恢复测试不能冒充全新单次性能成绩。
+
+## 完整阅读覆盖与表格图片
+
+文件读取返回基础覆盖区域。工作表按 `extent` 与实际返回 `range` 累积矩形覆盖；文本按总长度和 offset 累积分段；图片/PDF 按原始坐标累计区域；表外附注单独累计。单张图片只接受 page=1，图片内多页排版使用像素 crop。只有完整覆盖才能将该页记为读完，旧的“打开过一页”记录不作为新一轮复核证明。逐人复核独立维护新覆盖记录，最后一列或首段遗漏会阻止确认。覆盖校验不判断哪些单元格属于课程。
+
+`render_sheet` 使用 SheetJS 的明确坐标与合并信息构造安全 DOM，再由 [html-to-image](https://github.com/bubkoo/html-to-image) 在浏览器渲染 PNG；显示行列坐标和表外文本，不声称重现 Excel 原始打印样式。不执行上传 HTML、脚本或外链。支持 sheet/page/range；大表须分块。对电子表格调用 `view_image` 也会使用该网格渲染，像素 crop 请求会提示改用单元格 range。
+
+交接阶段指定 `save_handoff` 工具；错误调用保留上下文并反馈修正，受无进展次数限制，不直接丢弃上下文。真实验收批次采用独立的供应商会话 ID，恢复同一输出目录时保持稳定，避免不同测试复用同一会话标识。
+
+主任务状态显式提供 verification=null 和每份方案的 sourceChecked，普通工作阶段不开放确认复核工具，避免旧交接笔记触发重复确认。返回模型的课程条目附显式 index，增量修订无需重新数数组位置。复杂周次原文保存在条目 note，由模型展开并核对，系统不使用业务规则解析。
+
+文档、图片/OCR、表格图片和课表详情的工具输出不再经过通用预览截断。文件读取器自身的 range/offset 分段与覆盖记录保持一致，防止原件尾部已计入“读完”却未实际发送给模型。其他大结果仍可通过 historyKey 读取完整记录。

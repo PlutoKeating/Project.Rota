@@ -214,6 +214,30 @@ scope.onmessage = async ({ data }) => {
         pages: book.SheetNames.length,
         page: book.SheetNames.indexOf(sheet) + 1,
         sheet,
+        coverage: [
+          {
+            key: `page:${book.SheetNames.indexOf(sheet) + 1}`,
+            extent: (() => {
+              const e = XLSX.utils.decode_range(ws["!ref"] || "A1");
+              return [e.s.c, e.s.r, e.e.c + 1, e.e.r + 1];
+            })(),
+            region: [range.s.c, range.s.r, range.e.c + 1, range.e.r + 1],
+          },
+          ...(outside === undefined
+            ? []
+            : [
+                {
+                  key: "outside",
+                  extent: [0, 0, outside.length, 1],
+                  region: [
+                    args.offset,
+                    0,
+                    Math.min(args.offset + 12000, outside.length),
+                    1,
+                  ],
+                },
+              ]),
+        ],
         extent: ws["!ref"],
         range: XLSX.utils.encode_range(range),
         merges: ws["!merges"],
@@ -321,6 +345,24 @@ scope.onmessage = async ({ data }) => {
           args.offset + 24000 < text.length ? args.offset + 24000 : null,
       };
     }
+    const document = result as {
+      text?: string;
+      total?: number;
+      page?: number;
+      coverage?: unknown;
+    };
+    if (typeof document.text === "string" && typeof document.total === "number")
+      document.coverage = [
+        {
+          key: `page:${document.page ?? 1}`,
+          extent: [0, 0, document.total, 1],
+          region: [args.offset, 0, args.offset + document.text.length, 1],
+        },
+      ];
+    if (action === "unpack")
+      document.coverage = [
+        { key: "page:1", extent: [0, 0, 1, 1], region: [0, 0, 1, 1] },
+      ];
     scope.postMessage({ result, assets });
   } catch (e) {
     scope.postMessage({ error: e instanceof Error ? e.message : String(e) });

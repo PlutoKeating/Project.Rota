@@ -1,3 +1,4 @@
+import type { CoverageState } from "../../shared/agent-import/coverage";
 import type { TimetableProposal } from "../../shared/agent-import/timetable";
 import { openDB } from "idb";
 import type {
@@ -15,6 +16,7 @@ export interface Material {
   inspected?: boolean;
   totalPages?: number;
   pagesRead?: number[];
+  readCoverage?: CoverageState;
   status?: "done" | "irrelevant" | "blocked";
   reason?: string;
 }
@@ -22,6 +24,7 @@ export interface PendingCall {
   id: string;
   name: string;
   args: unknown;
+  validationError?: string;
 }
 export interface Job {
   id: string;
@@ -60,6 +63,7 @@ export interface Job {
     workMessages: ModelMessage[];
     required: { path: string; pages: number }[];
     seen: Record<string, number[]>;
+    coverage?: Record<string, CoverageState>;
     complete?: boolean;
   };
   unrecordedReads?: string[];

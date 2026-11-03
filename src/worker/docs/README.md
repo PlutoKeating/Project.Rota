@@ -37,4 +37,6 @@ Agent 单轮代理新增 `work/compact` 模式、批次内成功模型复用与�
 
 兼容模型使用 `@ai-sdk/openai-compatible` 2.x，与 AI SDK 6 对齐；保留并回传 reasoning_content，不在用户处理记录中展示模型思维链。响应返回前验证所有工具调用，发现 invalid、参数错误或截断则整轮拒绝并切换候选。MiniMax M3.1 默认 reasoning_effort=medium，供应商显式 params 设置优先。新增结构化课表和 OCR 工具在浏览器执行，Worker 不负责文件识别，未增加业务迁移或环境变量。
 
-导入单轮代理支持 `work`、`compact`、`checkpoint`：保存成果阶段仅提供持久化与查询工具，暂不提供新文件读取工具，返回调用须属于当轮开放工具集合。逐人复核继续使用同一 Agent，通过 `revise_timetable` 增量纠正、`confirm_timetable_check` 记录来源回看与方案签名。
+导入单轮代理支持 `work`、`compact`、`checkpoint`、`verify`：保存成果阶段仅提供持久化与查询工具，暂不提供新文件读取工具，返回调用须属于当轮开放工具集合。逐人复核继续使用同一 Agent，通过 `revise_timetable` 增量纠正、`confirm_timetable_check` 记录来源回看与方案签名。
+
+`verify` 仅开放当前原件读取、课表查询/修订、核对确认及必要历史读取，不混入全局笔记、通用 CRUD 或新材料发现工具。

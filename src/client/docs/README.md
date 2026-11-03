@@ -36,3 +36,5 @@ React 19、Tailwind 4，原有 hash 地址继续兼容。首页直接进入排�
 `Review.tsx` 展示待绑定的结构化课程及明确缺项，支持直接修改课程字段，避免用空周历掩盖已识别成果。`ProposalEntryEditor.tsx` 提供字段编辑。`ocr.ts` 串行复用本地 Tesseract Worker，空闲后释放。`pnpm dev/build/test:agent-browser` 会准备忽略 Git 的 OCR 资源，构建阶段须安装 devDependencies；无需额外环境变量。
 
 审核页区分“等待 Agent 回看核对”和“已回看核对，仍需人工复核”；没有学期时展示原始周次/节次方案，不显示空学期选择器。逐人核对尚未完成的方案不能直接提交。
+
+文件完整性采用基础坐标覆盖：表格不能漏列，文本不能跳段，图片不能只读局部。`sheet-image.ts` 使用 html-to-image 渲染单元格网格，`render_sheet` 支持按范围放大；不进行业务识别。

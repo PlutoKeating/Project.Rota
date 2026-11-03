@@ -239,6 +239,12 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 
 ### 导入实际材料回归修正
 
-浏览器工具协议新增 `save_timetable`（replace/append）、`read_timetables`、`bind_timetables` 和 `ocr_image`；这些工具仅操作本地材料与隔离草稿。`observe_material` 需要明确 `kind`，课表观察不能代替结构化保存。正式 apply 的事务语义不变。单轮响应在返回前验证完整工具名称、参数和调用 ID，拒绝 invalid 调用及截断输出并尝试后续供应商。metrics 额外提供可用的 `reasoningTokens` 与 `finishReason`。无数据库迁移，前端与 Worker 须同步发布。
+浏览器工具协议新增 `save_timetable`（replace/append）、`read_timetables`、`bind_timetables` 和 `ocr_image`；这些工具仅操作本地材料与隔离草稿。`observe_material` 需要明确 `kind`，课表观察不能代替结构化保存。正式 apply 的事务语义不变。单轮响应在返回前验证完整工具名称、参数和调用 ID，拒绝损坏 JSON、未知工具、重复调用 ID 及截断输出并尝试后续供应商；可修正的参数错误以 validationError 反馈，不执行调用。metrics 额外提供可用的 `reasoningTokens` 与 `finishReason`。无数据库迁移，前端与 Worker 须同步发布。
 
-导入单轮代理支持 `work`、`compact`、`checkpoint`：保存成果阶段仅提供持久化与查询工具，暂不提供新文件读取工具，返回调用须属于当轮开放工具集合。逐人复核继续使用同一 Agent，通过 `revise_timetable` 增量纠正、`confirm_timetable_check` 记录来源回看与方案签名。
+导入单轮代理支持 `work`、`compact`、`checkpoint`、`verify`：保存成果阶段仅提供持久化与查询工具，暂不提供新文件读取工具，返回调用须属于当轮开放工具集合。逐人复核继续使用同一 Agent，通过 `revise_timetable` 增量纠正、`confirm_timetable_check` 记录来源回看与方案签名。
+
+`verify` 仅开放当前原件读取、课表查询/修订、核对确认及必要历史读取，不混入全局笔记、通用 CRUD 或新材料发现工具。
+
+单轮返回的调用可含 `validationError`：表示合法 JSON 参数不符合契约或不属于当轮工具范围。浏览器只保存错误反馈，禁止执行该调用，由 Agent 在下一轮纠正。
+
+本地 `render_sheet` 工具支持 sheet/page/range 的表格网格图片。文件读取的 coverage 为基础坐标范围，供本地完整性校验；不会作为业务推断。

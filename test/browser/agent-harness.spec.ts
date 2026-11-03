@@ -211,7 +211,7 @@ test("failed handoff preserves context and draft; pending archive checkpoint is 
       jobs: await s.listJobs("owner"),
     };
   });
-  expect(result.error).toContain("未生成交接摘要");
+  expect(result.error).toContain("连续 12 轮");
   expect(result.size).toBeGreaterThan(48000);
   expect(JSON.stringify(result.history)).toContain("尚未归档的结果");
   expect(result.after).toEqual([]);
@@ -718,7 +718,13 @@ test("image crops clip the image edge and explain invalid coordinates", async ({
     } catch (e) {
       error = (e as Error).message;
     }
-    return { clipped: clipped.result, error };
+    let pageError = "";
+    try {
+      await d.documentTool({ id: "crop" } as any, "view_image", { path: "edge.png", page: 2 });
+    } catch (e) {
+      pageError = (e as Error).message;
+    }
+    return { clipped: clipped.result, error, pageError };
   });
   expect(result.clipped).toMatchObject({
     crop: { x: 18, y: 8, width: 2, height: 2 },
@@ -727,6 +733,7 @@ test("image crops clip the image edge and explain invalid coordinates", async ({
     renderedHeight: 2,
   });
   expect(result.error).toContain("20 × 10");
+  expect(result.pageError).toContain("单张图片只有 page=1");
 });
 
 test("focused source verification requires fresh reads, repairs omissions, and survives reload", async ({
@@ -855,7 +862,7 @@ test("focused source verification requires fresh reads, repairs omissions, and s
   ).toBe(true);
   expect(paused.verification?.seen["资料.txt"]).toEqual([1]);
   expect(paused.checks?.["p-plan"]).toBeUndefined();
-  expect(paused.log.some((l: any) => l.text.includes("重新查看完整来源"))).toBe(
+  expect(paused.log.some((l: any) => l.text.includes("完整覆盖来源"))).toBe(
     true,
   );
   await page.reload();
@@ -879,4 +886,147 @@ test("focused source verification requires fresh reads, repairs omissions, and s
   expect(done.plan?.entries.map((e: any) => e.name)).toEqual(["数学", "物理"]);
   expect(done.check?.summary).toContain("补齐");
   expect(JSON.stringify(done.messages)).toContain("已完成课表");
+});
+
+test("proxy validation feedback cannot execute a rejected tool", async ({
+  page,
+}) => {
+  await routes(page, () =>
+    reply([
+      {
+        id: "blocked",
+        name: "note",
+        args: { key: "should-not-exist", text: "not allowed" },
+        validationError: "当前阶段不允许此工具",
+      },
+    ]),
+  );
+  const job = await page.evaluate(async () => {
+    const r = await import("/src/client/agent-import/runtime.ts");
+    const job = await r.createJob("owner", [new File(["资料"], "a.txt")]);
+    const runner = new r.ImportRunner(job, (j) => {
+      if (j.turns === 1 && !j.pending.length) runner.stop();
+    });
+    await runner.run();
+    return job;
+  });
+  expect(job.notes["should-not-exist"]).toBeUndefined();
+  expect(job.log.some((l: any) => l.text.includes("工具未执行"))).toBe(true);
+});
+
+test("handoff tool mistakes are corrected without executing them or dropping context", async ({
+  page,
+}) => {
+  let count = 0;
+  await routes(page, (body) => {
+    expect(body.mode).toBe("compact");
+    return reply(
+      ++count === 1
+        ? [
+            {
+              id: "wrong",
+              name: "note",
+              args: { key: "bad", text: "not run" },
+              validationError: "只能交接",
+            },
+          ]
+        : [
+            {
+              id: "handoff",
+              name: "save_handoff",
+              args: {
+                summary:
+                  "已保存真实成果与来源，未确定日期继续待定，不捏造任何缺失信息。",
+                nextSteps: ["继续"],
+              },
+            },
+          ],
+    );
+  });
+  const result = await page.evaluate(async () => {
+    const r = await import("/src/client/agent-import/runtime.ts");
+    const job = await r.createJob("owner", [new File(["资料"], "a.txt")]);
+    job.messages.push({ role: "user", content: "真实原文".repeat(14000) });
+    const runner = new r.ImportRunner(job, (j) => {
+      if (j.handoff) runner.stop();
+    });
+    await runner.run();
+    return {
+      handoff: job.handoff,
+      notes: job.notes,
+      status: job.status,
+      error: job.error,
+    };
+  });
+  expect(count).toBe(2);
+  expect(result.handoff.summary).toContain("真实成果");
+  expect(result.notes.bad).toBeUndefined();
+  expect(result.error).toBeUndefined();
+});
+
+test("spreadsheet reading and source verification require the last column, and render real cell grids", async ({
+  page,
+}) => {
+  await routes(page, () => reply([]));
+  const result = await page.evaluate(async () => {
+    const r = await import("/src/client/agent-import/runtime.ts"),
+      s = await import("/src/client/agent-import/store.ts"),
+      d = await import("/src/client/agent-import/documents.ts"),
+      v = await import("/src/client/agent-import/verification.ts");
+    const job = await r.createJob("owner", [
+      new File(
+        ["A,B,C,D,E,F,G,H,周日\n1,2,3,4,5,6,7,8,最后一列课程\n"],
+        "sheet.csv",
+      ),
+    ]);
+    job.verification = {
+      id: "test",
+      workMessages: [],
+      required: [{ path: "sheet.csv", pages: 1 }],
+      seen: {},
+    };
+    const left = await d.documentTool(job, "read_document", {
+      path: "sheet.csv",
+      range: "A1:H2",
+    });
+    v.recordVerificationRead(job, "sheet.csv", left.result);
+    const partial = {
+      material: (await s.materials(job.id))[0].pagesRead,
+      verification: [...(job.verification.seen["sheet.csv"] ?? [])],
+    };
+    const right = await d.documentTool(job, "render_sheet", {
+      path: "sheet.csv",
+      range: "I1:I2",
+    });
+    v.recordVerificationRead(job, "sheet.csv", right.result);
+    return {
+      partial,
+      pages: (await s.materials(job.id))[0].pagesRead,
+      seen: job.verification.seen["sheet.csv"],
+      image: right.image,
+      content: right.result,
+    };
+  });
+  expect(result.partial.material).toEqual([]);
+  expect(result.partial.verification).toEqual([]);
+  expect(result.pages).toEqual([1]);
+  expect(result.seen).toEqual([1]);
+  expect(result.image).toMatch(/^data:image\/png;base64,/);
+  expect(result.image!.length).toBeGreaterThan(1000);
+  expect(JSON.stringify(result.content)).toContain("最后一列课程");
+});
+
+test("source coverage never outruns the document text delivered to the model", async ({ page }) => {
+  await routes(page, () => reply([{ id: "read-long", name: "read_document", args: { path: "long.txt" } }]));
+  const result = await page.evaluate(async () => {
+    const r = await import("/src/client/agent-import/runtime.ts");
+    const job = await r.createJob("owner", [new File(["资料".repeat(9000) + "尾部课程证据"], "long.txt")]);
+    const runner = new r.ImportRunner(job, (j) => {
+      if (j.turns === 1 && !j.pending.length) runner.stop();
+    });
+    await runner.run();
+    return job.messages;
+  });
+  expect(JSON.stringify(result)).toContain("尾部课程证据");
+  expect(JSON.stringify(result)).not.toContain("完整结果已归档");
 });

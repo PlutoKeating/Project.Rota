@@ -24,3 +24,6 @@ These packages are distributed without modification. Source and notices:
 - @tesseract.js-data/chi_sim and @tesseract.js-data/eng 1.0.0: https://github.com/naptha/tessdata (MIT package metadata; upstream license included in tessdata-LICENSE)
 
 parse5 8.0.0 (MIT): basic HTML parsing for table-external annotations.
+
+html-to-image 1.11.13 — MIT — https://github.com/bubkoo/html-to-image
+用于将安全构造的单元格网格渲染成图片，不执行源文件 HTML。
