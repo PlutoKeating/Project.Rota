@@ -132,7 +132,7 @@ const REQUEST_STATUSES = ["pending", "approved", "rejected"] as const;
 const UNAVAILABILITY_KINDS = ["leave", "blacklist", "other"] as const;
 
 const PERSON_COLUMNS =
-  "id, student_no, full_name, email, phone, status, created_at";
+  "id, student_no, full_name, email, phone, class_name, major, status, created_at";
 const ORG_COLUMNS = "id, code, name, parent_id, kind, status";
 const ROLE_COLUMNS = "id, code, name, org_id, description";
 const TERM_COLUMNS =
@@ -404,6 +404,16 @@ async function computeFreeMinutesBatch(
   if (slots.length === 0) return result;
 
   const occurrenceSlots = new Map<string, Set<string>>();
+  const personal = await dbAll<{personId:string;startsAt:string;endsAt:string}>(db, "select person_id,starts_at,ends_at from timetable_event where term_id=? and person_id in (select value from json_each(?))",termId,JSON.stringify(personIds));
+  for (const e of personal) {
+    for (const slot of slots) {
+      if (Date.parse(e.startsAt) < Date.parse(slot.endsAt) && Date.parse(e.endsAt) > Date.parse(slot.startsAt)) {
+        const set = occurrenceSlots.get(e.personId) ?? new Set<string>();
+        set.add(slot.id);
+        occurrenceSlots.set(e.personId, set);
+      }
+    }
+  }
   const leaves = new Map<string, IntervalRow[]>();
   const assignments = new Map<string, IntervalRow[]>();
 
@@ -592,8 +602,8 @@ const createPerson = async (c: PeopleContext) => {
   const createdAt = nowIso();
   await dbBatch(db, [
     {
-      sql: "insert into person (id, student_no, full_name, email, phone, status, created_at) values (?, ?, ?, ?, ?, ?, ?)",
-      params: [id, studentNo, fullName, email, phone, status, createdAt],
+      sql: "insert into person (id, student_no, full_name, email, phone, status, created_at, class_name, major) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      params: [id, studentNo, fullName, email, phone, status, createdAt, optString(body.className,"className",200),optString(body.major,"major",200)],
     },
     auditStatement(c.get("user").id, "person.create", "person", id, {
       fullName,
@@ -642,6 +652,14 @@ const updatePerson = async (c: PeopleContext) => {
   const params: BindValue[] = [];
   const changes: Record<string, unknown> = {};
 
+  for (const [key, column] of [["className", "class_name"], ["major", "major"]]) {
+    if (body[key] !== undefined) {
+      const value = optString(body[key], key, 200);
+      sets.push(column + " = ?");
+      params.push(value);
+      changes[key] = value;
+    }
+  }
   if (body.fullName !== undefined) {
     const fullName = asString(body.fullName, "fullName", 100);
     sets.push("full_name = ?");
@@ -774,6 +792,17 @@ const getTimetable = async (c: PeopleContext) => {
     else coursesBySlot.set(row.slotId, [item]);
   }
 
+  const personal = await dbAll<{id:string;name:string;location:string|null;startsAt:string;endsAt:string}>(db, `select t.id,t.name,t.location,e.starts_at,e.ends_at from timetable_event e join timetable_entry t on t.id=e.entry_id where e.person_id=? and e.term_id=? and e.week_index=?`,id,term.id,week);
+  for (const e of personal) {
+    for (const slot of slots) {
+      if (Date.parse(e.startsAt) < Date.parse(slot.endsAt) && Date.parse(e.endsAt) > Date.parse(slot.startsAt)) {
+        const list = coursesBySlot.get(slot.id) ?? [];
+        if (!list.some(x => x.courseId === e.id))
+          list.push({ courseId: e.id, courseName: e.name, location: e.location });
+        coursesBySlot.set(slot.id, list);
+      }
+    }
+  }
   const body: TimetableWeek = {
     termId: term.id,
     personId: id,

@@ -33,6 +33,8 @@ import { useOrgsState, useTermsState } from "../lib/resources";
 interface PersonFormValues {
   fullName: string;
   studentNo: string;
+  className: string;
+  major: string;
   email: string;
   phone: string;
   status: PersonStatus;
@@ -42,6 +44,8 @@ function personFormValues(person: PersonView | null): PersonFormValues {
   return {
     fullName: person?.fullName ?? "",
     studentNo: person?.studentNo ?? "",
+    className: person?.className ?? "",
+    major: person?.major ?? "",
     email: person?.email ?? "",
     phone: person?.phone ?? "",
     status: person?.status ?? "active",
@@ -79,6 +83,8 @@ function PersonFormModal({ person, onClose, onSaved }: PersonFormModalProps) {
     };
     if (values.studentNo.trim()) body.studentNo = values.studentNo.trim();
     if (values.email.trim()) body.email = values.email.trim();
+    body.className=values.className.trim()||null;
+    body.major=values.major.trim()||null;
     if (values.phone.trim()) body.phone = values.phone.trim();
 
     setBusy(true);
@@ -129,6 +135,8 @@ function PersonFormModal({ person, onClose, onSaved }: PersonFormModalProps) {
             onChange={(event) => update({ studentNo: event.target.value })}
           />
         </Field>
+        <Field label="班级"><TextInput value={values.className} onChange={event=>update({className:event.target.value})}/></Field>
+        <Field label="专业"><TextInput value={values.major} onChange={event=>update({major:event.target.value})}/></Field>
         <Field label="邮箱">
           <TextInput
             type="email"

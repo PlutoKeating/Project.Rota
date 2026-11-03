@@ -67,6 +67,15 @@ export async function loadAvailability(
     personId,
     termId,
   );
+  const personal = await dbAll<{ id: string; startsAt: string; endsAt: string; name: string }>(db,
+    `select e.id,e.starts_at,e.ends_at,t.name from timetable_event e
+     join timetable_entry t on t.id=e.entry_id where e.person_id=? and e.term_id=?`, personId, termId);
+  for (const event of personal) {
+    for (const slot of slots) {
+      if (toMs(event.startsAt) < toMs(slot.endsAt) && toMs(event.endsAt) > toMs(slot.startsAt))
+        busy.set(slot.id, { reason: "course", refId: event.id, label: event.name });
+    }
+  }
   for (const row of occurrences) {
     if (!busy.has(row.slotId)) busy.set(row.slotId, { reason: "course", label: row.courseName });
   }
@@ -229,6 +238,17 @@ export async function loadAvailabilityBatch(
     const bucket = byPerson.get(row.personId);
     if (bucket && !bucket.has(row.slotId)) {
       bucket.set(row.slotId, { reason: "course", label: row.courseName });
+    }
+  }
+
+  const personal = await dbAll<{ id: string; personId: string; startsAt: string; endsAt: string; name: string }>(db,
+    `select e.id,e.person_id,e.starts_at,e.ends_at,t.name from timetable_event e
+     join timetable_entry t on t.id=e.entry_id where e.term_id=? and e.person_id in (select value from json_each(?))`,
+    termId, JSON.stringify(personIds));
+  for (const event of personal) {
+    for (const slot of slots) {
+      if (toMs(event.startsAt) < toMs(slot.endsAt) && toMs(event.endsAt) > toMs(slot.startsAt))
+        byPerson.get(event.personId)?.set(slot.id, { reason: "course", refId: event.id, label: event.name });
     }
   }
 

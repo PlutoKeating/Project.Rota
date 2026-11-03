@@ -9,7 +9,7 @@ import { api, messageOf } from "../lib/api";
 
 interface Session {
   authenticated: boolean;
-  user: { name: string; role: string } | null;
+  user: { id: string; name: string; role: string } | null;
 }
 const SessionContext = createContext<Session | null>(null);
 export const useSession = () => useContext(SessionContext);
@@ -28,6 +28,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       "",
   );
   useEffect(() => {
+    void import("../agent-import/store").then(store=>store.cleanup()).catch(()=>{});
     api
       .get<Session>("/auth/me")
       .then(setSession)

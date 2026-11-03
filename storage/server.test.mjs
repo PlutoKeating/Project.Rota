@@ -23,6 +23,15 @@ test('authenticated persistent SQLite, atomic batches, KV and files', async () =
     assert.equal((await (await call('/kv/atomic')).json()).value, null);
     r = await query([{ sql: "DELETE FROM app_kv WHERE key=? RETURNING value", params: ['settings'] }]);
     assert.equal((await r.json())[0].results[0].value, '{"cooldownDays":4}');
+    // Parent/child edits are atomic; references must be valid when the transaction commits.
+    r = await query([
+      { sql: "INSERT INTO organization(id,name,parent_id,kind,status,created_at) VALUES('child','child','parent','team','active','2026-01-01')", params: [] },
+      { sql: "INSERT INTO organization(id,name,kind,status,created_at) VALUES('parent','parent','team','active','2026-01-01')", params: [] },
+    ]);
+    assert.equal(r.status, 200);
+    r = await query([{ sql: "DELETE FROM organization WHERE id='parent'", params: [] }]);
+    assert.equal(r.status, 409);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM organization WHERE id='parent'").get().n, 1);
     await call('/kv/persist', 'PUT', 'yes');
     assert.equal((await call('/imports/job/schedule.csv', 'PUT', 'a,b')).status, 201);
     assert.equal(await (await call('/imports/job/schedule.csv')).text(), 'a,b');

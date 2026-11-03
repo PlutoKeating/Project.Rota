@@ -1,734 +1,500 @@
-import { PeopleImport } from "../components/PeopleImport";
-import { useEffect, useState } from "react";
-import type {
-  ImportJob,
-  ImportSourceKind,
-  ListResponse,
-  ParsedCourse,
-  ParsedMeeting,
-  ParsedTimetable,
-  PersonView,
-  WeekPatternKind,
-} from "../../shared/types";
-import { Badge } from "../components/Badge";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "../components/Button";
-import { Card } from "../components/Card";
-import { EmptyState } from "../components/EmptyState";
-import { Field, Select, TextInput } from "../components/Field";
-import { ListState } from "../components/ListState";
-import { Spinner } from "../components/Spinner";
-import { DataTable, type Column } from "../components/Table";
-import { useToast } from "../components/Toast";
+import { Textarea } from "../components/Field";
+import { Modal } from "../components/Modal";
+import { useSession } from "../components/AuthGate";
 import { api, messageOf } from "../lib/api";
-import { WEEKDAYS, dateTimeText, weekdayName } from "../lib/format";
-import { useAsync } from "../lib/hooks";
 import {
-  IMPORT_SOURCE_OPTIONS,
-  WEEK_PATTERN_OPTIONS,
-  importSourceLabel,
-  importStatusLabel,
-  importStatusTone,
-} from "../lib/labels";
-import { useTermsState } from "../lib/resources";
-
-function fileAccept(kind: ImportSourceKind): string {
-  switch (kind) {
-    case "excel":
-      return ".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-    case "csv":
-      return ".csv,text/csv";
-    case "ics":
-      return ".ics,text/calendar";
-    case "screenshot":
-      return "image/*";
-    default:
-      return "";
-  }
-}
+  listJobs,
+  saveJob,
+  materials,
+  addFiles,
+  deleteJob,
+  RETENTION,
+  type Job,
+} from "../agent-import/store";
+import {
+  ImportRunner,
+  createJob,
+  feedback,
+  applyJob,
+  checkJob,
+  renewLease,
+} from "../agent-import/runtime";
+import { Review } from "../agent-import/Review";
+import { documentTool } from "../agent-import/documents";
 
 export function ImportsPage() {
-  const [tab, setTab] = useState("timetable");
-  const toast = useToast();
-  const terms = useTermsState();
-  const persons = useAsync(
-    async () => api.get<ListResponse<PersonView>>("/persons"),
-    [],
-  );
-
-  const [termId, setTermId] = useState("");
-  const [personId, setPersonId] = useState("");
-  const [sourceKind, setSourceKind] = useState<ImportSourceKind>("excel");
-  const [file, setFile] = useState<File | null>(null);
-  const [uploading, setUploading] = useState(false);
-
-  const [historyVersion, setHistoryVersion] = useState(0);
-  const [job, setJob] = useState<ImportJob | null>(null);
-  const [draft, setDraft] = useState<ParsedTimetable | null>(null);
-  const [applying, setApplying] = useState(false);
-  const [openingId, setOpeningId] = useState<string | null>(null);
-
+  const session = useSession();
+  const owner = session?.user?.id ?? "";
+  const [jobs, setJobs] = useState<Job[]>([]),
+    [job, setJob] = useState<Job | null>(null),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState(""),
+    [comment, setComment] = useState(""),
+    [dragging, setDragging] = useState(false),
+    [source, setSource] = useState<{
+      path: string;
+      image?: string;
+      text?: string;
+      page?: number;
+      pages?: number;
+    } | null>(null),
+    [issues, setIssues] = useState<string[]>([]);
+  const input = useRef<HTMLInputElement>(null),
+    runner = useRef<ImportRunner | null>(null),
+    current = useRef<Job | null>(null);
+  current.current = job;
+  const update = (next: Job) => {
+    setJob({ ...next });
+    setJobs((old) => [next, ...old.filter((j) => j.id !== next.id)]);
+  };
   useEffect(() => {
-    if (!termId && terms.current) setTermId(terms.current.id);
-  }, [terms.current, termId]);
-
-  const history = useAsync(
-    async () => api.get<ListResponse<ImportJob>>("/imports"),
-    [historyVersion],
-  );
-
-  useEffect(() => {
-    const parsed = job?.parsed ?? null;
-    setDraft(
-      parsed
-        ? {
-            ...parsed,
-            courses: (parsed.courses ?? []).map((course) => ({
-              ...course,
-              meetings: course.meetings ?? [],
-            })),
-            warnings: parsed.warnings ?? [],
+    if (owner)
+      listJobs(owner)
+        .then(setJobs)
+        .catch((e) => setError(messageOf(e)));
+    const timer = setInterval(() => {
+      if (owner)
+        void listJobs(owner).then((rows) => {
+          setJobs(rows);
+          const active = current.current;
+          if (active?.expiresAt && active.expiresAt <= Date.now()) {
+            runner.current?.stop();
+            setJob(null);
           }
-        : null,
-    );
-  }, [job?.id, job?.parsed]);
-
-  // 解析是异步的：uploaded/parsing 时每 2 秒轮询一次。
-  useEffect(() => {
-    if (!job) return;
-    if (job.status !== "parsing" && job.status !== "uploaded") return;
-
-    let alive = true;
-    const timer = window.setInterval(() => {
-      void api
-        .get<ImportJob>(`/imports/${encodeURIComponent(job.id)}`)
-        .then((next) => {
-          if (!alive) return;
-          setJob(next);
-          if (
-            next.status === "needs_review" ||
-            next.status === "applied" ||
-            next.status === "failed"
-          ) {
-            window.clearInterval(timer);
-            setHistoryVersion((value) => value + 1);
-          }
-        })
-        .catch((error: unknown) => {
-          if (!alive) return;
-          window.clearInterval(timer);
-          toast.error(`查询解析状态失败：${messageOf(error)}`);
         });
-    }, 2000);
-
+    }, 60000);
     return () => {
-      alive = false;
-      window.clearInterval(timer);
+      clearInterval(timer);
+      runner.current?.stop();
     };
-  }, [job?.id, job?.status, toast]);
-
-  async function upload(): Promise<void> {
-    if (!file) {
-      toast.error("请选择要上传的文件");
-      return;
-    }
-    if (!termId) {
-      toast.error("请选择学期");
-      return;
-    }
-
-    const form = new FormData();
-    form.append("file", file);
-    form.append("sourceKind", sourceKind);
-    form.append("termId", termId);
-    if (personId) form.append("personId", personId);
-
-    setUploading(true);
-    try {
-      const created = await api.post<ImportJob>("/imports", form);
-      setJob(created);
-      setHistoryVersion((value) => value + 1);
-      toast.success("已上传，正在解析…");
-    } catch (error) {
-      toast.error(messageOf(error));
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  async function openJob(id: string): Promise<void> {
-    setOpeningId(id);
-    try {
-      const detail = await api.get<ImportJob>(
-        `/imports/${encodeURIComponent(id)}`,
-      );
-      setJob(detail);
-    } catch (error) {
-      toast.error(messageOf(error));
-    } finally {
-      setOpeningId(null);
-    }
-  }
-
-  function updateCourse(index: number, patch: Partial<ParsedCourse>): void {
-    setDraft((previous) =>
-      previous
-        ? {
-            ...previous,
-            courses: previous.courses.map((course, i) =>
-              i === index ? { ...course, ...patch } : course,
-            ),
-          }
-        : previous,
-    );
-  }
-
-  function updateMeeting(
-    courseIndex: number,
-    meetingIndex: number,
-    patch: Partial<ParsedMeeting>,
-  ): void {
-    setDraft((previous) =>
-      previous
-        ? {
-            ...previous,
-            courses: previous.courses.map((course, i) =>
-              i === courseIndex
-                ? {
-                    ...course,
-                    meetings: course.meetings.map((meeting, j) =>
-                      j === meetingIndex ? { ...meeting, ...patch } : meeting,
-                    ),
-                  }
-                : course,
-            ),
-          }
-        : previous,
-    );
-  }
-
-  function removeMeeting(courseIndex: number, meetingIndex: number): void {
-    setDraft((previous) =>
-      previous
-        ? {
-            ...previous,
-            courses: previous.courses.map((course, i) =>
-              i === courseIndex
-                ? {
-                    ...course,
-                    meetings: course.meetings.filter(
-                      (_, j) => j !== meetingIndex,
-                    ),
-                  }
-                : course,
-            ),
-          }
-        : previous,
-    );
-  }
-
-  function addMeeting(courseIndex: number): void {
-    setDraft((previous) =>
-      previous
-        ? {
-            ...previous,
-            courses: previous.courses.map((course, i) =>
-              i === courseIndex
-                ? {
-                    ...course,
-                    meetings: [
-                      ...course.meetings,
-                      {
-                        weekday: 1,
-                        periodFrom: 1,
-                        periodTo: 1,
-                        patternKind: "all",
-                        weekRanges: null,
-                        location: null,
-                      },
-                    ],
-                  }
-                : course,
-            ),
-          }
-        : previous,
-    );
-  }
-
-  function removeCourse(index: number): void {
-    setDraft((previous) =>
-      previous
-        ? {
-            ...previous,
-            courses: previous.courses.filter((_, i) => i !== index),
-          }
-        : previous,
-    );
-  }
-
-  async function apply(): Promise<void> {
-    if (!job || !draft) return;
-    setApplying(true);
-    try {
-      // 注意：后端 apply 的请求体契约尚未在 docs/API.md 里细化，这里按「覆盖 parsed」的直觉发送。
-      await api.post(`/imports/${encodeURIComponent(job.id)}/apply`, {
-        parsed: draft,
-        overwrite: false,
+  }, [owner]);
+  useEffect(() => {
+    if (!job || !["running", "review"].includes(job.status)) return;
+    const timer = setInterval(() => {
+      void renewLease(current.current!).catch((e) => {
+        runner.current?.stop();
+        setError("相关数据锁续期失败：" + messageOf(e));
       });
-      toast.success("解析结果已落库");
-      setHistoryVersion((value) => value + 1);
-      try {
-        const next = await api.get<ImportJob>(
-          `/imports/${encodeURIComponent(job.id)}`,
-        );
-        setJob(next);
-      } catch {
-        setJob((previous) =>
-          previous
-            ? { ...previous, status: "applied", parsed: draft }
-            : previous,
-        );
-      }
-    } catch (error) {
-      toast.error(messageOf(error));
+    }, 45000);
+    return () => clearInterval(timer);
+  }, [job?.id, job?.status]);
+  useEffect(() => {
+    if (!job || job.status === "running") return;
+    void checkJob(job)
+      .then((r) => setIssues(r.issues.map((x) => x.message)))
+      .catch((e) => setIssues([messageOf(e)]));
+  }, [job?.id, job?.revision, job?.status]);
+  const run = (value: Job) => {
+    runner.current = new ImportRunner(value, update);
+    void runner.current.run();
+  };
+  const upload = async (files: File[]) => {
+    if (!files.length) return;
+    setBusy(true);
+    setError("");
+    try {
+      let value = job;
+      if (value && !["applied", "cancelled"].includes(value.status)) {
+        runner.current?.stop();
+        if (value.status === "running") throw Error("请先暂停处理，再追加材料");
+        await addFiles(value, files);
+      } else value = await createJob(owner, files);
+      update(value);
+      run(value);
+    } catch (e) {
+      setError(messageOf(e));
     } finally {
-      setApplying(false);
+      setBusy(false);
+      if (input.current) input.current.value = "";
     }
-  }
-
-  const historyColumns: Column<ImportJob>[] = [
-    {
-      key: "created",
-      header: "上传时间",
-      render: (item) => (
-        <span className="text-xs tabular-nums">
-          {dateTimeText(item.createdAt)}
-        </span>
-      ),
-    },
-    {
-      key: "kind",
-      header: "类型",
-      render: (item) => (
-        <span className="text-xs">{importSourceLabel(item.sourceKind)}</span>
-      ),
-    },
-    {
-      key: "file",
-      header: "文件",
-      render: (item) => (
-        <span
-          className="block max-w-[220px] truncate text-xs"
-          title={item.fileName ?? undefined}
-        >
-          {item.fileName ?? "—"}
-        </span>
-      ),
-    },
-    {
-      key: "status",
-      header: "状态",
-      render: (item) => (
-        <Badge tone={importStatusTone(item.status)}>
-          {importStatusLabel(item.status)}
-        </Badge>
-      ),
-    },
-    {
-      key: "action",
-      header: "",
-      className: "text-right",
-      render: (item) => (
-        <Button
-          variant="ghost"
-          size="sm"
-          loading={openingId === item.id}
-          onClick={() => void openJob(item.id)}
-        >
-          查看
-        </Button>
-      ),
-    },
-  ];
-
+  };
+  const onSource = async (path: string, page = 1) => {
+    if (path === "现有数据") {
+      setSource({
+        path,
+        text: "来自本批开始时读取的正式数据；具体记录和修改前后差异可在变更明细中查看。",
+      });
+      return;
+    }
+    if (path === "操作员意见") {
+      setSource({
+        path,
+        text: job?.notes["最近操作员意见"] ?? "操作员在审核界面直接编辑。",
+      });
+      return;
+    }
+    if (!job) return;
+    setBusy(true);
+    try {
+      const result = await documentTool(job, "read_document", {
+        path,
+        page,
+        offset: 0,
+      });
+      const info = result.result as {
+        pages?: number;
+        content?: { pages?: number };
+      };
+      setSource({
+        path,
+        page,
+        pages: info.pages ?? info.content?.pages,
+        image: result.image,
+        text: result.image ? undefined : JSON.stringify(result.result, null, 2),
+      });
+    } catch (e) {
+      setError(messageOf(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const finish = async () => {
+    if (!job) return;
+    setBusy(true);
+    setError("");
+    try {
+      await applyJob(job);
+      update(job);
+    } catch (e) {
+      setError(messageOf(e));
+      update(job);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const cancel = async () => {
+    if (!job) return;
+    runner.current?.stop();
+    setBusy(true);
+    try {
+      await api.post(`/agent-imports/${job.id}/cancel`);
+      job.status = "cancelled";
+      job.expiresAt = Date.now() + RETENTION;
+      await saveJob(job);
+      update(job);
+    } catch (e) {
+      setError(messageOf(e));
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
-    <div className="space-y-4 sm:space-y-5">
-      <nav aria-label="导入类型" className="flex gap-2">
-        <Button
-          variant={tab === "timetable" ? "secondary" : "ghost"}
-          onClick={() => setTab("timetable")}
+    <div className="mx-auto max-w-5xl space-y-8 pb-8">
+      <input
+        ref={input}
+        type="file"
+        multiple
+        className="sr-only"
+        aria-label="选择导入材料"
+        onChange={(e) => void upload(Array.from(e.target.files ?? []))}
+      />
+      {!job ? (
+        <section
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragging(false);
+            void upload(Array.from(e.dataTransfer.files));
+          }}
+          className={`grid min-h-72 place-items-center rounded-2xl border border-dashed px-6 py-12 text-center ${dragging ? "border-indigo-600 bg-indigo-50" : "border-slate-300 bg-white dark:border-slate-700 dark:bg-slate-900"}`}
         >
-          课表导入
-        </Button>
-        <Button
-          variant={tab === "people" ? "secondary" : "ghost"}
-          onClick={() => setTab("people")}
-        >
-          人员导入
-        </Button>
-      </nav>
-      {tab === "people" && <PeopleImport />}
-      <div hidden={tab !== "timetable"} className="space-y-5">
-        <Card
-          title="上传课表"
-          description="结构化文件直接解析；截图走视觉模型。解析结果必须先人工确认才落库。"
-        >
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field
-              label="文件"
-              required
-              hint={
-                fileAccept(sourceKind)
-                  ? `支持 ${fileAccept(sourceKind)}`
-                  : undefined
-              }
-            >
-              <input
-                type="file"
-                accept={fileAccept(sourceKind)}
-                onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-                className="block w-full rounded-lg border border-dashed border-slate-300 bg-white px-3 py-2 text-xs text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-indigo-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 dark:file:bg-indigo-500/15 dark:file:text-indigo-300"
-              />
-            </Field>
-            <Field label="文件类型">
-              <Select
-                value={sourceKind}
-                onChange={(event) => {
-                  setSourceKind(event.target.value as ImportSourceKind);
-                  setFile(null);
-                }}
-              >
-                {IMPORT_SOURCE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Field label="学期" required>
-              <Select
-                value={termId}
-                onChange={(event) => setTermId(event.target.value)}
-              >
-                <option value="">选择学期</option>
-                {terms.terms.map((term) => (
-                  <option key={term.id} value={term.id}>
-                    {term.name}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Field label="对应人员" hint="截图导入时建议指定">
-              <Select
-                value={personId}
-                onChange={(event) => setPersonId(event.target.value)}
-              >
-                <option value="">不指定</option>
-                {(persons.data?.items ?? []).map((person) => (
-                  <option key={person.id} value={person.id}>
-                    {person.fullName}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-          </div>
-
-          {terms.error ? (
-            <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-400">
-              学期加载失败：{terms.error}
-            </p>
-          ) : null}
-          {persons.error ? (
-            <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
-              人员加载失败：{persons.error}
-            </p>
-          ) : null}
-          {!terms.loading && terms.terms.length === 0 ? (
-            <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-400">
-              还没有学期。导入的课程必须挂在学期下，请先到「学期」页创建。
-            </p>
-          ) : null}
-
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-            <p className="text-[11px] text-slate-400">
-              上传后后端解析，状态变为「待确认」后即可逐条修改。
+          <div>
+            <h2 className="text-lg font-medium">拖入一个压缩包，或选择文件</h2>
+            <p className="mx-auto mt-3 max-w-lg text-sm leading-6 text-slate-500">
+              课表、名单、说明文档都可以。保留原来的文件夹和文件名，无需提前整理。
             </p>
             <Button
-              loading={uploading}
-              disabled={!file || !termId}
-              onClick={() => void upload()}
+              className="mt-6"
+              loading={busy}
+              onClick={() => input.current?.click()}
             >
-              上传并解析
+              选择材料
+            </Button>
+            <p className="mt-4 text-xs text-slate-500">
+              支持 ZIP、RAR、7z、TAR/GZ、图片及 Office/PDF · 单次最多 100 MB
+            </p>
+          </div>
+        </section>
+      ) : (
+        <section className="space-y-6">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="min-w-0">
+              <h2 className="break-all text-lg font-medium">{job.title}</h2>
+              <p
+                role="status"
+                aria-live="polite"
+                className="mt-2 text-sm text-slate-500"
+              >
+                {
+                  {
+                    running: "正在整理材料，尚未写入正式数据",
+                    paused: "进度已保存，可以继续处理",
+                    review: "整理完成，请复核后导入",
+                    applied: "已导入，材料将在完成后 8 小时清理",
+                    cancelled: "已取消，材料将在 8 小时后清理",
+                  }[job.status]
+                }
+              </p>
+            </div>
+            <Button
+              variant="ghost"
+              disabled={job.status === "running" || busy}
+              onClick={() => {
+                setJob(null);
+                setIssues([]);
+                setError("");
+              }}
+            >
+              返回导入
             </Button>
           </div>
-        </Card>
-
-        {job ? (
-          <Card
-            title="解析结果"
-            description={`${importSourceLabel(job.sourceKind)} · ${job.fileName ?? "未命名文件"}`}
-            actions={
-              <>
-                <Badge tone={importStatusTone(job.status)}>
-                  {importStatusLabel(job.status)}
-                </Badge>
+          {job.status === "running" && (
+            <div className="border-y border-slate-200 py-5 dark:border-slate-700">
+              <p className="text-sm">
+                {job.log.at(-1)?.text || "正在查看材料与现有数据…"}
+              </p>
+              <p className="mt-2 text-xs text-slate-500">
+                {job.model ? `${job.model} · ` : ""}已完成 {job.turns} 轮 ·
+                关闭页面会暂停，重新打开后可恢复。
+              </p>
+              <Button
+                className="mt-4"
+                variant="secondary"
+                onClick={() => runner.current?.stop()}
+              >
+                完成当前步骤后暂停
+              </Button>
+            </div>
+          )}
+          {job.error && (
+            <p
+              role="alert"
+              className="text-sm text-rose-700 dark:text-rose-300"
+            >
+              {job.error}
+            </p>
+          )}
+          {["paused", "review"].includes(job.status) && (
+            <div className="flex flex-wrap gap-3">
+              <Button
+                variant="secondary"
+                disabled={busy}
+                onClick={() => run(job)}
+              >
+                {job.status === "review" ? "继续自查" : "继续处理"}
+              </Button>
+              <Button
+                variant="ghost"
+                disabled={busy}
+                onClick={() => input.current?.click()}
+              >
+                补充材料
+              </Button>
+              <Button
+                variant="ghost"
+                disabled={busy}
+                onClick={() => void cancel()}
+              >
+                取消本次导入
+              </Button>
+            </div>
+          )}
+          {job.summary && (
+            <p className="max-w-3xl whitespace-pre-wrap text-sm leading-7">
+              {job.summary}
+            </p>
+          )}
+          {!!job.unresolved.length && (
+            <div className="rounded-lg bg-amber-50 p-4 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-200">
+              <p className="font-medium">需要留意</p>
+              <ul className="mt-2 list-disc space-y-1 pl-5">
+                {job.unresolved.map((x, i) => (
+                  <li key={i}>{x}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {job.status !== "running" && (
+            <Review
+              job={job}
+              onChange={(next) => {
+                void saveJob(next);
+                update(next);
+              }}
+              onSource={(path) => void onSource(path)}
+            />
+          )}
+          {!!issues.length && (
+            <div
+              role="alert"
+              className="text-sm text-rose-700 dark:text-rose-300"
+            >
+              <p>提交前需要解决：</p>
+              <ul className="mt-2 list-disc pl-5">
+                {issues.slice(0, 20).map((x, i) => (
+                  <li key={i}>{x}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {["paused", "review"].includes(job.status) && (
+            <div className="space-y-3 border-t border-slate-200 pt-5">
+              <label htmlFor="import-feedback" className="text-sm font-medium">
+                补充说明或修改意见
+              </label>
+              <Textarea
+                id="import-feedback"
+                value={comment}
+                onChange={(e) => setComment(e.target.value)}
+                placeholder="例如：这两张图是同一个人；第一周从 9 月 7 日开始。"
+                rows={3}
+              />
+              <div className="flex flex-wrap justify-between gap-3">
                 <Button
                   variant="secondary"
-                  size="sm"
-                  disabled={!job.parsed}
-                  onClick={() => setDraft(job.parsed)}
+                  disabled={!comment.trim() || busy}
+                  onClick={async () => {
+                    await feedback(job, comment);
+                    setComment("");
+                    run(job);
+                  }}
                 >
-                  重置为解析结果
+                  让 Agent 修改
                 </Button>
-              </>
-            }
-          >
-            <div className="mb-3 flex flex-wrap items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
-              <span>创建：{dateTimeText(job.createdAt)}</span>
-              {job.updatedAt ? (
-                <span>更新：{dateTimeText(job.updatedAt)}</span>
-              ) : null}
-              {draft?.personName ? (
-                <Badge tone="info">人员：{draft.personName}</Badge>
-              ) : null}
-            </div>
-
-            {job.status === "uploaded" || job.status === "parsing" ? (
-              <div className="flex items-center justify-center gap-2 py-10 text-sm text-slate-500">
-                <Spinner size="sm" />
-                解析中…页面会自动刷新状态
-              </div>
-            ) : job.status === "failed" ? (
-              <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm dark:border-rose-500/30 dark:bg-rose-500/10">
-                <p className="font-medium text-rose-700 dark:text-rose-300">
-                  解析失败
-                </p>
-                <p className="mt-1 text-xs break-words text-rose-600 dark:text-rose-300/90">
-                  {job.error ?? "后端没有返回具体原因"}
-                </p>
-              </div>
-            ) : draft ? (
-              <div className="space-y-4">
-                {draft.warnings.length > 0 ? (
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
-                    <p className="font-medium">解析提示</p>
-                    <ul className="mt-1 list-inside list-disc space-y-0.5">
-                      {draft.warnings.map((warning) => (
-                        <li key={warning} className="break-words">
-                          {warning}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-
-                {draft.courses.length === 0 ? (
-                  <EmptyState
-                    title="没有解析出课程"
-                    description="可以重新上传更清晰的文件，或手工在课表页添加。"
-                  />
-                ) : (
-                  <div className="space-y-3">
-                    {draft.courses.map((course, courseIndex) => (
-                      <div
-                        key={courseIndex}
-                        className="rounded-xl border border-slate-200 p-3 dark:border-slate-800"
-                      >
-                        <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
-                          <Field label="课程名">
-                            <TextInput
-                              value={course.name}
-                              onChange={(event) =>
-                                updateCourse(courseIndex, {
-                                  name: event.target.value,
-                                })
-                              }
-                            />
-                          </Field>
-                          <Field label="教师">
-                            <TextInput
-                              value={course.teacher ?? ""}
-                              onChange={(event) =>
-                                updateCourse(courseIndex, {
-                                  teacher: event.target.value,
-                                })
-                              }
-                            />
-                          </Field>
-                          <div className="flex items-end justify-end">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              disabled={job.status === "applied"}
-                              onClick={() => removeCourse(courseIndex)}
-                            >
-                              移除课程
-                            </Button>
-                          </div>
-                        </div>
-
-                        <div className="mt-2 space-y-2">
-                          {course.meetings.map((meeting, meetingIndex) => (
-                            <div
-                              key={meetingIndex}
-                              className="grid grid-cols-2 gap-2 rounded-lg bg-slate-50 p-2 sm:grid-cols-3 lg:grid-cols-6 dark:bg-slate-800/40"
-                            >
-                              <Field label="星期">
-                                <Select
-                                  value={meeting.weekday}
-                                  onChange={(event) =>
-                                    updateMeeting(courseIndex, meetingIndex, {
-                                      weekday: Number(event.target.value),
-                                    })
-                                  }
-                                >
-                                  {WEEKDAYS.map((day) => (
-                                    <option key={day} value={day}>
-                                      {weekdayName(day)}
-                                    </option>
-                                  ))}
-                                </Select>
-                              </Field>
-                              <Field label="起始节">
-                                <TextInput
-                                  type="number"
-                                  min={1}
-                                  value={meeting.periodFrom}
-                                  onChange={(event) =>
-                                    updateMeeting(courseIndex, meetingIndex, {
-                                      periodFrom: Number(event.target.value),
-                                    })
-                                  }
-                                />
-                              </Field>
-                              <Field label="结束节">
-                                <TextInput
-                                  type="number"
-                                  min={1}
-                                  value={meeting.periodTo}
-                                  onChange={(event) =>
-                                    updateMeeting(courseIndex, meetingIndex, {
-                                      periodTo: Number(event.target.value),
-                                    })
-                                  }
-                                />
-                              </Field>
-                              <Field label="周次模式">
-                                <Select
-                                  value={meeting.patternKind}
-                                  onChange={(event) =>
-                                    updateMeeting(courseIndex, meetingIndex, {
-                                      patternKind: event.target
-                                        .value as WeekPatternKind,
-                                    })
-                                  }
-                                >
-                                  {WEEK_PATTERN_OPTIONS.map((option) => (
-                                    <option
-                                      key={option.value}
-                                      value={option.value}
-                                    >
-                                      {option.label}
-                                    </option>
-                                  ))}
-                                </Select>
-                              </Field>
-                              {meeting.patternKind === "ranges" ? (
-                                <Field label="周次范围">
-                                  <TextInput
-                                    value={meeting.weekRanges ?? ""}
-                                    onChange={(event) =>
-                                      updateMeeting(courseIndex, meetingIndex, {
-                                        weekRanges: event.target.value,
-                                      })
-                                    }
-                                    placeholder="1-8"
-                                  />
-                                </Field>
-                              ) : null}
-                              <Field label="地点">
-                                <TextInput
-                                  value={meeting.location ?? ""}
-                                  onChange={(event) =>
-                                    updateMeeting(courseIndex, meetingIndex, {
-                                      location: event.target.value,
-                                    })
-                                  }
-                                  placeholder="可选"
-                                />
-                              </Field>
-                              <div className="col-span-2 flex items-end justify-end sm:col-span-3 lg:col-span-6">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  disabled={job.status === "applied"}
-                                  onClick={() =>
-                                    removeMeeting(courseIndex, meetingIndex)
-                                  }
-                                >
-                                  删除这条规则
-                                </Button>
-                              </div>
-                            </div>
-                          ))}
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            disabled={job.status === "applied"}
-                            onClick={() => addMeeting(courseIndex)}
-                          >
-                            加一条上课规则
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
-                  <p className="text-[11px] text-slate-400">
-                    确认后会把课程、选课与上课规则写入数据库。
-                  </p>
+                {job.status === "review" && (
                   <Button
-                    loading={applying}
-                    disabled={
-                      job.status === "applied" || draft.courses.length === 0
-                    }
-                    onClick={() => void apply()}
+                    loading={busy}
+                    disabled={!!issues.length}
+                    onClick={() => void finish()}
                   >
-                    {job.status === "applied" ? "已落库" : "确认落库"}
+                    审核无误，导入全部选中内容
                   </Button>
-                </div>
+                )}
               </div>
-            ) : (
-              <EmptyState
-                title="没有解析结果"
-                description="后端已返回但 parsed 为空，可以重新上传。"
-              />
-            )}
-          </Card>
-        ) : null}
-
-        <Card
-          title="导入历史"
-          description="最近 50 条；点「查看」载入解析结果。"
-        >
-          <ListState
-            loading={history.loading}
-            error={history.error}
-            empty={(history.data?.items.length ?? 0) === 0}
-            onRetry={history.reload}
-            emptyTitle="还没有导入记录"
-            emptyDescription="上传第一份课表后，这里会出现解析状态与结果。"
-          >
-            <DataTable
-              columns={historyColumns}
-              rows={history.data?.items ?? []}
-              rowKey={(item) => item.id}
-              minWidth="min-w-[680px]"
+            </div>
+          )}
+          <details className="text-xs text-slate-500">
+            <summary className="cursor-pointer">
+              处理记录 · {job.log.length} 条
+            </summary>
+            <ol className="mt-3 max-h-64 space-y-2 overflow-auto">
+              {job.log.map((item, i) => (
+                <li key={i} className="break-words">
+                  <time>{new Date(item.at).toLocaleTimeString()}</time>{" "}
+                  {item.text}
+                </li>
+              ))}
+            </ol>
+          </details>
+        </section>
+      )}
+      {error && (
+        <p role="alert" className="text-sm text-rose-700 dark:text-rose-300">
+          {error}
+        </p>
+      )}
+      {!job && jobs.length > 0 && (
+        <details>
+          <summary className="cursor-pointer text-sm text-slate-600 dark:text-slate-300">
+            本机最近导入 · {jobs.length} 批
+          </summary>
+          <ul className="mt-4 divide-y divide-slate-200 dark:divide-slate-700">
+            {jobs.map((j) => (
+              <li
+                key={j.id}
+                className="flex items-center justify-between gap-3 py-3"
+              >
+                <button
+                  className="min-w-0 text-left text-sm underline-offset-4 hover:underline"
+                  onClick={() => {
+                    if (j.status === "running") j.status = "paused";
+                    update(j);
+                  }}
+                >
+                  <span className="block break-all">{j.title}</span>
+                  <span className="text-xs text-slate-500">
+                    {new Date(j.createdAt).toLocaleString()} ·{" "}
+                    {
+                      {
+                        paused: "已暂停",
+                        running: "可恢复",
+                        review: "待复核",
+                        applied: "已导入",
+                        cancelled: "已取消",
+                      }[j.status]
+                    }
+                  </span>
+                </button>
+                {["applied", "cancelled"].includes(j.status) && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={async () => {
+                      await deleteJob(j.id);
+                      setJobs(await listJobs(owner));
+                    }}
+                  >
+                    立即清理
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      <p className="text-xs leading-5 text-slate-500">
+        材料在本机处理，模型按需读取内容。正式数据仅在你确认后写入。完成或取消后保留
+        8 小时；浏览器关闭期间到期的材料，下次打开时清理。
+      </p>
+      {source && (
+        <Modal onClose={() => setSource(null)} title="查看来源" size="lg">
+          <p className="mb-3 break-all text-sm">{source?.path}</p>
+          {source.pages && source.pages > 1 && (
+            <div className="mb-4 flex items-center gap-3">
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={busy || source.page === 1}
+                onClick={() =>
+                  void onSource(source.path, (source.page ?? 1) - 1)
+                }
+              >
+                上一页
+              </Button>
+              <span className="text-sm">
+                第 {source.page} / {source.pages} 页
+              </span>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={busy || source.page === source.pages}
+                onClick={() =>
+                  void onSource(source.path, (source.page ?? 1) + 1)
+                }
+              >
+                下一页
+              </Button>
+            </div>
+          )}
+          {source?.image ? (
+            <img
+              src={source.image}
+              alt={source.path}
+              className="h-auto w-full"
             />
-          </ListState>
-        </Card>
-      </div>
+          ) : (
+            <pre className="max-h-[65vh] overflow-auto whitespace-pre-wrap break-words text-xs">
+              {source?.text}
+            </pre>
+          )}
+        </Modal>
+      )}
     </div>
   );
 }

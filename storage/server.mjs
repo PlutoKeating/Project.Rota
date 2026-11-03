@@ -44,6 +44,8 @@ export function createDataServer({ db, authorization, files, basePath = '' }) {
         const { statements } = JSON.parse((await body(req, 16 * 1024 * 1024)).toString());
         if (!Array.isArray(statements) || !statements.length || statements.length > 20000 || statements.some(s => typeof s.sql !== 'string' || !Array.isArray(s.params))) return json(res, 400, { error: 'invalid_query' });
         db.exec('BEGIN IMMEDIATE');
+        // Validate references at commit so an atomic graph edit may move children before deleting/replacing parents.
+        db.exec('PRAGMA defer_foreign_keys=ON');
         try {
           const results = statements.map(({ sql, params }) => {
             // Only the trusted Worker may submit business statements, never connection/transaction control.
@@ -57,7 +59,7 @@ export function createDataServer({ db, authorization, files, basePath = '' }) {
         } catch (e) {
           db.exec('ROLLBACK');
           // Only return constraint markers needed by the API; never expose SQL or bound values.
-          const marker = String(e.message).match(/(shift_closed|shift_full|person_overlap|last_owner|UNIQUE constraint failed|FOREIGN KEY constraint failed)/)?.[0];
+          const marker = String(e.message).match(/(agent_locked|shift_closed|shift_full|person_overlap|last_owner|UNIQUE constraint failed|FOREIGN KEY constraint failed)/)?.[0];
           return json(res, 409, { error: marker ?? 'database_operation_failed' });
         }
       }

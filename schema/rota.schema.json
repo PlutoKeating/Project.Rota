@@ -806,6 +806,13 @@
             "additionalProperties": false,
             "description": "\u4eba\u3002\u53ef\u5c5e\u4e8e 0..N \u4e2a\u7ec4\u7ec7\uff0c\u5f52\u5c5e\u4e0e\u89d2\u8272\u89c1 Membership\u3002",
             "properties": {
+                "class_name": {
+                    "description": "\u6750\u6599\u4e2d\u660e\u786e\u8bb0\u5f55\u7684\u73ed\u7ea7\uff0c\u5141\u8bb8\u4e3a\u7a7a\u3002",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
                 "created_at": {
                     "format": "date-time",
                     "type": "string"
@@ -822,6 +829,13 @@
                 "id": {
                     "description": "\u4e3b\u952e\uff0cULID \u5b57\u7b26\u4e32\uff0c\u6309\u65f6\u95f4\u6709\u5e8f",
                     "type": "string"
+                },
+                "major": {
+                    "description": "\u4e13\u4e1a\uff0c\u8f85\u52a9\u540c\u540d\u4eba\u5458\u5339\u914d\u3002",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
                 },
                 "phone": {
                     "type": [
@@ -1400,6 +1414,174 @@
             ],
             "title": "TermStatus",
             "type": "string"
+        },
+        "TimetableEntry": {
+            "additionalProperties": false,
+            "description": "\u6bcf\u4eba\u72ec\u7acb\u7684\u8bfe\u7a0b\u89c4\u5219\uff0c\u907f\u514d\u540c\u540d\u8bfe\u7a0b\u7684\u5171\u4eab\u4fee\u6539\u3002",
+            "properties": {
+                "created_at": {
+                    "format": "date-time",
+                    "type": "string"
+                },
+                "id": {
+                    "description": "\u4e3b\u952e\uff0cULID \u5b57\u7b26\u4e32\uff0c\u6309\u65f6\u95f4\u6709\u5e8f",
+                    "type": "string"
+                },
+                "location": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "name": {
+                    "type": "string"
+                },
+                "period_from": {
+                    "minimum": 1,
+                    "type": [
+                        "integer",
+                        "null"
+                    ]
+                },
+                "period_to": {
+                    "minimum": 1,
+                    "type": [
+                        "integer",
+                        "null"
+                    ]
+                },
+                "person_id": {
+                    "type": "string"
+                },
+                "profile_id": {
+                    "type": "string"
+                },
+                "teacher": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "term_id": {
+                    "type": "string"
+                },
+                "weekday": {
+                    "description": "1=\u5468\u4e00 \u2026 7=\u5468\u65e5\uff08ISO 8601\uff09",
+                    "maximum": 7,
+                    "minimum": 1,
+                    "type": [
+                        "integer",
+                        "null"
+                    ]
+                },
+                "weeks": {
+                    "description": "\u660e\u786e\u6559\u5b66\u5468\u6b21\u7684 JSON \u6570\u7ec4\u3002",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "id",
+                "person_id",
+                "term_id",
+                "profile_id",
+                "name",
+                "weeks",
+                "created_at"
+            ],
+            "title": "TimetableEntry",
+            "type": "object"
+        },
+        "TimetableEvent": {
+            "additionalProperties": false,
+            "description": "\u72ec\u7acb\u8bfe\u8868\u5c55\u5f00\u7684\u5b9e\u9645\u65f6\u95f4\u6bb5\uff0c\u4f9b\u53ef\u7528\u6027\u4e0e\u6d3e\u73ed\u51b2\u7a81\u67e5\u8be2\u3002",
+            "properties": {
+                "ends_at": {
+                    "format": "date-time",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "entry_id": {
+                    "type": "string"
+                },
+                "id": {
+                    "description": "\u4e3b\u952e\uff0cULID \u5b57\u7b26\u4e32\uff0c\u6309\u65f6\u95f4\u6709\u5e8f",
+                    "type": "string"
+                },
+                "period_index": {
+                    "minimum": 1,
+                    "type": [
+                        "integer",
+                        "null"
+                    ]
+                },
+                "person_id": {
+                    "type": "string"
+                },
+                "starts_at": {
+                    "format": "date-time",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "term_id": {
+                    "type": "string"
+                },
+                "week_index": {
+                    "minimum": 1,
+                    "type": [
+                        "integer",
+                        "null"
+                    ]
+                },
+                "weekday": {
+                    "description": "1=\u5468\u4e00 \u2026 7=\u5468\u65e5\uff08ISO 8601\uff09",
+                    "maximum": 7,
+                    "minimum": 1,
+                    "type": [
+                        "integer",
+                        "null"
+                    ]
+                }
+            },
+            "required": [
+                "id",
+                "entry_id",
+                "person_id",
+                "term_id"
+            ],
+            "title": "TimetableEvent",
+            "type": "object"
+        },
+        "TimetableProfile": {
+            "additionalProperties": false,
+            "description": "\u540c\u4e00\u5b66\u671f\u7684\u4e00\u5957\u4f5c\u606f\uff0c\u4e2a\u4eba\u8bfe\u8868\u53ef\u9009\u62e9\u4e0d\u540c\u4f5c\u606f\u3002",
+            "properties": {
+                "id": {
+                    "description": "\u4e3b\u952e\uff0cULID \u5b57\u7b26\u4e32\uff0c\u6309\u65f6\u95f4\u6709\u5e8f",
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "periods": {
+                    "description": "\u660e\u786e\u8282\u6b21\u7684 JSON \u6570\u7ec4\uff0c\u6bcf\u9879 index/start/end\uff1b\u4ec5\u57fa\u7840\u6570\u636e\uff0c\u4e0d\u89e3\u6790\u6750\u6599\u3002",
+                    "type": "string"
+                },
+                "term_id": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "id",
+                "term_id",
+                "name",
+                "periods"
+            ],
+            "title": "TimetableProfile",
+            "type": "object"
         },
         "Unavailability": {
             "additionalProperties": false,

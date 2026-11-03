@@ -33,7 +33,7 @@ interface Catalog {
     name: string;
     kind: string | null;
     baseUrl: string;
-    models: { id: string; name: string; vision: boolean; context: number }[];
+    models: { id: string; name: string; vision: boolean; toolCalling?: boolean; context: number }[];
   }[];
 }
 export function ModelsPage() {
@@ -167,6 +167,7 @@ export function ModelsPage() {
         params: {
           catalogId: provider.id,
           vision: provider.models.find((m) => m.id === model)!.vision,
+          toolCalling: provider.models.find((m) => m.id === model)!.toolCalling,
         },
       })),
     ]);

@@ -1,3 +1,4 @@
+import browserImportMigration from "../../migrations/0005_browser_agent_import.sql?raw";
 import { DatabaseSync } from "node:sqlite";
 
 /**
@@ -63,6 +64,7 @@ export class D1Stub {
   constructor(ddl: string) {
     this.db = new DatabaseSync(":memory:");
     this.db.exec(ddl);
+    this.db.exec(browserImportMigration);
   }
 
   prepare(sql: string): Statement {
@@ -71,6 +73,7 @@ export class D1Stub {
 
   async batch(statements: Statement[]): Promise<unknown[]> {
     this.db.exec("BEGIN");
+    this.db.exec("PRAGMA defer_foreign_keys=ON");
     try {
       const results = statements.map((statement) => statement.runSync());
       this.db.exec("COMMIT");

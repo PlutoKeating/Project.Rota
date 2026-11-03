@@ -5,9 +5,9 @@ export interface CatalogProvider {
   name: string;
   kind: string | null;
   baseUrl: string;
-  models: { id: string; name: string; vision: boolean; context: number }[];
+  models: { id: string; name: string; vision: boolean; toolCalling?: boolean; context: number }[];
 }
-export async function catalog(env: Env, force = false) {
+export async function catalog(env: Env, force = false): Promise<{fetchedAt:string;providers:CatalogProvider[];stale:boolean;error?:string}> {
   const raw = await env.CONFIG.get("llm:catalog:v2");
   let cached: { fetchedAt: string; providers: CatalogProvider[] } | null = null;
   try {
@@ -37,6 +37,7 @@ export async function catalog(env: Env, force = false) {
           {
             id: string;
             name: string;
+            tool_call?: boolean;
             modalities?: { input?: string[] };
             limit?: { context?: number };
           }
@@ -81,6 +82,7 @@ export async function catalog(env: Env, force = false) {
           id: m.id || mid,
           name: m.name || mid,
           vision: m.modalities?.input?.includes("image") ?? false,
+          toolCalling: m.tool_call,
           context: m.limit?.context ?? 0,
         })),
       }))

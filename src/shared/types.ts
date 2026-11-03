@@ -106,6 +106,8 @@ export interface TermDetail {
 export interface Person {
   id: Id;
   studentNo: string | null;
+  className?: string | null;
+  major?: string | null;
   fullName: string;
   email: string | null;
   phone: string | null;

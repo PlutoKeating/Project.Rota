@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { HealthResponse } from "../shared/types";
+import { agentImports } from "./api/agent-import";
 import { admin } from "./api/admin";
 import { auth } from "./api/auth";
 import { courses } from "./api/courses";
@@ -22,6 +23,7 @@ app.onError((err, c) => {
   if (err instanceof HttpError) {
     return c.json({ error: { code: err.code, message: err.message } }, err.status as 400);
   }
+  if (String(err.message).includes("agent_locked")) return c.json({error:{code:"conflict",message:"相关数据正在导入复核中，请稍后重试"}},409);
   console.error("[unhandled]", err);
   return c.json({ error: { code: "internal", message: "服务器内部错误" } }, 500);
 });
@@ -58,6 +60,7 @@ app.use("/api/*", async (c, next) => {
   await next();
 });
 
+app.route("/api/agent-imports", agentImports);
 app.route("/api", terms);
 app.route("/api", people);
 app.route("/api", courses);

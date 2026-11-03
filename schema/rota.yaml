@@ -401,6 +401,19 @@ slots:
 # 类
 # ---------------------------------------------------------------------------
 
+  class_name:
+    description: 材料中明确记录的班级，允许为空。
+  major:
+    description: 专业，辅助同名人员匹配。
+  profile_id:
+    range: TimetableProfile
+  entry_id:
+    range: TimetableEntry
+  periods:
+    description: 明确节次的 JSON 数组，每项 index/start/end；仅基础数据，不解析材料。
+  weeks:
+    description: 明确教学周次的 JSON 数组。
+
 classes:
 
   # ===== 校历与时间网格 =====
@@ -482,6 +495,8 @@ classes:
     slots:
       - id
       - student_no
+      - class_name
+      - major
       - full_name
       - email
       - phone
@@ -905,3 +920,32 @@ classes:
       - payload
       - actor_ip
       - created_at
+
+  TimetableProfile:
+    description: 同一学期的一套作息，个人课表可选择不同作息。
+    in_subset: [core]
+    slots: [id, term_id, name, periods]
+    slot_usage:
+      term_id: {required: true}
+      name: {required: true}
+      periods: {required: true}
+
+  TimetableEntry:
+    description: 每人独立的课程规则，避免同名课程的共享修改。
+    in_subset: [core]
+    slots: [id, person_id, term_id, profile_id, name, teacher, location, weekday, period_from, period_to, weeks, created_at]
+    slot_usage:
+      person_id: {required: true}
+      term_id: {required: true}
+      profile_id: {required: true}
+      name: {required: true}
+      weeks: {required: true}
+
+  TimetableEvent:
+    description: 独立课表展开的实际时间段，供可用性与派班冲突查询。
+    in_subset: [core]
+    slots: [id, entry_id, person_id, term_id, week_index, weekday, period_index, starts_at, ends_at]
+    slot_usage:
+      entry_id: {required: true}
+      person_id: {required: true}
+      term_id: {required: true}

@@ -100,10 +100,11 @@ export async function previewShift(
   const conflicts = await dbAll<{ personId: string }>(db, `
     select person_id from unavailability where status = 'approved'
       and julianday(starts_at) < julianday(?) and julianday(ends_at) > julianday(?)
+    union select person_id from timetable_event where julianday(starts_at)<julianday(?) and julianday(ends_at)>julianday(?)
     union select a.person_id from assignment a join shift s on s.id = a.shift_id
       where a.status in ('proposed','confirmed','completed') and s.status != 'cancelled'
       and julianday(s.starts_at) < julianday(?) and julianday(s.ends_at) > julianday(?)`,
-    shift.endsAt, shift.startsAt, shift.endsAt, shift.startsAt);
+    shift.endsAt, shift.startsAt, shift.endsAt, shift.startsAt, shift.endsAt, shift.startsAt);
   const conflictIds = new Set(conflicts.map(row => row.personId));
   const skilled = shift.requiredSkillId ? new Set((await dbAll<{ personId: string }>(db,
     "select person_id from person_skill where skill_id=?", shift.requiredSkillId)).map(row => row.personId)) : null;

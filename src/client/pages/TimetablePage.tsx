@@ -1,3 +1,4 @@
+import { PersonalTimetable } from "../components/PersonalTimetable";
 import { CourseAdjustments } from "../components/CourseAdjustments";
 import { UnavailabilityEditor } from "../components/UnavailabilityEditor";
 import { useEffect, useMemo, useState } from "react";
@@ -329,6 +330,7 @@ export function TimetablePage({
 
   return (
     <div className="space-y-4 sm:space-y-5">
+      {termId && personId && <PersonalTimetable key={`${personId}-${termId}-${version}`} personId={personId} termId={termId} week={week} onChanged={()=>setVersion(v=>v+1)}/>}
       {termId && personId && (
         <CourseAdjustments
           key={`${termId}-${personId}-${version}`}

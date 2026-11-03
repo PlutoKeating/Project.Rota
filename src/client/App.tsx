@@ -1,12 +1,12 @@
 import { AuthGate } from "./components/AuthGate";
-import { useEffect } from "react";
+import { useEffect, lazy, Suspense } from "react";
 import { EmptyState } from "./components/EmptyState";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Layout } from "./components/Layout";
 import { ToastProvider } from "./components/Toast";
 import { useRoute } from "./lib/router";
 import { FairnessPage } from "./pages/FairnessPage";
-import { ImportsPage } from "./pages/ImportsPage";
+const ImportsPage=lazy(()=>import("./pages/ImportsPage").then(m=>({default:m.ImportsPage})));
 
 import { PeoplePage } from "./pages/PeoplePage";
 import { SchedulePage } from "./pages/SchedulePage";
@@ -29,7 +29,7 @@ const PAGE_META: Record<string, { title: string; subtitle: string }> = {
   tasks: { title: "任务", subtitle: "一件活、它的班次与按周生成规则" },
   schedule: { title: "排班", subtitle: "试排、确认分配、整任务自动排" },
   fairness: { title: "公平账本", subtitle: "按次数升序，谁最亏谁在前" },
-  imports: { title: "导入", subtitle: "上传课表，解析后人工确认再落库" },
+  imports: { title: "导入", subtitle: "交给 Agent 整理，复核后统一导入" },
   settings: { title: "管理", subtitle: "校历、排班规则与服务配置" },
 };
 
@@ -39,7 +39,7 @@ function metaFor(segments: string[]): { title: string; subtitle: string } {
     return { title: "任务详情", subtitle: "班次列表、添加班次与按周生成" };
   }
   if (head === "imports" && segments[1]) {
-    return { title: "导入详情", subtitle: "解析状态与结果确认" };
+    return { title: "导入详情", subtitle: "材料整理与复核" };
   }
   return (
     PAGE_META[head] ?? {
@@ -69,7 +69,7 @@ function renderPage(segments: string[]) {
     case "fairness":
       return <FairnessPage />;
     case "imports":
-      return <ImportsPage />;
+      return <Suspense fallback={<p role="status">正在打开导入…</p>}><ImportsPage /></Suspense>;
     case "settings":
       return <SettingsPage />;
     default:

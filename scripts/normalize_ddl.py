@@ -17,6 +17,9 @@ import sys
 
 # 与 schema/rota.yaml 的 classes 一一对应
 CLASS_NAMES = [
+    "TimetableProfile",
+    "TimetableEntry",
+    "TimetableEvent",
     "Term",
     "ClassPeriod",
     "Slot",

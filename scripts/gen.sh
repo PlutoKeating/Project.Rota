@@ -8,7 +8,9 @@ cd "$(dirname "$0")/.."
 
 LINKML_BIN="${LINKML_BIN:-linkml}"
 SCHEMA="schema/rota.yaml"
-OUT_DDL="migrations/0001_init.sql"
+# Historical migrations are immutable. The generated current schema is a reference,
+# not a migration; incremental migrations must be reviewed separately.
+OUT_DDL="schema/rota.current.sql"
 TMP_DDL="$(mktemp)"
 trap 'rm -f "$TMP_DDL"' EXIT
 
@@ -20,7 +22,7 @@ echo "→ 生成 SQLite DDL"
 python3 scripts/normalize_ddl.py "$TMP_DDL" "$OUT_DDL"
 
 echo "→ 生成 ER 图"
-"$LINKML_BIN" generate erdiagram "$SCHEMA" >docs/er.md
+"$LINKML_BIN" generate erdiagram "$SCHEMA" | sed 's/[[:space:]]*$//' >docs/er.md
 
 echo "→ 生成 JSON Schema"
 "$LINKML_BIN" generate json-schema "$SCHEMA" >schema/rota.schema.json
