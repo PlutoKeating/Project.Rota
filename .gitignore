@@ -1,0 +1,29 @@
+# 依赖与构建产物
+node_modules/
+dist/
+.wrangler/
+coverage/
+*.tsbuildinfo
+
+# 本地环境与密钥
+.env
+.env.*
+!.env.example
+.dev.vars
+!.dev.vars.example
+
+# Python（LinkML 工具链）
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# 编辑器和系统
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# 日志
+*.log
+pnpm-debug.log*
