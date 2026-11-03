@@ -22,8 +22,8 @@ pnpm dev        # 第二个终端：http://localhost:5173
 ## 新部署
 
 1. 按 [数据服务部署](../storage/docs/QUICK_START.md) 创建独立容器、持久目录、HTTPS 入口和备份。启动自动运行 SQLite 迁移。
-2. 修改 `wrangler.jsonc` 的账户、Worker 名称和 APP_ORIGIN，保留 Workers AI 绑定（用于默认截图模型）。不创建 D1/KV/R2。
-3. 向身份服务登记授权码 + PKCE 客户端；回调精确为 `APP_ORIGIN + /api/auth/callback`，issuer 包括发现文档中的末尾 `/`。公共客户端无需密码；机密客户端可设置 `OIDC_CLIENT_SECRET`。
+2. 核对 `wrangler.jsonc` 的账户和 Worker 名称；唯一生产域名为 `rota.plutokeating.beer`，`APP_ORIGIN` 固定为 `https://rota.plutokeating.beer`。配置通过 `routes` 的 `custom_domain: true` 绑定该域名，并通过 `workers_dev: false`、`preview_urls: false` 关闭临时入口与版本预览 URL。保留 Workers AI 绑定（用于默认截图模型），不创建 D1/KV/R2。
+3. 向 `https://id.plutokeating.beer/` 登记授权码 + PKCE 客户端 `project-rota`；登录/注册完成后的授权回调仅保留 `https://rota.plutokeating.beer/api/auth/callback`，删除旧临时域名回调。若客户端配置应用主页或允许来源，统一为 `https://rota.plutokeating.beer`。issuer 保留末尾 `/`。公共客户端无需密码；机密客户端可设置 `OIDC_CLIENT_SECRET`。
 4. 通过私有操作核验 OIDC subject，插入 `admin_user` 为启用 owner。不要把真实身份或账号清单提交仓库。
 5. 设置 Worker Secrets 并部署：
 
@@ -34,6 +34,8 @@ pnpm deploy
 ```
 
 DATA_SERVICE_URL 是私有 HTTPS 基础 URL；DATA_SERVICE_AUTHORIZATION 是完整 Authorization 头，必须与容器 DATA_AUTHORIZATION 一致。凭据仅供 Worker 到数据服务，不能发送浏览器。`pnpm deploy` 执行检查、构建和发布；数据库迁移由数据服务启动执行。
+
+域名切换必须同步更新身份服务客户端的登记配置；仓库部署不会自动修改身份服务。发布前确认自定义域名的 DNS/TLS 已就绪，发布后核对 `/api/auth/login` 的 `redirect_uri` 并完成一次真实登录/注册返回流程。旧域名 Cookie 不会迁移，用户需要在新域名重新登录。本次无需依赖、Secret 或数据库迁移变更。
 
 ## 自动部署
 

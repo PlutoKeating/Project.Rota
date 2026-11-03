@@ -22,6 +22,8 @@
 
 ## 4. 认证与权限
 
+生产前端与 API 统一使用 `https://rota.plutokeating.beer`，由 Wrangler 自定义域名路由绑定；禁用 Workers 临时入口与版本预览 URL。
+
 身份来源为 `https://id.plutokeating.beer/` 的公开 OIDC 协议。使用 `oauth4webapi` 实现授权码 + PKCE S256、state、nonce、发现文档和 JWKS 验签，校验 issuer/audience/有效期。授权流程保存在 ECS SQLite，10 分钟有效，回调原子消费一次，并绑定浏览器 HttpOnly Cookie。
 
 验证成功后只允许 `admin_user` 中启用的 subject 登录，不自动注册管理员、不以“第一个登录的人”为所有者。初始所有者通过私有部署操作加入数据库。后续由所有者在设置页维护名单。

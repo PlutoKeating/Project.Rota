@@ -1,5 +1,7 @@
 # Worker 边界
 
+生产 `APP_ORIGIN` 为 `https://rota.plutokeating.beer`，授权请求与换取令牌共同使用由它生成的 `/api/auth/callback`；写请求来源校验也使用同一配置。登录/注册共用 OIDC 授权回调，账号系统仍为 `https://id.plutokeating.beer/`。
+
 - `/work` 在写入前验证日期、人数、部门和每次重复所在学期，单个 batch 提交 task、shift 与审计，失败不留下空任务。
 - `/persons/import` 限制 1–300 人，必填姓名/学号；重复学号整批拒绝。人员、可选部门成员关系与审计一次提交。
 - `llm/catalog.ts` 从固定 HTTPS models.dev/api.json 获取目录，按一小时缓存，支持手动刷新。刷新失败返回带 stale 标记的上次成功目录；首次失败返回可重试错误。未知 SDK 协议不出现在可选列表，不假设全部兼容 OpenAI。

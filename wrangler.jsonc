@@ -1,6 +1,11 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "project-rota",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    { "pattern": "rota.plutokeating.beer", "custom_domain": true }
+  ],
   "main": "src/worker/index.ts",
   "compatibility_date": "2026-09-01",
   "compatibility_flags": [
@@ -19,7 +24,7 @@
     "APP_ENV": "production",
     "OIDC_ISSUER": "https://id.plutokeating.beer/",
     "OIDC_CLIENT_ID": "project-rota",
-    "APP_ORIGIN": "https://project-rota.williamhvollita.workers.dev"
+    "APP_ORIGIN": "https://rota.plutokeating.beer"
   },
   "account_id": "7a495b2c871926a73fd06fbef7dd3b75",
   "ai": {

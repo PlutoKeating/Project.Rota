@@ -1,5 +1,7 @@
 # Worker
 
+生产唯一入口为 `https://rota.plutokeating.beer`；`wrangler.jsonc` 配置自定义域名并禁用临时入口和版本预览 URL。OIDC 客户端登记回调为 `https://rota.plutokeating.beer/api/auth/callback`，身份服务侧须同步删除旧临时域名回调。
+
 Hono 统一提供认证、业务 API、目录代理与模型网关。继续使用 ECS 数据服务的 SQL/KV 兼容接口，没有新增 Cloudflare 数据绑定或数据库迁移。
 
 新增能力：`POST /work` 原子创建任务与重复班次；`POST /persons/import` 原子导入人员与部门关系；管理端 models.dev 目录、模型优先顺序与加密 API 密钥。

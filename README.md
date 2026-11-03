@@ -27,9 +27,18 @@
 | 账号体系（id.plutokeating.beer OIDC） | ✅ PKCE、签名验证、服务端会话、管理员授权 |
 | 邮件 / 短信通知 | ❌ 未做，v1 只做导出 |
 
-当前完成 **v1 业务流程与生产认证接入**。自动化验证覆盖真实 SQL 排班、导入事务、OIDC 验签、权限和存储异常；已部署入口为 [Rota](https://project-rota.williamhvollita.workers.dev)。生产仅允许管理员白名单登录。
+当前完成 **v1 业务流程与生产认证接入**。自动化验证覆盖真实 SQL 排班、导入事务、OIDC 验签、权限和存储异常；唯一生产网页入口为 [Rota](https://rota.plutokeating.beer)。生产仅允许管理员白名单登录。
 
 GitHub Actions 检查提交，Cloudflare Workers Builds 连接仓库后自动构建部署。部署步骤与实际验证边界见 [QUICK_START](docs/QUICK_START.md) 和 [交付进度](docs/PROGRESS.md)。
+
+## 生产域名与账号回调
+
+- 唯一生产地址及 `APP_ORIGIN`：`https://rota.plutokeating.beer`。停用旧临时域名，禁用 Workers 临时入口及版本预览 URL。
+- 账号系统：`https://id.plutokeating.beer/`，OIDC 客户端 ID 为 `project-rota`。
+- 在账号系统注册客户端时，登录/注册完成后的授权回调地址精确填写 `https://rota.plutokeating.beer/api/auth/callback`，删除旧临时域名回调；若配置应用主页或允许来源，同样使用上述生产地址。
+- Rota 使用同一 OIDC 回调完成登录；没有独立注册回调接口。账号注册不自动获得 Rota 管理员权限。
+
+部署与账号系统配置必须同步生效，详见 [部署步骤](docs/QUICK_START.md#新部署)。
 
 ## 五分钟上手
 

@@ -159,6 +159,8 @@
 
 ## 认证
 
+生产 API 基址为 `https://rota.plutokeating.beer/api`。账号系统登记的登录/注册授权回调为 `https://rota.plutokeating.beer/api/auth/callback`。
+
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `GET` | `/auth/me` | `{ authenticated, user, mode }`，未登录 user=null，生产 mode=oidc |
