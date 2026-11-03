@@ -39,7 +39,7 @@ v1 明确不包含邮件/短信通知、通用排课、跨校多租户、全局�
 ## 待收口
 
 - Workers Builds 的 GitHub 连接尚未得到完成确认；目前发布由已登录 Wrangler 执行，不能称为已验证自动部署。
-- 用户 Cloudflare 控制台遇 Turnstile 300010，Worker Builds 连接受阻；现有 Wrangler 登录仍可手动发布。
+- Cloudflare 控制台登录已由用户确认恢复，认证后的账户接口返回 200；Workers Builds 连接仍未完成。已准备独立构建令牌，但连接 API 返回 400，尚无成功构建或 Git 推送触发证据。现有 Wrangler 登录仍可手动发布。
 - 真实用户完成邮箱验证码或第三方登录后的回调验收尚待进行。
 
 ## ECS 数据迁移验证
