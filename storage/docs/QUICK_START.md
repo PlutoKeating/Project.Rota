@@ -13,7 +13,7 @@ pnpm data:dev
 docker build -f storage/Dockerfile -t rota-data:local .
 ```
 
-容器以 UID 1000 运行。事先创建仅该用户可写的持久目录，挂载 `/data`；通过 env_file 注入 `DATA_AUTHORIZATION`，可设置 `BASE_PATH`（默认空），发布端口仅监听宿主机 loopback。镜像内置迁移，启动时自动执行。实际 compose、隧道、SSH 与备份策略保留在私有部署配置中。
+镜像构建时规范化代码只读权限，兼容私有部署环境的 umask 077。容器以 UID 1000 运行。事先创建仅该用户可写的持久目录，挂载 `/data`；通过 env_file 注入 `DATA_AUTHORIZATION`，可设置 `BASE_PATH`（默认空），发布端口仅监听宿主机 loopback。镜像内置迁移，启动时自动执行。实际 compose、隧道、SSH 与备份策略保留在私有部署配置中。
 
 运行 `pnpm check` 包含 HTTP 认证、事务失败回滚、DELETE RETURNING、设置持久化、文件上限/路径保护和 Worker 适配器测试。
 
