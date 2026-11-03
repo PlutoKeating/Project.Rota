@@ -20,6 +20,14 @@ function calls() {
     { name: "tree", args: {} },
     { name: "read_document", args: { path: "说明.txt" } },
     {
+      name: "observe_material",
+      args: {
+        path: "说明.txt",
+        content: "张同学，会计2601，新媒体部门，高等数学每周一第1节，共2周。",
+        unresolved: [],
+      },
+    },
+    {
       name: "mark_file",
       args: {
         path: "说明.txt",

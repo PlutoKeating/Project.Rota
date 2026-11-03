@@ -55,7 +55,7 @@ async function bitmap(blob: Blob, args: Args) {
   if (crop.x + crop.width > width || crop.y + crop.height > height)
     throw Error("裁剪超出图片范围");
   const factor = Math.min(
-    args.scale ?? 1.5,
+    args.scale ?? 1,
     4096 / Math.max(crop.width, crop.height),
   );
   const output = document.createElement("canvas");

@@ -1,4 +1,9 @@
 import { openDB } from "idb";
+import type {
+  Observation,
+  Handoff,
+  TurnMetrics,
+} from "../../shared/agent-import/context";
 import type { ModelMessage } from "ai";
 import type { Evidence, Snapshot } from "../../shared/agent-import/model";
 export const RETENTION = 8 * 60 * 60 * 1000;
@@ -36,10 +41,23 @@ export interface Job {
   unresolved: string[];
   revision: number;
   validatedRevision: number;
+  checkedRevision?: number;
   turns: number;
   model: string;
   error?: string;
   excluded: string[];
+  harnessVersion?: number;
+  observations?: Record<string, Observation>;
+  observationRevision?: number;
+  unrecordedReads?: string[];
+  handoff?: Handoff;
+  preferredProvider?: string;
+  cooldowns?: Record<string, number>;
+  metrics?: TurnMetrics[];
+  progress?: { signature: string; idle: number };
+  phase?: string;
+  requestStartedAt?: number;
+  checkpoint?: { key: string; kind: string; data: unknown };
 }
 const dbPromise = openDB("rota-agent-import", 1, {
   upgrade(db) {
@@ -50,8 +68,59 @@ const dbPromise = openDB("rota-agent-import", 1, {
     );
   },
 });
+// Separate database avoids a version-change lock held by an older open import tab.
+const historyDb = openDB("rota-agent-history", 1, {
+  upgrade(db) {
+    const store = db.createObjectStore("events", { keyPath: ["jobId", "key"] });
+    store.createIndex("jobId", "jobId");
+    store.createIndex("jobAt", ["jobId", "at", "key"]);
+  },
+});
+export async function archive(
+  jobId: string,
+  key: string,
+  kind: string,
+  data: unknown,
+) {
+  const db = await historyDb;
+  const tx = db.transaction("events", "readwrite");
+  if (!(await tx.store.get([jobId, key])))
+    await tx.store.put({ jobId, key, kind, at: Date.now(), data });
+  await tx.done;
+}
+export async function readHistory(jobId: string, offset = 0, key?: string) {
+  const db = await historyDb;
+  if (key) return db.get("events", [jobId, key]);
+  const rows = [];
+  let cursor = await db
+    .transaction("events")
+    .store.index("jobAt")
+    .openCursor(
+      IDBKeyRange.bound(
+        [jobId, 0, ""],
+        [jobId, Number.MAX_SAFE_INTEGER, "\uffff"],
+      ),
+    );
+  if (cursor && offset) cursor = await cursor.advance(offset);
+  while (cursor && rows.length < 10) {
+    rows.push(cursor.value);
+    cursor = await cursor.continue();
+  }
+  return rows;
+}
 export async function saveJob(job: Job) {
+  // The checkpoint and draft commit atomically in the original store. Archive is idempotent
+  // and replayed before any more model/tool work after an interrupted secondary write.
   await (await dbPromise).put("jobs", structuredClone(job));
+  if (job.checkpoint) {
+    await archive(
+      job.id,
+      job.checkpoint.key,
+      job.checkpoint.kind,
+      job.checkpoint.data,
+    );
+    job.checkpoint = undefined;
+  }
 }
 export async function listJobs(owner: string): Promise<Job[]> {
   await cleanup();
@@ -66,6 +135,11 @@ export async function putMaterial(jobId: string, file: Material) {
   await (await dbPromise).put("files", { ...file, jobId });
 }
 export async function deleteJob(id: string) {
+  const history = await historyDb,
+    historyTx = history.transaction("events", "readwrite");
+  for (const key of await historyTx.store.index("jobId").getAllKeys(id))
+    await historyTx.store.delete(key);
+  await historyTx.done;
   const db = await dbPromise,
     tx = db.transaction(["jobs", "files"], "readwrite");
   for (const key of await tx.objectStore("files").index("jobId").getAllKeys(id))

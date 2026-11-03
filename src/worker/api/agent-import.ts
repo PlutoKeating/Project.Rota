@@ -15,7 +15,7 @@ import {
   type Snapshot,
   type Table,
 } from "../../shared/agent-import/model";
-import { agentTurn } from "../llm/agent";
+import { agentTurn, AgentTurnError } from "../llm/agent";
 import { z } from "zod";
 const app = new Hono<{ Bindings: Env }>();
 const fail = (message: string, status = 400): never => {
@@ -193,7 +193,18 @@ app.get("/:id", async (c) =>
 app.post("/:id/turn", async (c) => {
   const row = await batchOwner(c.env.DB, c.req.param("id"), c.get("user").id);
   if (row.status !== "draft") fail("批次已结束", 409);
-  return c.json(await agentTurn(c.env, await c.req.json(), c.req.param("id")));
+  try {
+    return c.json(
+      await agentTurn(c.env, await c.req.json(), c.req.param("id")),
+    );
+  } catch (e) {
+    if (e instanceof AgentTurnError)
+      return c.json(
+        { error: { code: e.code, message: e.message }, metrics: e.metrics },
+        502,
+      );
+    throw e;
+  }
 });
 app.post("/:id/lease", async (c) => {
   const db = c.env.DB,

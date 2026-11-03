@@ -1,6 +1,13 @@
+import {
+  needsHandoff,
+  withoutImages,
+  resumeMessages,
+  advanceProgress,
+  type TurnMetrics,
+} from "../../shared/agent-import/context";
 import { z } from "zod";
 import type { ModelMessage } from "ai";
-import { api } from "../lib/api";
+import { api, ApiError } from "../lib/api";
 import {
   applyChanges,
   canonical,
@@ -17,6 +24,8 @@ import {
 import { toolSpecs, type ToolName } from "../../shared/agent-import/tools";
 import { documentTool } from "./documents";
 import {
+  archive,
+  readHistory,
   materials,
   putMaterial,
   saveJob,
@@ -59,6 +68,7 @@ export async function createJob(owner: string, files: File[]): Promise<Job> {
     owner,
     title: files[0]?.name ?? "导入材料",
     status: "paused",
+    harnessVersion: 2,
     createdAt: Date.now(),
     expiresAt: null,
     base: data,
@@ -79,9 +89,87 @@ export async function createJob(owner: string, files: File[]): Promise<Job> {
   await addFiles(job, files);
   return job;
 }
+function archiveMessages(messages: ModelMessage[]) {
+  return withoutImages(messages).map((m) =>
+    m.role === "assistant" && Array.isArray(m.content)
+      ? { ...m, content: m.content.filter((p) => p.type !== "reasoning") }
+      : m,
+  );
+}
+function recordMetrics(job: Job, metrics: TurnMetrics) {
+  (job.metrics ??= []).push(metrics);
+  if (job.metrics.length > 200) job.metrics.splice(0, job.metrics.length - 200);
+  for (const a of metrics.attempts) {
+    if (a.status === "error")
+      (job.cooldowns ??= {})[a.providerId] = Date.now() + 120000;
+    else if (job.cooldowns) delete job.cooldowns[a.providerId];
+  }
+}
 function log(job: Job, text: string) {
   job.log.push({ at: Date.now(), text });
   if (job.log.length > 1000) job.log.splice(0, job.log.length - 1000);
+}
+async function requestTurn<T>(
+  job: Job,
+  body: unknown,
+  update: () => void,
+): Promise<T> {
+  for (let retry = 0; ; retry++) {
+    const start = Date.now();
+    try {
+      return await api.post<T>(`/agent-imports/${job.id}/turn`, body, {
+        timeoutMs: 130000,
+      });
+    } catch (e) {
+      const supplied =
+        e instanceof ApiError
+          ? (e.details as { metrics?: TurnMetrics } | undefined)?.metrics
+          : undefined;
+      const metrics: TurnMetrics = supplied ?? {
+        requestId: "client-" + crypto.randomUUID(),
+        durationMs: Date.now() - start,
+        purpose: (body as { mode: "work" | "compact" }).mode,
+        attempts: [
+          {
+            providerId: "gateway",
+            model: "未知（请求未返回模型信息）",
+            durationMs: Date.now() - start,
+            status: "error",
+            code: e instanceof ApiError ? e.code : "network",
+            httpStatus: e instanceof ApiError ? e.status : undefined,
+          },
+        ],
+      };
+      recordMetrics(job, metrics);
+      job.checkpoint = {
+        key: "request:" + metrics.requestId,
+        kind: "request",
+        data: metrics,
+      };
+      await saveJob(job);
+      const transient =
+        e instanceof ApiError &&
+        [0, 429, 502, 503, 504].includes(e.status) &&
+        (!supplied ||
+          supplied.attempts.some(
+            (a) =>
+              a.code === "timeout" ||
+              a.httpStatus === 429 ||
+              (a.httpStatus ?? 0) >= 500,
+          ));
+      if (!transient || retry >= 1) throw e;
+      log(
+        job,
+        "模型请求暂时失败，进度已保存；2 秒后重试一次。请求编号：" +
+          metrics.requestId,
+      );
+      job.phase = "模型请求暂时失败，正在重试";
+      await saveJob(job);
+      update();
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      body = { ...(body as object), cooldowns: job.cooldowns };
+    }
+  }
 }
 async function alreadyApplied(job: Job) {
   const remote = await api.get<{ status: string; applied_at?: string }>(
@@ -153,6 +241,7 @@ export async function checkJob(job: Job) {
   const files = await materials(job.id);
   const unread = files.filter((f) => !f.status);
   const blocked = files.filter((f) => f.status === "blocked");
+  job.checkedRevision = job.revision;
   job.validatedRevision = issues.length ? -1 : job.revision;
   return {
     issues,
@@ -186,9 +275,88 @@ async function execute(
       };
     }
     case "unpack":
-    case "read_document":
-    case "view_image":
       return documentTool(job, name, args as { path: string });
+    case "read_document":
+    case "view_image": {
+      const unread = (job.unrecordedReads ??= []);
+      if (unread.length >= 2 && !unread.includes(args.path))
+        throw Error(
+          "请先用 observe_material 保存刚才读取的材料识别成果：" +
+            unread.join("，"),
+        );
+      const response = await documentTool(job, name, args as { path: string });
+      if (!unread.includes(args.path)) unread.push(args.path);
+      return response;
+    }
+    case "observe_material": {
+      const file = (await materials(job.id)).find((f) => f.path === args.path);
+      if (!file?.inspected) throw Error("先读取材料再保存识别成果");
+      const previous = job.observations?.[args.path];
+      if (
+        previous?.content !== args.content ||
+        canonical(previous?.unresolved) !== canonical(args.unresolved)
+      )
+        job.observationRevision = (job.observationRevision ?? 0) + 1;
+      (job.observations ??= {})[args.path] = {
+        content: args.content,
+        unresolved: args.unresolved,
+        updatedAt: Date.now(),
+      };
+      job.unrecordedReads = job.unrecordedReads?.filter((p) => p !== args.path);
+      return { result: { saved: true, path: args.path } };
+    }
+    case "read_observations": {
+      const rows = Object.entries(job.observations ?? {});
+      if (args.path) {
+        const text = JSON.stringify(job.observations?.[args.path] ?? null);
+        return {
+          result: {
+            text: text.slice(args.offset, args.offset + 12000),
+            nextOffset:
+              args.offset + 12000 < text.length ? args.offset + 12000 : null,
+          },
+        };
+      }
+      return {
+        result: {
+          total: rows.length,
+          items: rows.slice(args.offset, args.offset + 20).map(([path, o]) => ({
+            path,
+            preview: o.content.slice(0, 300),
+            unresolved: o.unresolved
+              .slice(0, 3)
+              .map((text) => text.slice(0, 200)),
+          })),
+          nextOffset: args.offset + 20 < rows.length ? args.offset + 20 : null,
+        },
+      };
+    }
+    case "read_history": {
+      const data = await readHistory(job.id, args.offset, args.key);
+      if (args.key) {
+        const text = JSON.stringify(data ?? null);
+        return {
+          result: {
+            text: text.slice(args.offset, args.offset + 12000),
+            nextOffset:
+              args.offset + 12000 < text.length ? args.offset + 12000 : null,
+          },
+        };
+      }
+      return {
+        result: {
+          items: data.map((r: any) => ({
+            key: r.key,
+            kind: r.kind,
+            at: r.at,
+            preview: JSON.stringify(r.data).slice(0, 200),
+          })),
+          nextOffset: data.length === 10 ? args.offset + 10 : null,
+        },
+      };
+    }
+    case "save_handoff":
+      throw Error("此工具仅用于系统发起的上下文交接");
     case "describe_entity":
       return { result: z.toJSONSchema(schemas[args.entity as Entity]) };
     case "query_records": {
@@ -256,6 +424,8 @@ async function execute(
     case "mark_file": {
       const f = (await materials(job.id)).find((x) => x.path === args.path);
       if (!f) throw Error("文件不存在");
+      if (args.status === "done" && job.unrecordedReads?.includes(args.path))
+        throw Error("请先用 observe_material 保存识别成果，避免交接时遗失");
       if (args.status === "done" && !f.inspected)
         throw Error("请先读取该材料再标记完成");
       if (
@@ -278,8 +448,8 @@ async function execute(
     case "finish_review": {
       if (job.pending.length > 1)
         throw Error("请先完成本轮其他工具，再提交复核");
-      if (job.validatedRevision !== job.revision)
-        throw Error("请先调用 validate_draft 并修正结构错误");
+      if (job.checkedRevision !== job.revision)
+        throw Error("请先调用 validate_draft 检查本次草稿");
       const checked = await checkJob(job);
       if (checked.unread.length)
         throw Error(
@@ -288,6 +458,10 @@ async function execute(
       job.summary = args.summary;
       job.unresolved = [
         ...args.unresolved,
+        ...checked.issues.map((x) => x.message),
+        ...Object.entries(job.observations ?? {}).flatMap(([path, o]) =>
+          o.unresolved.map((text) => path + "：" + text),
+        ),
         ...checked.blocked.map((x) => x.path + "：" + x.reason),
       ];
       job.status = "review";
@@ -323,6 +497,21 @@ export class ImportRunner {
       this.update({ ...job });
       let failedSteps = 0;
       try {
+        if (!job.harnessVersion) {
+          await archive(job.id, "legacy", "legacy", {
+            messages: archiveMessages(job.messages),
+            notes: job.notes,
+            log: job.log,
+          });
+          job.harnessVersion = 2;
+          job.messages.push({
+            role: "user",
+            content:
+              "运行器已升级：现有草稿和笔记保留。优先检查已保存成果，不重建已有记录；此前未保存的识别信息需要重新核对。",
+          });
+          await saveJob(job);
+        }
+        job.progress = undefined;
         if (await alreadyApplied(job)) {
           this.update({ ...job });
           return;
@@ -333,6 +522,7 @@ export class ImportRunner {
         while (!this.stopped && job.status === "running") {
           if (job.pending.length) {
             const call = job.pending[0];
+            const toolStartedAt = Date.now();
             let response: { result: unknown; image?: string };
             try {
               response = await execute(job, call);
@@ -343,6 +533,30 @@ export class ImportRunner {
                 result: { error: e instanceof Error ? e.message : String(e) },
               };
             }
+            const historyKey = `tool:${job.turns}:${call.id}`;
+            const safeArgs = { ...(call.args as Record<string, unknown>) };
+            if ("password" in safeArgs) safeArgs.password = "[不保存密码]";
+            job.checkpoint = {
+              key: historyKey,
+              kind: "tool",
+              data: {
+                name: call.name,
+                args: safeArgs,
+                result: response.result,
+                durationMs: Date.now() - toolStartedAt,
+              },
+            };
+            const fullText = JSON.stringify(response.result);
+            const output =
+              fullText.length > 12000 &&
+              !["read_history", "read_observations"].includes(call.name)
+                ? {
+                    preview: fullText.slice(0, 10000),
+                    historyKey,
+                    instruction:
+                      "完整结果已归档，使用 read_history 按 key 分段读取",
+                  }
+                : response.result;
             job.messages.push({
               role: "tool",
               content: [
@@ -350,7 +564,7 @@ export class ImportRunner {
                   type: "tool-result",
                   toolCallId: call.id,
                   toolName: call.name,
-                  output: { type: "json", value: response.result as any },
+                  output: { type: "json", value: output as any },
                 },
               ],
             });
@@ -376,7 +590,9 @@ export class ImportRunner {
             }
             log(
               job,
-              call.name + " · " + JSON.stringify(response.result).slice(0, 180),
+              call.name +
+                ` · ${Date.now() - toolStartedAt} ms · ` +
+                JSON.stringify(response.result).slice(0, 180),
             );
             await saveJob(job);
             this.update({ ...job });
@@ -387,28 +603,33 @@ export class ImportRunner {
             if (job.pending.length === 0) await renewLease(job);
             continue;
           }
-          // A rolling context retains durable notes, the complete draft and evidence on disk.
-          // Compaction occurs only at a tool-call boundary; no unmatched calls are discarded.
-          if (
-            job.messages.length > 80 ||
-            JSON.stringify(job.messages).length > 12 * 1024 * 1024
-          ) {
-            job.messages = job.messages.slice(-12);
-            while (
-              job.messages.length &&
-              (job.messages[0].role === "tool" ||
-                job.messages[0].role === "assistant")
-            )
-              job.messages.shift();
-            job.messages.unshift({
+          const signature = canonical({
+            revision: job.revision,
+            observationRevision: job.observationRevision ?? 0,
+            files: (await materials(job.id)).map((f) => [
+              f.path,
+              f.status,
+              f.pagesRead,
+            ]),
+          });
+          job.progress = advanceProgress(job.progress, signature);
+          if (job.progress.idle >= 12)
+            throw Error(
+              "连续 12 轮没有新增识别成果、草稿或材料覆盖进展，已暂停以避免空转。现有成果已保留，可检查记录后继续。",
+            );
+          if (job.progress.idle === 6)
+            job.messages.push({
               role: "user",
               content:
-                "继续整理；先前记录已持久保存，使用 tree/query_records 检查进度。",
+                "连续 6 轮没有持久进展。立即保存已读材料的 observe_material，或处理明确未完成项；遇到障碍请说明并交付可复核部分，停止重复查询。",
             });
-            log(job, "已整理上下文，草稿、来源和笔记完整保留。");
-          }
           const context = JSON.stringify({
             title: job.title,
+            observationPaths: Object.keys(job.observations ?? {}).slice(-20),
+            observationCount: Object.keys(job.observations ?? {}).length,
+            observationInstruction:
+              "完整材料识别成果用 read_observations 分页查询",
+            unrecordedReads: job.unrecordedReads ?? [],
             notes: Object.fromEntries(
               Object.entries(job.notes)
                 .slice(-8)
@@ -420,22 +641,75 @@ export class ImportRunner {
             counts: Object.fromEntries(
               Object.entries(job.draft).map(([k, v]) => [k, v.length]),
             ),
-            unresolved: job.unresolved,
+            unresolved: job.unresolved
+              .slice(0, 50)
+              .map((text) => text.slice(0, 500)),
             operatorExcludedPersons: job.excluded,
           });
-          const reply = await api.post<{
+          const compacting = needsHandoff(job.messages);
+          job.phase = compacting ? "正在保存交接摘要" : "等待模型整理材料";
+          job.requestStartedAt = Date.now();
+          this.update({ ...job });
+          const reply = await requestTurn<{
             messages: ModelMessage[];
             calls: PendingCall[];
             text: string;
             model: string;
-          }>(`/agent-imports/${job.id}/turn`, {
-            messages: job.messages,
-            context,
-          });
+            providerId?: string;
+            metrics?: TurnMetrics;
+          }>(
+            job,
+            {
+              messages: job.messages,
+              context,
+              mode: compacting ? "compact" : "work",
+              preferredProvider: job.preferredProvider,
+              cooldowns: job.cooldowns,
+            },
+            () => this.update({ ...job }),
+          );
+          job.requestStartedAt = undefined;
+          if (reply.metrics) recordMetrics(job, reply.metrics);
+          job.preferredProvider = reply.providerId;
+          job.model = reply.model;
+          if (compacting) {
+            const call = reply.calls.find((c) => c.name === "save_handoff");
+            if (!call)
+              throw Error(
+                "模型未生成交接摘要，完整上下文已保留；继续处理将重试交接。",
+              );
+            const handoff = {
+              ...toolSpecs.save_handoff.schema.parse(call.args),
+              at: Date.now(),
+            };
+            await archive(job.id, "context:" + crypto.randomUUID(), "context", {
+              messages: archiveMessages(job.messages),
+              handoff,
+              model: reply.model,
+              metrics: reply.metrics,
+            });
+            job.handoff = handoff;
+            job.messages = resumeMessages(handoff);
+            log(job, "已保存交接摘要及完整历史；识别成果可按材料回查。");
+            await saveJob(job);
+            this.update({ ...job });
+            continue;
+          }
+          job.messages = withoutImages(job.messages);
           job.messages.push(...reply.messages);
           job.pending = reply.calls;
           job.model = reply.model;
           job.turns++;
+          job.phase = "正在执行材料工具";
+          job.checkpoint = {
+            key: "model:" + crypto.randomUUID(),
+            kind: "model",
+            data: {
+              messages: archiveMessages(reply.messages),
+              model: reply.model,
+              metrics: reply.metrics,
+            },
+          };
           if (reply.text) log(job, reply.text);
           await saveJob(job);
           this.update({ ...job });
@@ -446,6 +720,8 @@ export class ImportRunner {
         job.error = e instanceof Error ? e.message : String(e);
         log(job, "已暂停：" + job.error);
       } finally {
+        job.requestStartedAt = undefined;
+        job.phase = undefined;
         await saveJob(job);
         this.update({ ...job });
         this.busy = false;

@@ -174,6 +174,24 @@ describe("single-turn credential proxy", () => {
     expect(urls[0]).toContain("first.example");
     expect(urls.at(-1)).toContain("second.example");
     expect(result.calls[0].name).toBe("tree");
+    expect(result.metrics.attempts.map((a) => a.status)).toEqual([
+      "error",
+      "ok",
+    ]);
+    expect(result.model).toContain("second");
+    expect(JSON.stringify(result)).not.toContain("bad-key");
+    urls.length = 0;
+    await agentTurn(
+      env,
+      {
+        messages: [{ role: "user", content: "继续" }],
+        context: "{}",
+        preferredProvider: result.providerId,
+      },
+      "batch",
+    );
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain("second.example");
   });
 });
 
@@ -251,5 +269,85 @@ describe("native provider tool protocols", () => {
     expect(result.calls[0].name).toBe("tree");
     expect(run).toHaveBeenCalledOnce();
     expect(network).not.toHaveBeenCalled();
+  });
+});
+
+describe("handoff and diagnostic boundaries", () => {
+  it("offers only the handoff tool during compaction", async () => {
+    const env = await setup("openai_compatible", "https://model.example/v1");
+    let sent: any;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url, options) => {
+        sent = JSON.parse(options.body);
+        return Response.json({
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: "assistant",
+                content: null,
+                tool_calls: [
+                  {
+                    id: "h",
+                    type: "function",
+                    function: {
+                      name: "save_handoff",
+                      arguments: JSON.stringify({
+                        summary: "已保存明确事实与来源，尚未确定学期首周日期。",
+                        nextSteps: ["读取下一个人的材料"],
+                      }),
+                    },
+                  },
+                ],
+              },
+              finish_reason: "tool_calls",
+            },
+          ],
+        });
+      }),
+    );
+    const result = await agentTurn(
+      env,
+      {
+        messages: [{ role: "user", content: "需要交接" }],
+        context: "{}",
+        mode: "compact",
+      },
+      "batch",
+    );
+    expect(sent.tools.map((t: any) => t.function.name)).toEqual([
+      "save_handoff",
+    ]);
+    expect(result.calls[0].name).toBe("save_handoff");
+    expect(result.metrics.purpose).toBe("compact");
+    expect(result.metrics.requestId).toBeTruthy();
+  });
+  it("reports upstream status without leaking upstream body or retrying the same provider", async () => {
+    const env = await setup("openai_compatible", "https://model.example/v1");
+    const network = vi.fn(
+      async () =>
+        new Response('{"error":{"message":"secret-body"}}', { status: 503 }),
+    );
+    vi.stubGlobal("fetch", network);
+    let error: any;
+    try {
+      await agentTurn(
+        env,
+        { messages: [{ role: "user", content: "继续" }], context: "{}" },
+        "batch",
+      );
+    } catch (e) {
+      error = e;
+    }
+    expect(network).toHaveBeenCalledOnce();
+    expect(error.metrics.attempts[0]).toMatchObject({
+      status: "error",
+      httpStatus: 503,
+      code: "upstream_http",
+    });
+    expect(error.message).not.toContain("secret-body");
+    expect(error.message).not.toContain("数据库");
+    expect(error.message).toContain(error.metrics.requestId);
   });
 });

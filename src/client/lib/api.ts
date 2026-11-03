@@ -17,6 +17,7 @@ const API_BASE = "/api";
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
+  details?: unknown;
 
   constructor(status: number, code: string, message: string) {
     super(message);
@@ -49,7 +50,7 @@ function fallbackMessage(status: number): string {
     case 500:
       return "服务器内部错误（500），请稍后重试";
     case 503:
-      return "服务尚未就绪（503），请确认数据库已迁移";
+      return "服务暂时不可用（503），可能来自网关或上游服务，请稍后重试";
     default:
       return `请求失败（HTTP ${status}）`;
   }
@@ -57,9 +58,17 @@ function fallbackMessage(status: number): string {
 
 function toApiError(status: number, payload: unknown): ApiError {
   if (isErrorBody(payload)) {
-    return new ApiError(status, payload.error.code, payload.error.message || fallbackMessage(status));
+    return new ApiError(
+      status,
+      payload.error.code,
+      payload.error.message || fallbackMessage(status),
+    );
   }
-  return new ApiError(status, status === 404 ? "not_found" : "http_error", fallbackMessage(status));
+  return new ApiError(
+    status,
+    status === 404 ? "not_found" : "http_error",
+    fallbackMessage(status),
+  );
 }
 
 function apiUrl(path: string): string {
@@ -67,7 +76,12 @@ function apiUrl(path: string): string {
   return `${API_BASE}${normalized}`;
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  options?: { timeoutMs?: number },
+): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   let payload: BodyInit | undefined;
 
@@ -86,8 +100,16 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
       headers,
       body: payload,
       credentials: "same-origin",
+      signal: options?.timeoutMs
+        ? AbortSignal.timeout(options.timeoutMs)
+        : undefined,
     });
-  } catch {
+  } catch (e) {
+    if (
+      e instanceof DOMException &&
+      (e.name === "TimeoutError" || e.name === "AbortError")
+    )
+      throw new ApiError(0, "timeout", `请求超时：${path}；进度已保留`);
     throw new ApiError(0, "network", "网络不可达，请检查连接后重试");
   }
 
@@ -99,14 +121,24 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     } catch {
       // SPA fallback 返回的 HTML / 网关错误页，说明路由压根没挂上。
       if (response.ok) {
-        throw new ApiError(response.status, "bad_response", "接口返回了非 JSON 内容，可能尚未实现，请稍后重试");
+        throw new ApiError(
+          response.status,
+          "bad_response",
+          "接口返回了非 JSON 内容，可能尚未实现，请稍后重试",
+        );
       }
       data = null;
     }
   }
 
-  if (response.status === 401) window.dispatchEvent(new Event("rota:unauthorized"));
-  if (!response.ok) throw toApiError(response.status, data);
+  if (response.status === 401)
+    window.dispatchEvent(new Event("rota:unauthorized"));
+  if (!response.ok) {
+    const error = toApiError(response.status, data);
+    error.details = data;
+    error.message += `（${method} ${path}）`;
+    throw error;
+  }
   return data as T;
 }
 
@@ -114,8 +146,12 @@ export const api = {
   get<T>(path: string): Promise<T> {
     return request<T>("GET", path);
   },
-  post<T>(path: string, body?: unknown): Promise<T> {
-    return request<T>("POST", path, body);
+  post<T>(
+    path: string,
+    body?: unknown,
+    options?: { timeoutMs?: number },
+  ): Promise<T> {
+    return request<T>("POST", path, body, options);
   },
   patch<T>(path: string, body?: unknown): Promise<T> {
     return request<T>("PATCH", path, body);

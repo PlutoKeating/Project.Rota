@@ -21,6 +21,7 @@ import {
   checkJob,
   renewLease,
 } from "../agent-import/runtime";
+import { HistoryPanel } from "../agent-import/HistoryPanel";
 import { Review } from "../agent-import/Review";
 import { documentTool } from "../agent-import/documents";
 
@@ -257,11 +258,15 @@ export function ImportsPage() {
           {job.status === "running" && (
             <div className="border-y border-slate-200 py-5 dark:border-slate-700">
               <p className="text-sm">
-                {job.log.at(-1)?.text || "正在查看材料与现有数据…"}
+                {job.phase || "正在查看材料与现有数据…"}
               </p>
               <p className="mt-2 text-xs text-slate-500">
                 {job.model ? `${job.model} · ` : ""}已完成 {job.turns} 轮 ·
-                关闭页面会暂停，重新打开后可恢复。
+                已保存 {Object.keys(job.observations ?? {}).length}{" "}
+                份材料识别成果。关闭页面会暂停，重新打开后可恢复。
+                {job.requestStartedAt && (
+                  <RequestClock startedAt={job.requestStartedAt} />
+                )}
               </p>
               <Button
                 className="mt-4"
@@ -379,6 +384,7 @@ export function ImportsPage() {
               </div>
             </div>
           )}
+          <HistoryPanel job={job} />
           <details className="text-xs text-slate-500">
             <summary className="cursor-pointer">
               处理记录 · {job.log.length} 条
@@ -496,5 +502,18 @@ export function ImportsPage() {
         </Modal>
       )}
     </div>
+  );
+}
+
+function RequestClock({ startedAt }: { startedAt: number }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [startedAt]);
+  return (
+    <span className="mt-1 block">
+      本次请求已等待 {Math.max(0, Math.floor((now - startedAt) / 1000))} 秒
+    </span>
   );
 }
