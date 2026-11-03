@@ -25,6 +25,9 @@ jobs:
       group: rota-data-production
       cancel-in-progress: false
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Deploy data service through a restricted SSH command
         env:
           DEPLOY_SHA: ${{ github.sha }}
@@ -38,4 +41,5 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' "$ECS_DEPLOY_KEY" > ~/.ssh/rota_deploy
           printf '%s\n' "$ECS_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          ssh -i ~/.ssh/rota_deploy -p "$ECS_PORT" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$ECS_USER@$ECS_HOST" "deploy-rota $DEPLOY_SHA"
+          git bundle create "$RUNNER_TEMP/rota.bundle" HEAD
+          ssh -i ~/.ssh/rota_deploy -p "$ECS_PORT" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$ECS_USER@$ECS_HOST" "deploy-rota $DEPLOY_SHA" < "$RUNNER_TEMP/rota.bundle"
