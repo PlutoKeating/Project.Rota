@@ -467,3 +467,13 @@ export interface HealthResponse {
   db: "up" | "down";
   ts: string;
 }
+
+/** Owner-only connectivity diagnostics; response text has credentials redacted. */
+export interface ProviderTestResult {
+  ok: boolean;
+  message: string;
+  status?: number;
+  code?: string;
+  type?: string;
+  details?: string;
+}

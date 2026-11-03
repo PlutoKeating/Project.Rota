@@ -201,6 +201,6 @@
 
 ### 上游模型错误诊断
 
-模型测试仍返回 `{ ok, message }`；真实调用仍使用 `llm_error`（HTTP 502）。`message` 根据上游状态与明确的错误标识分类：`Model is unavailable` 提示当前模型/端点不可用，`MissingSessionID` 提示会话头，普通 400/422 提示请求参数或协议。不会回显上游任意正文、URL、密钥或调试字段。
+模型测试返回 `{ ok, message, status?, code?, type?, details? }`；真实调用仍使用 `llm_error`（HTTP 502）。`message` 根据上游状态与明确的错误标识分类：`Model is unavailable` 提示当前模型/端点不可用，`MissingSessionID` 提示会话头，普通 400/422 提示请求参数或协议。owner 测试接口的 details 保留完整上游错误正文（包含非 JSON），不截断；发送前脱敏实际 API 密钥及认证字段。status 为上游 HTTP 状态，code/type 为上游代码与类型；未提供时不伪造。普通业务 API 仍只返回固定中文分类，不公开诊断正文。
 
 OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/go/v1/models` 的交集。官方目录不可达时保留上次验证过的型号；首次失败暂不提供 Go 新增选项并返回提示，不影响其他供应商或已有配置。目录缓存升级为 `llm:catalog:v2`，避免继续使用未校验的旧列表；无需数据库迁移。官方目录仅证明型号存在，不保证账号、地区和额度权限。

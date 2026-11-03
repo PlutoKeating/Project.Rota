@@ -198,3 +198,46 @@ it("reconciles Go choices with the provider list and fails closed without affect
       ?.models.map((m) => m.id),
   ).toEqual(["minimax-m3.1-flash"]);
 });
+
+it("returns complete owner diagnostics with HTTP status, code and type while redacting credentials", async () => {
+  const { env, id } = await fixture();
+  const long = "model diagnostic ".repeat(80);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      Response.json(
+        {
+          error: {
+            type: "invalid_request_error",
+            code: 40001,
+            message: long,
+            api_key: "test-key",
+            metadata: { authorization: "Bearer another-secret" },
+          },
+        },
+        { status: 400 },
+      ),
+    ),
+  );
+  const result = await testProvider(env, id);
+  expect(result.status).toBe(400);
+  expect(result.code).toBe("40001");
+  expect(result.type).toBe("invalid_request_error");
+  expect(result.details).toContain(long);
+  expect(result.details).not.toContain("test-key");
+  expect(result.details).not.toContain("another-secret");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response(
+          "Proxy error: " + long + " Authorization: Bearer test-key",
+          { status: 502 },
+        ),
+    ),
+  );
+  const plain = await testProvider(env, id);
+  expect(plain.status).toBe(502);
+  expect(plain.details).toContain(long);
+  expect(plain.details).not.toContain("test-key");
+});

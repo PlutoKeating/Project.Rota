@@ -1,5 +1,5 @@
 import { unseal } from "./secrets";
-import type { LlmProviderKind } from "../../shared/types";
+import type { LlmProviderKind, ProviderTestResult } from "../../shared/types";
 import type { Env } from "../env";
 import { HttpError, dbAll, dbOne, parseJson } from "../lib/core";
 
@@ -224,11 +224,27 @@ export async function complete(
   }
 
   if (!response.ok) {
-    const payload: unknown = await response.json().catch(() => null);
-    throw new HttpError(
-      502,
-      "llm_error",
+    const body = await response.text();
+    let payload: unknown = null;
+    try {
+      payload = JSON.parse(body);
+    } catch {
+      /* Preserve non-JSON errors too. */
+    }
+    const root = asRecord(payload);
+    const error = asRecord(root?.error) ?? root;
+    const scrub = (text: string) => redactDiagnostic(text, provider.apiKey);
+    throw new ProviderResponseError(
       upstreamErrorMessage(response.status, payload, provider.model),
+      {
+        status: response.status,
+        code:
+          typeof error?.code === "string" || typeof error?.code === "number"
+            ? scrub(String(error.code))
+            : undefined,
+        type: typeof error?.type === "string" ? scrub(error.type) : undefined,
+        details: scrub(body),
+      },
     );
   }
 
@@ -244,6 +260,31 @@ export async function complete(
     throw new HttpError(502, "llm_error", "模型返回内容为空或格式无法识别");
   }
   return text;
+}
+
+class ProviderResponseError extends HttpError {
+  constructor(
+    message: string,
+    readonly diagnostic: Omit<ProviderTestResult, "ok" | "message">,
+  ) {
+    super(502, "llm_error", message);
+  }
+}
+function redactDiagnostic(text: string, apiKey: string): string {
+  let safe = text;
+  for (const secret of [
+    apiKey,
+    encodeURIComponent(apiKey),
+    JSON.stringify(apiKey).slice(1, -1),
+  ]) {
+    if (secret) safe = safe.split(secret).join("[REDACTED]");
+  }
+  return safe
+    .replace(/\bBearer\s+[^\s"',;}]+/gi, "Bearer [REDACTED]")
+    .replace(
+      /((?:authorization|x-api-key|api[-_]?key|access[-_]?token|refresh[-_]?token|password|secret|cookie)["']?\s*[:=]\s*)("[^"\r\n]*"|'[^'\r\n]*'|[^\s,;&}]+)/gi,
+      "$1[REDACTED]",
+    );
 }
 
 /** Only classify recognized failures; never echo upstream text, headers, or URLs. */
@@ -288,7 +329,7 @@ function upstreamErrorMessage(
 export async function testProvider(
   env: Env,
   id: string,
-): Promise<{ ok: boolean; message: string }> {
+): Promise<ProviderTestResult> {
   try {
     const text = await complete(env, {
       providerId: id,
@@ -297,7 +338,14 @@ export async function testProvider(
     });
     return { ok: true, message: truncate(text) };
   } catch (error) {
-    return { ok: false, message: truncate(errorText(error)) };
+    if (error instanceof ProviderResponseError)
+      return { ok: false, message: error.message, ...error.diagnostic };
+    return {
+      ok: false,
+      message: errorText(error),
+      code: error instanceof HttpError ? error.code : "llm_error",
+      ...(error instanceof HttpError ? { status: error.status } : {}),
+    };
   }
 }
 

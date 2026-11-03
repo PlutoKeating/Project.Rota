@@ -15,9 +15,9 @@ import {
   arrayMove,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { useEffect, useState, type ReactNode } from "react";
-import type { LlmProvider } from "../../shared/types";
-import { api, messageOf } from "../lib/api";
+import { useEffect, useState, useRef, type ReactNode } from "react";
+import type { LlmProvider, ProviderTestResult } from "../../shared/types";
+import { api, messageOf, ApiError } from "../lib/api";
 import { useAsync } from "../lib/hooks";
 import { Button } from "../components/Button";
 import { Field, TextInput, Select, Checkbox } from "../components/Field";
@@ -67,6 +67,37 @@ export function ModelsPage() {
     }),
   );
   const reduced = useReducedMotion();
+  const [tests, setTests] = useState<
+    Record<string, { pending: boolean; result?: ProviderTestResult }>
+  >({});
+  const testing = useRef(new Set<string>());
+  async function testModel(id: string) {
+    if (testing.current.has(id)) return;
+    testing.current.add(id);
+    setTests((previous) => ({ ...previous, [id]: { pending: true } }));
+    try {
+      const result = await api.post<ProviderTestResult>(
+        `/admin/llm-providers/${id}/test`,
+      );
+      setTests((previous) => ({
+        ...previous,
+        [id]: { pending: false, result },
+      }));
+    } catch (error) {
+      const result: ProviderTestResult = {
+        ok: false,
+        message: messageOf(error),
+        code: error instanceof ApiError ? error.code : "network_error",
+        ...(error instanceof ApiError ? { status: error.status } : {}),
+      };
+      setTests((previous) => ({
+        ...previous,
+        [id]: { pending: false, result },
+      }));
+    } finally {
+      testing.current.delete(id);
+    }
+  }
   const [adding, setAdding] = useState(false),
     [providerId, setProviderId] = useState(""),
     [query, setQuery] = useState(""),
@@ -453,26 +484,18 @@ export function ModelsPage() {
                         <Button
                           variant="secondary"
                           size="sm"
-                          disabled={busy || dirty || !p.enabled}
-                          title={dirty ? "保存配置后测试连接" : undefined}
-                          onClick={async () => {
-                            setBusy(true);
-                            setError("");
-                            try {
-                              const r = await api.post<{
-                                ok: boolean;
-                                message: string;
-                              }>(`/admin/llm-providers/${p.id}/test`);
-                              if (!r.ok) throw new Error(r.message);
-                              toast.success("连接测试通过");
-                            } catch (e) {
-                              setError(messageOf(e));
-                            } finally {
-                              setBusy(false);
-                            }
-                          }}
+                          loading={tests[p.id]?.pending}
+                          disabled={
+                            !baseline?.items.some((saved) => saved.id === p.id)
+                          }
+                          title={
+                            baseline?.items.some((saved) => saved.id === p.id)
+                              ? "测试已保存配置，不影响当前编辑"
+                              : "先保存新增模型，再测试连接"
+                          }
+                          onClick={() => void testModel(p.id)}
                         >
-                          测试连接
+                          {tests[p.id]?.pending ? "测试中" : "测试连接"}
                         </Button>
                         <Button
                           size="sm"
@@ -542,6 +565,48 @@ export function ModelsPage() {
                         </Button>
                       </div>
                     )}
+                    {tests[p.id] && (
+                      <div className="mt-4 min-w-0 border-t border-slate-200 pt-3 text-sm dark:border-slate-700">
+                        <p role="status" className="font-medium">
+                          {tests[p.id].pending
+                            ? "正在测试已保存配置…你可以继续编辑或测试其他模型。"
+                            : tests[p.id].result?.ok
+                              ? "连接成功"
+                              : "连接失败"}
+                        </p>
+                        {tests[p.id].result && (
+                          <>
+                            <p className="mt-1 break-words">
+                              {tests[p.id].result!.message}
+                            </p>
+                            {!tests[p.id].result!.ok && (
+                              <p className="mt-1 break-all text-xs text-slate-500">
+                                {tests[p.id].result!.status !== undefined
+                                  ? `HTTP ${tests[p.id].result!.status} · `
+                                  : ""}
+                                错误代码：{tests[p.id].result!.code ?? "未提供"}
+                                {tests[p.id].result!.type
+                                  ? ` · 类型：${tests[p.id].result!.type}`
+                                  : ""}
+                              </p>
+                            )}
+                            {tests[p.id].result!.details && (
+                              <details className="mt-2" open>
+                                <summary className="cursor-pointer text-xs">
+                                  完整上游错误（敏感信息已脱敏）
+                                </summary>
+                                <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-slate-50 p-3 text-xs dark:bg-slate-800">
+                                  {tests[p.id].result!.details}
+                                </pre>
+                              </details>
+                            )}
+                            <p className="mt-2 text-xs text-slate-500">
+                              结果对应测试时的已保存配置，更改配置后请重新测试。
+                            </p>
+                          </>
+                        )}
+                      </div>
+                    )}
                   </ModelRow>
                 ))}
               </div>
@@ -573,7 +638,7 @@ export function ModelsPage() {
               {pendingInput
                 ? "请先将填写内容加入草稿，再保存配置。"
                 : dirty
-                  ? "保存后生效；测试连接需先保存。"
+                  ? "保存后生效；连接测试使用已保存配置。"
                   : "可直接拖动排序或编辑模型。"}
             </p>
           </div>
