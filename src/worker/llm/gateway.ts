@@ -224,16 +224,11 @@ export async function complete(
   }
 
   if (!response.ok) {
-    let detail = "";
-    try {
-      detail = await response.text();
-    } catch {
-      detail = "";
-    }
+    const payload: unknown = await response.json().catch(() => null);
     throw new HttpError(
       502,
       "llm_error",
-      `模型返回 HTTP ${response.status}，请检查密钥、权限与模型配置`,
+      upstreamErrorMessage(response.status, payload, provider.model),
     );
   }
 
@@ -249,6 +244,44 @@ export async function complete(
     throw new HttpError(502, "llm_error", "模型返回内容为空或格式无法识别");
   }
   return text;
+}
+
+/** Only classify recognized failures; never echo upstream text, headers, or URLs. */
+function upstreamErrorMessage(
+  status: number,
+  payload: unknown,
+  model: string,
+): string {
+  const root = asRecord(payload);
+  const error = asRecord(root?.error) ?? root;
+  const type = error?.type ?? error?.code;
+  const message = typeof error?.message === "string" ? error.message : "";
+  const prefix = `模型 ${model} 返回 HTTP ${status}：`;
+  if (
+    status === 400 &&
+    (type === "MissingSessionID" || message.includes("MissingSessionID"))
+  )
+    return (
+      prefix +
+      "上游未收到会话标识，请检查网关或代理是否保留 x-opencode-session 请求头。"
+    );
+  if (
+    [400, 404, 503].includes(status) &&
+    /^(?:Upstream request failed: )?Model is unavailable\.?$/i.test(message)
+  )
+    return (
+      prefix +
+      "该模型在当前服务端点不可用，请选择其他模型或向供应商确认开放状态；无需反复更换密钥。"
+    );
+  if (status === 400 || status === 422)
+    return (
+      prefix + "上游拒绝了请求参数或协议，请核对模型支持的接口与输入类型。"
+    );
+  if (status === 401) return prefix + "上游鉴权失败，请核对密钥及其所属服务。";
+  if (status === 403)
+    return prefix + "上游拒绝访问，请核对该模型的账号、客户端或地区限制。";
+  if (status === 429) return prefix + "上游限流或额度不足，请检查配额后重试。";
+  return prefix + "上游服务请求失败，请稍后重试或检查供应商状态。";
 }
 
 /** 后台"测试连接"：失败不抛异常，把原因放进 message 给前端展示。 */

@@ -8,7 +8,7 @@ export interface CatalogProvider {
   models: { id: string; name: string; vision: boolean; context: number }[];
 }
 export async function catalog(env: Env, force = false) {
-  const raw = await env.CONFIG.get("llm:catalog:v1");
+  const raw = await env.CONFIG.get("llm:catalog:v2");
   let cached: { fetchedAt: string; providers: CatalogProvider[] } | null = null;
   try {
     cached = raw ? JSON.parse(raw) : null;
@@ -86,9 +86,48 @@ export async function catalog(env: Env, force = false) {
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
     if (!providers.length) throw new Error("目录为空");
+    // models.dev describes models; the provider's own Go list determines routable IDs.
+    const go = providers.find((p) => p.id === "opencode-go");
+    let warning: string | undefined;
+    if (go) {
+      try {
+        const response = await fetch(
+          "https://opencode.ai/inference/go/v1/models",
+          {
+            signal: AbortSignal.timeout(10000),
+            redirect: "manual",
+            headers: {
+              "User-Agent": "Project.Rota/0.1.0",
+              Accept: "application/json",
+            },
+          },
+        );
+        if (!response.ok) throw new Error("Go directory unavailable");
+        const body = (await response.json()) as { data?: { id?: unknown }[] };
+        if (
+          !Array.isArray(body.data) ||
+          body.data.some((m) => !m || typeof m.id !== "string")
+        )
+          throw new Error("Invalid Go directory");
+        const available = new Set(body.data.map((m) => m.id));
+        go.models = go.models.filter((m) => available.has(m.id));
+      } catch {
+        const previous = cached?.providers.find((p) => p.id === "opencode-go");
+        const available = new Set(previous?.models.map((m) => m.id) ?? []);
+        go.models = go.models.filter((m) => available.has(m.id));
+        warning = previous
+          ? "OpenCode Go 可用型号刷新失败，暂用上次验证的列表"
+          : "OpenCode Go 可用型号目录暂不可用，请稍后刷新；已有配置仍可使用";
+      }
+    }
     const result = { fetchedAt: new Date().toISOString(), providers };
-    await env.CONFIG.put("llm:catalog:v1", JSON.stringify(result));
-    return { ...result, stale: false };
+    if (!warning)
+      await env.CONFIG.put("llm:catalog:v2", JSON.stringify(result));
+    return {
+      ...result,
+      stale: !!warning,
+      ...(warning ? { error: warning } : {}),
+    };
   } catch {
     if (cached)
       return {

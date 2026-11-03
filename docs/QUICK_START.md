@@ -71,3 +71,5 @@ LINKML_BIN=.venv/bin/linkml bash scripts/gen.sh
 ### 模型配置草稿与排序
 
 模型草稿版本引入 @dnd-kit/core、sortable、utilities（锁文件已更新），安装后按现有检查/构建/发布流程部署 Worker。数据服务已存在 app_kv，无需新迁移、Secret 或部署参数。浏览器测试新增草稿无写入、拖动/键盘排序、保存失败恢复和整页保存验证。
+
+模型诊断更新无需新增依赖、Secret 或迁移，继续使用 `pnpm check && pnpm build` 和现有部署流程。首次加载会重建 v2 模型目录缓存，并校验 OpenCode Go 官方型号；供应商目录不可达时界面会说明回退状态。

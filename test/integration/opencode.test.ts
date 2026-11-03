@@ -94,3 +94,107 @@ it("does not send OpenCode headers to another host even with copied catalog id",
   const init = (fetcher.mock.calls[0] as unknown as [string, RequestInit])[1];
   expect(new Headers(init.headers).has("x-opencode-session")).toBe(false);
 });
+
+it("reports the captured unavailable-model response without blaming the key or exposing upstream content", async () => {
+  const { env, id } = await fixture();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      Response.json(
+        {
+          error: {
+            type: "server_error",
+            message: "Upstream request failed: Model is unavailable.",
+            debug: "Bearer test-key",
+          },
+        },
+        { status: 400 },
+      ),
+    ),
+  );
+  const result = await testProvider(env, id);
+  expect(result.ok).toBe(false);
+  expect(result.message).toContain("step-5-preview-free");
+  expect(result.message).toContain("当前服务端点不可用");
+  expect(result.message).not.toContain("检查密钥");
+  expect(result.message).not.toContain("test-key");
+});
+it("identifies missing sessions separately and never echoes arbitrary upstream errors", async () => {
+  const { env, id } = await fixture();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      Response.json(
+        { error: { type: "MissingSessionID", message: "private test-key" } },
+        { status: 400 },
+      ),
+    ),
+  );
+  expect((await testProvider(env, id)).message).toContain("会话标识");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      Response.json(
+        { error: { message: "private test-key request rejected" } },
+        { status: 400 },
+      ),
+    ),
+  );
+  const result = await testProvider(env, id);
+  expect(result.message).toContain("请求参数或协议");
+  expect(result.message).not.toContain("test-key");
+});
+it("reconciles Go choices with the provider list and fails closed without affecting other providers", async () => {
+  const { env } = await fixture();
+  const { catalog } = await import("../../src/worker/llm/catalog");
+  const directory = {
+    "opencode-go": {
+      name: "OpenCode Go",
+      npm: "@ai-sdk/openai-compatible",
+      api: "https://opencode.ai/inference/go/openai/v1",
+      models: {
+        available: { id: "minimax-m3.1-flash" },
+        unavailable: { id: "minimax-m3.1-flash-free" },
+      },
+    },
+    other: { name: "Other", models: { a: { id: "a" } } },
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) =>
+      Response.json(
+        url.includes("models.dev")
+          ? directory
+          : { data: [{ id: "minimax-m3.1-flash" }] },
+      ),
+    ),
+  );
+  const result = await catalog(env);
+  expect(
+    result.providers
+      .find((p) => p.id === "opencode-go")
+      ?.models.map((m) => m.id),
+  ).toEqual(["minimax-m3.1-flash"]);
+  const fresh = { ...env, CONFIG: createKv() as unknown as KVNamespace };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url.includes("models.dev")) return Response.json(directory);
+      throw Error("offline");
+    }),
+  );
+  const failed = await catalog(fresh);
+  expect(failed.providers.find((p) => p.id === "opencode-go")?.models).toEqual(
+    [],
+  );
+  expect(failed.providers.find((p) => p.id === "other")?.models).toHaveLength(
+    1,
+  );
+  expect(failed.error).toContain("OpenCode Go");
+  const cached = await catalog(env, true);
+  expect(
+    cached.providers
+      .find((p) => p.id === "opencode-go")
+      ?.models.map((m) => m.id),
+  ).toEqual(["minimax-m3.1-flash"]);
+});

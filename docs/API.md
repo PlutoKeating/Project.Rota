@@ -197,3 +197,10 @@
 ### 模型配置草稿与排序
 
 `GET /admin/model-config`（owner）返回 `{ version, items: LlmProvider[] }`，items 按调用顺序排列。`PUT /admin/model-config` 接收 `{ expectedVersion, items }`（最多 200 项，每项包含稳定 id，可选 apiKey）；省略旧项即删除，数组顺序为调用顺序。保存模型、顺序、审计为单事务，密钥加密且不返回。版本冲突返回 409，参数错误 400，失败不产生部分配置。旧逐项 CRUD 和 model-order 接口仍兼容；前端整页保存应只调用新接口。
+
+
+### 上游模型错误诊断
+
+模型测试仍返回 `{ ok, message }`；真实调用仍使用 `llm_error`（HTTP 502）。`message` 根据上游状态与明确的错误标识分类：`Model is unavailable` 提示当前模型/端点不可用，`MissingSessionID` 提示会话头，普通 400/422 提示请求参数或协议。不会回显上游任意正文、URL、密钥或调试字段。
+
+OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/go/v1/models` 的交集。官方目录不可达时保留上次验证过的型号；首次失败暂不提供 Go 新增选项并返回提示，不影响其他供应商或已有配置。目录缓存升级为 `llm:catalog:v2`，避免继续使用未校验的旧列表；无需数据库迁移。官方目录仅证明型号存在，不保证账号、地区和额度权限。
