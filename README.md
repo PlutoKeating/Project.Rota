@@ -134,3 +134,5 @@ test/                 单测 + 真实 SQL 的集成测试
 Agent 执行、文件读取和草稿位于用户浏览器；Cloudflare Worker 仅代理模型凭据并校验/提交业务数据，ECS 不执行 Agent 或文档处理。支持每人独立课表、同学期多作息、暂停续跑、来源与推断复核。完成或取消后本地材料保留 8 小时，到期清理；浏览器关闭期间到期的材料在下次打开清理。详见 [完整工作流与验证边界](docs/AGENT_IMPORT.md)。
 
 新增迁移 `0005_browser_agent_import.sql` 必须先应用再发布前端/Worker。`pnpm gen` 现在生成 `schema/rota.current.sql` 参考结构，不改写已经部署的初始迁移。
+
+导入 Agent 的长任务恢复、逐材料识别记忆、历史检索和诊断机制见 [Agent 导入说明](docs/AGENT_IMPORT.md#长任务稳定性与选型依据2026-11-04)。专项验证：`pnpm test:agent-browser`。

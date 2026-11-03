@@ -34,3 +34,5 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 `api/agent-import.ts` 提供鉴权业务快照、批次、租约、原子提交；`llm/agent.ts` 用 AI SDK 单轮适配模型协议，浏览器决定后续工具调用，服务端不运行 Agent 循环。按全局模型顺序过滤明确不支持视觉/工具的配置并尝试可用项；保留 OpenCode 客户端与会话头，禁止重定向。密钥只用于上游请求。
 
 正式提交校验完整差异、原值、引用和派班冲突，派生数据及审计同事务写入。普通 CRUD 也受租约触发器保护，租约过期可恢复。独立课表实际时间纳入 availability、人员周课表/可用时长和 scheduler，支持全局节次之外的占用。新增迁移 `0005_browser_agent_import.sql`，无新增环境变量。详见 `docs/AGENT_IMPORT.md` 与 `docs/API.md`。
+
+Agent 代理在 `compact` 模式仅开放 `save_handoff`；普通模式不开放该工具。候选首轮按全局顺序，之后可复用本批成功配置并暂时跳过失败项。SDK 隐式重试关闭；每候选最多 90 秒、候选执行窗口最多 120 秒。诊断保留具体模型、错误类别与状态码，不返回原始上游错误正文。业务读取/租约/提交边界不变。

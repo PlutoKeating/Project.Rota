@@ -217,7 +217,7 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 | --- | --- | --- |
 | POST | `/agent-imports` | 创建批次，返回 `{id}`，不写业务数据 |
 | GET | `/agent-imports/:id` | 本人批次状态及提交摘要 |
-| POST | `/agent-imports/:id/turn` | `{messages,context}`；单轮模型调用，返回 `{messages,calls,text,model,usage}`，工具由浏览器执行 |
+| POST | `/agent-imports/:id/turn` | `{messages,context,mode?,preferredProvider?,cooldowns?}`；单轮模型调用，返回 `{messages,calls,text,model,providerId,usage,metrics}`，工具由浏览器执行 |
 | POST | `/agent-imports/:id/lease` | `{changes}`；检查原值并取得/续期 180 秒相关数据锁 |
 | POST | `/agent-imports/:id/apply` | `{changes,summary?}`；服务端重新校验，单事务提交，批次幂等 |
 | POST | `/agent-imports/:id/release` | 释放本批租约 |
@@ -228,3 +228,11 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 `apply` 不接受已经过期的锁；相关记录原值不符、提交版本变化、约束冲突时 409，事务回滚。校验失败 400。成功 `{ok:true,id}`；重复相同批次/内容返回同一成功结果，内容不同则 409。租约也通过数据库触发器保护常规 CRUD。
 
 人员 GET/PATCH/POST 增加 `className`、`major`；学号继续可空。独立课表通过 `timetable_profile` / `timetable_entry` / 派生的 `timetable_event` 表达，在人员页单独管理，派班按实际时间检查。详细格式、材料读取和清理边界见 [AGENT_IMPORT.md](AGENT_IMPORT.md)。
+
+### Agent 单轮交接与诊断
+
+`mode` 默认为 `work`，仅开放业务/材料工具；`compact` 只开放 `save_handoff`，由相同模型生成可恢复的交接摘要。服务端仍不执行任何业务工具。`preferredProvider` 仅在已启用且未明确禁用视觉/工具的候选中生效，用于复用本批成功模型；新批次按全局顺序开始。`cooldowns` 是供应商 ID 到到期毫秒时间的映射，只接受未来 5 分钟内的冷却提示，浏览器对失败供应商设置 2 分钟冷却。
+
+`metrics` 包含 `requestId`、`purpose`、`durationMs`、可用的 `inputTokens/outputTokens`，以及各候选尝试的 `providerId/model/durationMs/status/code/httpStatus`。模型失败响应为 HTTP 502，除标准 `error` 外附 `metrics`；不回传供应商原始错误正文或密钥。网关未返回结构化诊断时，浏览器记录带 `client-` 前缀的本地编号，不冒充上游请求编号。
+
+每供应商尝试最多 90 秒，单次模型请求的候选执行窗口最多 120 秒，SDK 不对同一供应商隐式重试。浏览器请求截止 130 秒，对网络、限流或临时上游故障最多延迟 2 秒重试一次。业务提交不随模型重试，仍仅由操作员触发。503 的通用提示不推断数据库迁移状态。
