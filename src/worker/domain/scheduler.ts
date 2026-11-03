@@ -158,7 +158,7 @@ export async function previewShift(
     }
     const bucket = byPerson.get(person.id) ?? new Map();
     const busy = conflictIds.has(person.id) || slots.some((slot) => bucket.has(slot.id) && overlaps(shift.startsAt, shift.endsAt, slot));
-    const free = freeMinutes(slots, bucket);
+    const free = Math.max(freeMinutes(slots, bucket), busy ? 0 : minutesBetween(shift.startsAt, shift.endsAt));
     const own = ledger.get(person.id);
 
     if (busy) {

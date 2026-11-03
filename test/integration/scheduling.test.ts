@@ -178,3 +178,25 @@ describe("排班边界", () => {
     expect(preview.excluded).toContainEqual(expect.objectContaining({ personId: "p3", reason: "skill" }));
   });
 });
+
+it("跨周显示历史结转，冷却与打分使用班次时间", async () => {
+  const db = await seed();
+  await assignShift(db as unknown as D1Database, "sh1", "p2", CONFIG, "tester");
+  await run(db, "insert into shift (id,task_id,starts_at,ends_at,required_headcount,status,created_at) values ('sh2','task1','2026-09-14T08:00:00+08:00','2026-09-14T08:45:00+08:00',1,'open',?)", NOW);
+  const preview = await previewShift(db as unknown as D1Database, "sh2", CONFIG);
+  expect(preview.candidates.find(c => c.personId === "p2")?.assignedCount).toBe(1);
+  await assignShift(db as unknown as D1Database, "sh2", "p2", CONFIG, "tester");
+  const rows = await listFairness(db as unknown as D1Database, { orgId: "o1", windowKey: "2026 秋-W2" });
+  expect(rows[0]).toMatchObject({ carryOver: 1, shiftCount: 1 });
+});
+
+it("重复并发撤销不会把同周其他分配从账本扣掉", async () => {
+  const db = await seed();
+  const config = { ...CONFIG, cooldownDays: 0 };
+  const first = await assignShift(db as unknown as D1Database, "sh1", "p2", config, "tester");
+  await run(db, "insert into shift (id,task_id,starts_at,ends_at,required_headcount,status,created_at) values ('sh2','task1','2026-09-08T08:00:00+08:00','2026-09-08T08:45:00+08:00',1,'open',?)", NOW);
+  await assignShift(db as unknown as D1Database, "sh2", "p2", config, "tester");
+  await Promise.allSettled([1, 2].map(() => unassign(db as unknown as D1Database, first.assignment.id, "tester")));
+  const rows = await listFairness(db as unknown as D1Database, { orgId: "o1" });
+  expect(rows[0]).toMatchObject({ shiftCount: 1, minutes: 45 });
+});
