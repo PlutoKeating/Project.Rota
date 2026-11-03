@@ -1,0 +1,877 @@
+id: https://w3id.org/plutokeating/rota
+name: rota
+title: Project.Rota 领域本体
+description: >-
+  学生组织的人员—部门—时间—任务排班本体。
+
+  三条主线：以 W3C ORG 的 Membership 表达「一人多部门」；以「学期 × 周次 ×
+  星期 × 节次」网格表达单双周 / 周段 / 调课；以 Shift + Assignment +
+  FairnessStat 表达「谁有空、该排谁、排得公不公平」。
+
+  本文件是唯一 schema 源：DDL、TypeScript 类型、JSON Schema、ER 图与文档
+  均由它生成，不手改下游产物。
+license: AGPL-3.0-or-later
+version: 0.1.0
+
+prefixes:
+  rota: https://w3id.org/plutokeating/rota/
+  linkml: https://w3id.org/linkml/
+  org: http://www.w3.org/ns/org#
+  time: http://www.w3.org/2006/time#
+  schema: https://schema.org/
+  xsd: http://www.w3.org/2001/XMLSchema#
+
+default_prefix: rota
+default_range: string
+
+imports:
+  - linkml:types
+
+subsets:
+  core:
+    description: 领域核心（人员、组织、时间、任务、排班）
+  support:
+    description: 应用支撑（账号、导入、模型配置、审计）
+
+# ---------------------------------------------------------------------------
+# 枚举
+# ---------------------------------------------------------------------------
+
+enums:
+  TermStatus:
+    description: 学期状态
+    permissible_values:
+      planned:
+        description: 已建校历，未开始
+      active:
+        description: 进行中
+      archived:
+        description: 已归档，只读
+
+  PersonStatus:
+    permissible_values:
+      active:
+      leave:
+        description: 休学 / 长期不在校
+      graduated:
+
+  OrganizationKind:
+    permissible_values:
+      school:
+      college:
+      department:
+        description: 学生组织部门，如宣传部、办公室
+      club:
+      team:
+        description: 临时项目组
+
+  OrganizationStatus:
+    permissible_values:
+      active:
+      archived:
+
+  MembershipStatus:
+    description: 成员关系状态（不是人的状态）
+    permissible_values:
+      active:
+      suspended:
+      ended:
+
+  WeekPatternKind:
+    description: 周次模式。odd / even 分别表示单周 / 双周；ranges 用 week_ranges 描述。
+    permissible_values:
+      all:
+      odd:
+      even:
+      ranges:
+
+  OccurrenceStatus:
+    permissible_values:
+      scheduled:
+      cancelled:
+        description: 停课，对应 EXDATE
+      moved:
+        description: 改到另一节次，对应 RDATE
+
+  UnavailabilityKind:
+    permissible_values:
+      leave:
+        description: 请假
+      blacklist:
+        description: 作息黑名单（通勤、门禁、不留校）
+      other:
+
+  RequestStatus:
+    permissible_values:
+      pending:
+      approved:
+      rejected:
+
+  PreferencePolarity:
+    permissible_values:
+      prefer:
+      avoid:
+
+  TaskKind:
+    permissible_values:
+      oneoff:
+        description: 一次性任务
+      recurring:
+        description: 周期班次，由 ShiftPattern 展开
+      project:
+        description: 长期项目，多班次
+
+  TaskStatus:
+    permissible_values:
+      draft:
+      open:
+      scheduled:
+      done:
+      cancelled:
+
+  ShiftStatus:
+    permissible_values:
+      open:
+      filled:
+      cancelled:
+
+  AssignmentStatus:
+    permissible_values:
+      proposed:
+        description: 系统建议，未通知
+      confirmed:
+      declined:
+      completed:
+      no_show:
+
+  ImportSourceKind:
+    permissible_values:
+      excel:
+      csv:
+      ics:
+      screenshot:
+        description: 课表截图，走视觉模型
+      manual:
+      api:
+
+  ImportJobStatus:
+    permissible_values:
+      uploaded:
+      parsing:
+      needs_review:
+        description: 解析出结果，等人确认
+      applied:
+      failed:
+
+  LlmProviderKind:
+    permissible_values:
+      openai_compatible:
+      anthropic:
+      google:
+      cloudflare_ai:
+        description: Workers AI，无需外部 key
+
+  AdminRole:
+    permissible_values:
+      owner:
+        description: 唯一超管，可改模型配置与账号
+      admin:
+
+# ---------------------------------------------------------------------------
+# 公共 slot
+# ---------------------------------------------------------------------------
+
+slots:
+  id:
+    identifier: true
+    range: string
+    required: true
+    description: 主键，ULID 字符串，按时间有序
+  created_at:
+    range: datetime
+    required: true
+  updated_at:
+    range: datetime
+  note:
+    range: string
+  name:
+    range: string
+  code:
+    range: string
+
+  # --- 校历 ---
+  term_id:
+    range: Term
+    required: true
+  week_count:
+    range: integer
+    minimum_value: 1
+    maximum_value: 52
+  start_date:
+    range: date
+    description: 第 1 周的周一
+  timezone:
+    range: string
+    description: IANA 时区
+
+  # --- 节次 / 格子 ---
+  period_index:
+    range: integer
+    minimum_value: 1
+  start_time:
+    range: string
+    pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+  end_time:
+    range: string
+    pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+  label:
+    range: string
+  weekday:
+    range: integer
+    minimum_value: 1
+    maximum_value: 7
+    description: 1=周一 … 7=周日（ISO 8601）
+  week_index:
+    range: integer
+    minimum_value: 1
+  starts_at:
+    range: datetime
+  ends_at:
+    range: datetime
+
+  # --- 人 / 组织 ---
+  person_id:
+    range: Person
+    required: true
+  org_id:
+    range: Organization
+  role_id:
+    range: Role
+  role:
+    range: string
+    description: 仅 AdminUser 使用
+  parent_id:
+    range: Organization
+  student_no:
+    range: string
+  full_name:
+    range: string
+  email:
+    range: string
+  phone:
+    range: string
+  valid_from:
+    range: date
+  valid_to:
+    range: date
+  is_primary:
+    range: boolean
+  level:
+    range: integer
+    minimum_value: 1
+    maximum_value: 5
+
+  # --- 课程 ---
+  course_id:
+    range: Course
+  teacher:
+    range: string
+  location:
+    range: string
+  period_from:
+    range: integer
+    minimum_value: 1
+  period_to:
+    range: integer
+    minimum_value: 1
+  pattern_kind:
+    range: string
+  week_ranges:
+    range: string
+    description: '仅在 pattern_kind=ranges 时使用，如 "1-8,10-16"'
+  meeting_id:
+    range: CourseMeeting
+  slot_id:
+    range: Slot
+
+  # --- 任务 / 班次 ---
+  task_id:
+    range: Task
+  shift_id:
+    range: Shift
+  title:
+    range: string
+  description:
+    range: string
+  kind:
+    range: string
+  window_start:
+    range: datetime
+  window_end:
+    range: datetime
+  required_headcount:
+    range: integer
+    minimum_value: 1
+  required_skill_id:
+    range: Skill
+  required_role_id:
+    range: Role
+  skill_id:
+    range: Skill
+
+  # --- 排班结果 ---
+  status:
+    range: string
+    description: 各实体用 slot_usage 收窄到自己的枚举
+  score:
+    range: float
+  reason:
+    range: string
+    description: JSON 文本，打分明细，用于解释「为什么是他」
+  assigned_at:
+    range: datetime
+  assigned_by:
+    range: string
+  weight:
+    range: float
+  polarity:
+    range: string
+  shift_count:
+    range: integer
+  minutes:
+    range: integer
+  carry_over:
+    range: float
+  last_assigned_at:
+    range: datetime
+  window_key:
+    range: string
+    description: 如 2026-FALL-W40 或 2026-FALL-M10
+
+  # --- 支撑层 ---
+  oidc_subject:
+    range: string
+  last_login_at:
+    range: datetime
+  base_url:
+    range: string
+  model:
+    range: string
+  api_key_secret:
+    range: string
+    description: Secret 名称，不是明文
+  enabled:
+    range: boolean
+  params:
+    range: string
+    description: JSON 文本
+  source_kind:
+    range: string
+  file_key:
+    range: string
+    description: R2 object key
+  raw_text:
+    range: string
+  parsed_json:
+    range: string
+    description: JSON 文本，解析结果，待人工确认
+  error:
+    range: string
+  actor_id:
+    range: string
+  action:
+    range: string
+  target_type:
+    range: string
+  target_id:
+    range: string
+  payload:
+    range: string
+    description: JSON 文本
+  actor_ip:
+    range: string
+
+# ---------------------------------------------------------------------------
+# 类
+# ---------------------------------------------------------------------------
+
+classes:
+
+  # ===== 校历与时间网格 =====
+
+  Term:
+    description: 学期 / 校历。第 1 周周一 = start_date，周次从 1 开始。
+    in_subset:
+      - core
+    slots:
+      - id
+      - name
+      - start_date
+      - week_count
+      - timezone
+      - status
+      - created_at
+      - updated_at
+    slot_usage:
+      name:
+        required: true
+      status:
+        range: TermStatus
+        required: true
+      timezone:
+        ifabsent: string(Asia/Shanghai)
+    unique_keys:
+      term_name:
+        unique_key_name: term_name
+        unique_key_slots:
+          - name
+
+  ClassPeriod:
+    description: 一节课的起止时间。不同学期可不同（冬令时 / 夏令时作息）。
+    in_subset:
+      - core
+    slots:
+      - id
+      - term_id
+      - period_index
+      - label
+      - start_time
+      - end_time
+    unique_keys:
+      term_period:
+        unique_key_name: term_period
+        unique_key_slots:
+          - term_id
+          - period_index
+
+  Slot:
+    description: >-
+      可用性格子，最细粒度 = (学期, 周次, 星期, 节次)。物化后匹配就是查表，
+      不必在每次请求里展开重复规则。
+    in_subset:
+      - core
+    slots:
+      - id
+      - term_id
+      - week_index
+      - weekday
+      - period_index
+      - starts_at
+      - ends_at
+    unique_keys:
+      term_cell:
+        unique_key_name: term_cell
+        unique_key_slots:
+          - term_id
+          - week_index
+          - weekday
+          - period_index
+
+  # ===== 人与组织 =====
+
+  Person:
+    description: 人。可属于 0..N 个组织，归属与角色见 Membership。
+    in_subset:
+      - core
+    slots:
+      - id
+      - student_no
+      - full_name
+      - email
+      - phone
+      - status
+      - created_at
+      - updated_at
+    slot_usage:
+      full_name:
+        required: true
+      status:
+        range: PersonStatus
+        required: true
+    unique_keys:
+      student_no_unique:
+        unique_key_name: student_no_unique
+        unique_key_slots:
+          - student_no
+
+  Organization:
+    description: 组织，可嵌套（校 → 院 → 部门 → 项目组）。
+    in_subset:
+      - core
+    slots:
+      - id
+      - code
+      - name
+      - parent_id
+      - kind
+      - status
+      - created_at
+      - updated_at
+    slot_usage:
+      name:
+        required: true
+      kind:
+        range: OrganizationKind
+        required: true
+      status:
+        range: OrganizationStatus
+        required: true
+    unique_keys:
+      org_code:
+        unique_key_name: org_code
+        unique_key_slots:
+          - code
+
+  Role:
+    description: 角色 / 岗位，如「部长」「干事」「摄影」。org_id 为空表示全局角色。
+    in_subset:
+      - core
+    slots:
+      - id
+      - code
+      - name
+      - org_id
+      - description
+
+  Membership:
+    description: >-
+      人 × 组织 × 角色 × 任期。这是「一人多部门」的核心：不建 person.department_id，
+      而把归属本身做成可带时间与角色的实体（对应 W3C ORG 的 org:Membership）。
+    in_subset:
+      - core
+    slots:
+      - id
+      - person_id
+      - org_id
+      - role_id
+      - status
+      - valid_from
+      - valid_to
+      - is_primary
+      - created_at
+    slot_usage:
+      status:
+        range: MembershipStatus
+        required: true
+    unique_keys:
+      membership_unique:
+        unique_key_name: membership_unique
+        unique_key_slots:
+          - person_id
+          - org_id
+          - role_id
+          - valid_from
+
+  Skill:
+    description: 技能 / 资质标签，用于班次门槛。
+    in_subset:
+      - core
+    slots:
+      - id
+      - code
+      - name
+
+  PersonSkill:
+    slots:
+      - id
+      - person_id
+      - skill_id
+      - level
+    unique_keys:
+      person_skill:
+        unique_key_name: person_skill
+        unique_key_slots:
+          - person_id
+          - skill_id
+
+  # ===== 课程与课表 =====
+
+  Course:
+    description: 课程（一门课，不是一次上课）。
+    in_subset:
+      - core
+    slots:
+      - id
+      - term_id
+      - code
+      - name
+      - teacher
+      - created_at
+
+  CourseMeeting:
+    description: >-
+      上课规则：星期几、第几节到第几节、哪些周上。
+      单双周 = pattern_kind odd/even；第 1-8 周 = ranges + week_ranges。
+    in_subset:
+      - core
+    slots:
+      - id
+      - course_id
+      - term_id
+      - weekday
+      - period_from
+      - period_to
+      - pattern_kind
+      - week_ranges
+      - location
+    slot_usage:
+      pattern_kind:
+        range: WeekPatternKind
+        required: true
+
+  CourseOccurrence:
+    description: >-
+      规则展开后的具体一次上课，落在某个 Slot 上。调课 = 原 occurrence 置 cancelled
+      并新增一条 moved；停课 = 仅置 cancelled（对应 iCalendar 的 EXDATE / RDATE）。
+    in_subset:
+      - core
+    slots:
+      - id
+      - meeting_id
+      - slot_id
+      - status
+      - note
+    slot_usage:
+      status:
+        range: OccurrenceStatus
+        required: true
+
+  # ===== 可用性 =====
+
+  Unavailability:
+    description: 明确不可用的时间段。与课表叠加后得到最终可用性。
+    in_subset:
+      - core
+    slots:
+      - id
+      - person_id
+      - starts_at
+      - ends_at
+      - kind
+      - status
+      - reason
+      - created_at
+    slot_usage:
+      kind:
+        range: UnavailabilityKind
+        required: true
+      status:
+        range: RequestStatus
+        required: true
+
+  Preference:
+    description: 个人偏好时段，只影响打分，不影响硬过滤。
+    in_subset:
+      - core
+    slots:
+      - id
+      - person_id
+      - weekday
+      - period_from
+      - period_to
+      - polarity
+      - weight
+      - note
+    slot_usage:
+      polarity:
+        range: PreferencePolarity
+        required: true
+
+  # ===== 任务与班次 =====
+
+  Task:
+    description: 一件「活」。可产出 1..N 个 Shift。
+    in_subset:
+      - core
+    slots:
+      - id
+      - org_id
+      - title
+      - description
+      - kind
+      - status
+      - window_start
+      - window_end
+      - created_at
+      - updated_at
+    slot_usage:
+      title:
+        required: true
+      kind:
+        range: TaskKind
+        required: true
+      status:
+        range: TaskStatus
+        required: true
+
+  ShiftPattern:
+    description: 周期班次的生成规则，展开为多个 Shift。
+    in_subset:
+      - core
+    slots:
+      - id
+      - task_id
+      - weekday
+      - period_from
+      - period_to
+      - pattern_kind
+      - week_ranges
+      - required_headcount
+      - required_role_id
+    slot_usage:
+      pattern_kind:
+        range: WeekPatternKind
+        required: true
+
+  Shift:
+    description: 一个具体的值班时段。时间用绝对时刻，便于跨学期 / 临时任务统一做冲突检测。
+    in_subset:
+      - core
+    slots:
+      - id
+      - task_id
+      - starts_at
+      - ends_at
+      - required_headcount
+      - required_role_id
+      - required_skill_id
+      - location
+      - status
+      - created_at
+    slot_usage:
+      status:
+        range: ShiftStatus
+        required: true
+      required_headcount:
+        required: true
+
+  Assignment:
+    description: >-
+      某人被排进某个 Shift。reason 保存打分明细，保证「为什么是他 / 为什么没排他」
+      可复盘，这是公平争议时唯一的证据。
+    in_subset:
+      - core
+    slots:
+      - id
+      - shift_id
+      - person_id
+      - status
+      - score
+      - reason
+      - assigned_at
+      - assigned_by
+    slot_usage:
+      status:
+        range: AssignmentStatus
+        required: true
+    unique_keys:
+      shift_person:
+        unique_key_name: shift_person
+        unique_key_slots:
+          - shift_id
+          - person_id
+
+  FairnessStat:
+    description: >-
+      公平账本。按 (人, 组织, 窗口) 累计次数与工时，并保留 carry_over，
+      用于跨周 / 跨月 / 跨学期结转，避免「某人连着几个月没被排」。
+    in_subset:
+      - core
+    slots:
+      - id
+      - person_id
+      - org_id
+      - window_key
+      - shift_count
+      - minutes
+      - carry_over
+      - last_assigned_at
+    unique_keys:
+      fairness_window:
+        unique_key_name: fairness_window
+        unique_key_slots:
+          - person_id
+          - org_id
+          - window_key
+
+  # ===== 支撑层 =====
+
+  AdminUser:
+    description: 管理员账号。只认 id.plutokeating.beer 的 OIDC subject，不存密码。
+    in_subset:
+      - support
+    slots:
+      - id
+      - oidc_subject
+      - email
+      - full_name
+      - role
+      - enabled
+      - last_login_at
+      - created_at
+    slot_usage:
+      role:
+        range: AdminRole
+        required: true
+    unique_keys:
+      oidc_subject_unique:
+        unique_key_name: oidc_subject_unique
+        unique_key_slots:
+          - oidc_subject
+
+  LlmProvider:
+    description: >-
+      模型供应商配置。后台可增删改并即时生效——运行时读配置版本号，
+      不重启 Worker。
+    in_subset:
+      - support
+    slots:
+      - id
+      - name
+      - kind
+      - base_url
+      - model
+      - api_key_secret
+      - enabled
+      - params
+      - updated_at
+    slot_usage:
+      kind:
+        range: LlmProviderKind
+        required: true
+
+  ImportJob:
+    description: 一次课表导入。原文件进 R2，解析结果进 parsed_json，人工确认后才落库。
+    in_subset:
+      - support
+    slots:
+      - id
+      - source_kind
+      - file_key
+      - status
+      - raw_text
+      - parsed_json
+      - error
+      - created_at
+      - updated_at
+    slot_usage:
+      source_kind:
+        range: ImportSourceKind
+        required: true
+      status:
+        range: ImportJobStatus
+        required: true
+
+  AuditEvent:
+    description: 审计流水。排班、导入、授权、模型配置变更都必须留痕。
+    in_subset:
+      - support
+    slots:
+      - id
+      - actor_id
+      - action
+      - target_type
+      - target_id
+      - payload
+      - actor_ip
+      - created_at
