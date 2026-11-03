@@ -65,7 +65,7 @@ LINKML_BIN=.venv/bin/linkml bash scripts/gen.sh
 
 粘贴模型密钥前，给 Worker 配置 `PROVIDER_ENCRYPTION_KEY` Secret，值为密码学随机生成的 32 字节 base64 字符串。通过安全标准输入传给 `wrangler secret put PROVIDER_ENCRYPTION_KEY`，不要把值放入命令参数或仓库。此密钥必须保存在私有备份中；已有密文时不可直接更换，否则需要先解密重加密或重新录入所有模型密钥。缺少该 Secret 时加密写入返回明确错误，旧 Worker Secret 名称配置仍可使用。
 
-新版本不需要数据库迁移。models.dev 目录由 Worker 请求固定 HTTPS 地址；离线时保留上次成功缓存，已有模型不依赖目录可用性。
+模型密钥配置本身不需要数据库迁移（Agent 导入升级见下文）。models.dev 目录由 Worker 请求固定 HTTPS 地址；离线时保留上次成功缓存，已有模型不依赖目录可用性。
 
 `pnpm exec playwright install chromium` 安装测试浏览器。在隔离本地数据服务和 `pnpm dev` 已启动时，`pnpm test:browser` 检查创建工作、分配、嵌套焦点、模型配置和响应式布局。该命令会写入测试数据，不要将测试 baseURL 指向生产。
 
@@ -75,3 +75,11 @@ LINKML_BIN=.venv/bin/linkml bash scripts/gen.sh
 模型草稿版本引入 @dnd-kit/core、sortable、utilities（锁文件已更新），安装后按现有检查/构建/发布流程部署 Worker。数据服务已存在 app_kv，无需新迁移、Secret 或部署参数。浏览器测试新增草稿无写入、拖动/键盘排序、保存失败恢复和整页保存验证。
 
 模型诊断更新无需新增依赖、Secret 或迁移，继续使用 `pnpm check && pnpm build` 和现有部署流程。首次加载会重建 v2 模型目录缓存，并校验 OpenCode Go 官方型号；供应商目录不可达时界面会说明回退状态。
+
+## 浏览器 Agent 导入升级
+
+先备份并更新数据服务，使 `0005_browser_agent_import.sql` 应用，再构建/发布 Worker 和前端。没有新增 ECS 计算服务、容器或密钥配置；模型仍在管理后台配置，浏览器不接收密钥。WASM、PDF Worker 和格式读取库由 Vite 打包，同源加载，不依赖公共 CDN。
+
+本地专项浏览器验证：`pnpm test:agent-browser` 自动启动独立的 5178 静态服务，拦截全部 API，仅使用合成测试资料，不连接生产数据。普通业务浏览器测试仍按原流程启动隔离数据服务。
+
+`pnpm gen` 输出当前领域参考 DDL 至 `schema/rota.current.sql`，不会覆盖 `migrations/0001_init.sql`；增量迁移需单独维护。运行时批次/锁表由增量 SQL 维护，与既有认证表策略一致。

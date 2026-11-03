@@ -106,7 +106,9 @@
 
 `windowKey` 规则：`<termName>-W<周次>`。不传时返回所有窗口。`carryOver` 为该周开始前同组织的历史有效分配次数；试排计入跨窗口历史。
 
-## 导入
+## 旧单文件导入兼容接口
+
+新导入界面使用下文浏览器 Agent API，不调用此固定解析流程。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
@@ -176,7 +178,7 @@
 
 ## 数据持久化
 
-所有业务、身份会话、设置和原件均在 ECS 数据服务持久化，浏览器 API 契约不变。内部 SQL / 文件协议仅供 Worker，见 [数据服务架构](../storage/docs/ARCHITECTURE.md)。
+所有正式业务、身份会话、设置和旧单文件导入原件在 ECS 数据服务持久化；新浏览器 Agent 的原件、派生材料和对话保存在本机 IndexedDB，完成或取消 8 小时后清理。内部 SQL / 文件协议仅供 Worker，见 [数据服务架构](../storage/docs/ARCHITECTURE.md)。
 
 ## 简化操作 API
 
@@ -206,3 +208,23 @@
 模型测试返回 `{ ok, message, status?, code?, type?, details? }`；真实调用仍使用 `llm_error`（HTTP 502）。`message` 根据上游状态与明确的错误标识分类：`Model is unavailable` 提示当前模型/端点不可用，`MissingSessionID` 提示会话头，普通 400/422 提示请求参数或协议。owner 测试接口的 details 保留完整上游错误正文（包含非 JSON），不截断；发送前脱敏实际 API 密钥及认证字段。status 为上游 HTTP 状态，code/type 为上游代码与类型；未提供时不伪造。普通业务 API 仍只返回固定中文分类，不公开诊断正文。
 
 OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/go/v1/models` 的交集。官方目录不可达时保留上次验证过的型号；首次失败暂不提供 Go 新增选项并返回提示，不影响其他供应商或已有配置。目录缓存升级为 `llm:catalog:v2`，避免继续使用未校验的旧列表；无需数据库迁移。官方目录仅证明型号存在，不保证账号、地区和额度权限。
+
+## 浏览器 Agent 导入
+
+这些接口要求已登录管理员，批次操作还检查创建者；所有写请求沿用同源校验。`GET /agent-imports/snapshot` 返回 `{version,data}`，data 仅包含白名单业务表，不含身份会话、模型密钥或审计正文。此内部草稿协议保留 SQL 字段的 snake_case；常规 API 仍使用 camelCase。
+
+| 方法 | 路径 | 契约 |
+| --- | --- | --- |
+| POST | `/agent-imports` | 创建批次，返回 `{id}`，不写业务数据 |
+| GET | `/agent-imports/:id` | 本人批次状态及提交摘要 |
+| POST | `/agent-imports/:id/turn` | `{messages,context}`；单轮模型调用，返回 `{messages,calls,text,model,usage}`，工具由浏览器执行 |
+| POST | `/agent-imports/:id/lease` | `{changes}`；检查原值并取得/续期 180 秒相关数据锁 |
+| POST | `/agent-imports/:id/apply` | `{changes,summary?}`；服务端重新校验，单事务提交，批次幂等 |
+| POST | `/agent-imports/:id/release` | 释放本批租约 |
+| POST | `/agent-imports/:id/cancel` | 取消尚未提交批次并释放租约 |
+
+`changes` 每项为 `{entity,id,before,after,evidence}`；before/after 是完整原记录/新记录，新增 before=null，删除 after=null。evidence 为 `{source,locator,explanation,inferred}` 数组。实体及严格字段契约见 `src/shared/agent-import/model.ts`。不接受任意 SQL，不接受修改账号、模型、审计或其他非白名单数据。
+
+`apply` 不接受已经过期的锁；相关记录原值不符、提交版本变化、约束冲突时 409，事务回滚。校验失败 400。成功 `{ok:true,id}`；重复相同批次/内容返回同一成功结果，内容不同则 409。租约也通过数据库触发器保护常规 CRUD。
+
+人员 GET/PATCH/POST 增加 `className`、`major`；学号继续可空。独立课表通过 `timetable_profile` / `timetable_entry` / 派生的 `timetable_event` 表达，在人员页单独管理，派班按实际时间检查。详细格式、材料读取和清理边界见 [AGENT_IMPORT.md](AGENT_IMPORT.md)。

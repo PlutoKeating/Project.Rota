@@ -2,7 +2,7 @@
 
 生产唯一入口为 `https://rota.plutokeating.beer`；`wrangler.jsonc` 配置自定义域名并禁用临时入口和版本预览 URL。OIDC 客户端登记回调为 `https://rota.plutokeating.beer/api/auth/callback`，身份服务侧须同步删除旧临时域名回调。
 
-Hono 统一提供认证、业务 API、目录代理与模型网关。继续使用 ECS 数据服务的 SQL/KV 兼容接口，没有新增 Cloudflare 数据绑定或数据库迁移。
+Hono 统一提供认证、业务 API、目录代理与模型网关。继续使用 ECS 数据服务的 SQL/KV 兼容接口，没有新增 Cloudflare 数据绑定；浏览器 Agent 导入需要增量迁移 0005。
 
 新增能力：`POST /work` 原子创建任务与重复班次；`POST /persons/import` 原子导入人员与部门关系；管理端 models.dev 目录、模型优先顺序与加密 API 密钥。
 
@@ -24,3 +24,9 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 
 
 模型连接测试相互独立，不阻塞其他测试或配置编辑、排序、保存。测试使用已保存配置，结果位于对应模型卡片内；失败展示 HTTP 状态、上游代码/类型和可滚动的完整错误正文（敏感信息脱敏），不占用页面顶部错误区域。
+
+## 浏览器 Agent 导入边界
+
+`api/agent-import.ts` 提供鉴权业务快照、批次、租约、原子提交；`llm/agent.ts` 用 AI SDK 单轮适配模型协议，浏览器决定后续工具调用，服务端不运行 Agent 循环。按全局模型顺序过滤明确不支持视觉/工具的配置并尝试可用项；保留 OpenCode 客户端与会话头，禁止重定向。密钥只用于上游请求。
+
+正式提交校验完整差异、原值、引用和派班冲突，派生数据及审计同事务写入。普通 CRUD 也受租约触发器保护，租约过期可恢复。独立课表实际时间纳入 availability、人员周课表/可用时长和 scheduler，支持全局节次之外的占用。新增迁移 `0005_browser_agent_import.sql`，无新增环境变量。详见 `docs/AGENT_IMPORT.md` 与 `docs/API.md`。

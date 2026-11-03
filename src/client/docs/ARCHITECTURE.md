@@ -11,3 +11,9 @@
 排序使用 @dnd-kit 的 PointerSensor、KeyboardSensor、SortableContext 和 DragOverlay；仅 44px 抓手启动拖动，其他区域仍可滚动/选字。相邻条目用 280ms transform 弹性让位，放下动效同速；新草稿行用 220ms 入场。系统减少动态效果时取消空间动画。保留上移/下移按钮和中文读屏提示。beforeunload、hash 路由和管理 tab 切换在有草稿时提醒放弃。
 
 页面状态与网络状态通过现有 useAsync 管理。日期范围保存在 sessionStorage；侧栏操作保留底层页面筛选和滚动上下文。明暗主题保存在 localStorage。没有引入新路由框架或组件框架。
+
+## 浏览器 Agent 导入
+
+`agent-import/` 实现本地工具、IndexedDB 检查点和自主工具循环，`ImportsPage` 替换原课表/人员 tabs。组织树展开人员课表与任务班次，支持来源/推断、自然语言反馈、字段编辑和按人员排除。关闭/刷新暂停，恢复前核对正式数据和租约；完成/取消 8 小时后清理本地材料。`PersonalTimetable` 在人员课表页提供实际时间显示和修正入口。人员资料支持班级/专业。
+
+文档与 WASM 仅在本地处理，模型凭据代理位于 Worker；新流程不调用旧模板解析器。格式能力与边界见根目录 `docs/AGENT_IMPORT.md`。专项验证 `pnpm test:agent-browser` 使用真实浏览器工具及拦截模型响应；不等同真实模型识别验收。
