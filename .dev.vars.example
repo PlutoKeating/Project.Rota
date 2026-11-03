@@ -8,3 +8,6 @@ DATA_SERVICE_URL=http://127.0.0.1:8080
 DATA_SERVICE_AUTHORIZATION=Bearer local-development-only-change-me
 # External model provider key, if used instead of Workers AI.
 LLM_API_KEY=
+
+# 32 random bytes encoded as base64; required for pasted model API keys.
+PROVIDER_ENCRYPTION_KEY=

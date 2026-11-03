@@ -13,7 +13,8 @@
     "test": "vitest run && node --test storage/server.test.mjs",
     "gen": "bash scripts/gen.sh",
     "check": "pnpm typecheck && pnpm test",
-    "data:dev": "node --env-file=.env storage/server.mjs"
+    "data:dev": "node --env-file=.env storage/server.mjs",
+    "test:browser": "playwright test"
   },
   "dependencies": {
     "hono": "^4.6.14",
@@ -25,16 +26,17 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.0.0",
     "@cloudflare/workers-types": "^4.20250101.0",
+    "@playwright/test": "^1.64.1",
     "@tailwindcss/vite": "^4.1.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "jose": "^6.2.15",
     "tailwindcss": "^4.1.0",
     "typescript": "^5.7.0",
     "vite": "^7.0.0",
     "vitest": "^3.0.0",
-    "wrangler": "^4.0.0",
-    "jose": "^6.2.15"
+    "wrangler": "^4.0.0"
   },
   "license": "AGPL-3.0-or-later",
   "engines": {

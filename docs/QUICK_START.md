@@ -58,3 +58,11 @@ LINKML_BIN=.venv/bin/linkml bash scripts/gen.sh
 ```
 
 已部署迁移不得改写，领域变更另建增量迁移，认证运行时表与约束不能由生成器覆盖。
+
+## 模型密钥与浏览器验证
+
+粘贴模型密钥前，给 Worker 配置 `PROVIDER_ENCRYPTION_KEY` Secret，值为密码学随机生成的 32 字节 base64 字符串。通过安全标准输入传给 `wrangler secret put PROVIDER_ENCRYPTION_KEY`，不要把值放入命令参数或仓库。此密钥必须保存在私有备份中；已有密文时不可直接更换，否则需要先解密重加密或重新录入所有模型密钥。缺少该 Secret 时加密写入返回明确错误，旧 Worker Secret 名称配置仍可使用。
+
+新版本不需要数据库迁移。models.dev 目录由 Worker 请求固定 HTTPS 地址；离线时保留上次成功缓存，已有模型不依赖目录可用性。
+
+`pnpm exec playwright install chromium` 安装测试浏览器。在隔离本地数据服务和 `pnpm dev` 已启动时，`pnpm test:browser` 检查创建工作、分配、嵌套焦点、模型配置和响应式布局。该命令会写入测试数据，不要将测试 baseURL 指向生产。

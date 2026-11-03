@@ -33,3 +33,9 @@ pnpm-debug.log*
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+
+# Local browser verification artifacts
+playwright-report/
+test-results/
+.impeccable/review/
+.impeccable/questions/

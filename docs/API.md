@@ -175,3 +175,14 @@
 ## 数据持久化
 
 所有业务、身份会话、设置和原件均在 ECS 数据服务持久化，浏览器 API 契约不变。内部 SQL / 文件协议仅供 Worker，见 [数据服务架构](../storage/docs/ARCHITECTURE.md)。
+
+## 简化操作 API
+
+- `POST /work`：`{title,orgId,startsAt,endsAt,requiredHeadcount?,repeatWeeks?,location?}`，人数 1–300，重复 1–30 周。每个日期必须在已建学期内，成功 201 `{taskId,shiftIds}`；任务、全部班次与审计原子写入。
+- `POST /persons/import`：`{items:[{fullName,studentNo}],orgId?}`，1–300 人，重复学号拒绝整批，成功 201 `{created}`。
+- `GET /admin/model-catalog`：`{fetchedAt,stale,providers,error?}`；provider 包含 id/name/kind/baseUrl/models，model 包含 id/name/vision/context。缓存一小时。
+- `POST /admin/model-catalog/refresh`：主动刷新同一目录；上游失败且有缓存时返回 stale=true，无缓存时 502。
+- `GET /admin/model-order`：`{ids:string[]}`；`PUT` 同样格式，拒绝重复或未知 ID，排序立即影响默认首选。
+- 模型新增/更新额外接收 `apiKey`（仅写）；返回 params.hasKey，永不返回明文或 encryptedKey。保留 apiKeySecret 兼容，已存加密密钥优先。修改普通参数不清除旧密钥。
+
+批量排班预览由前端逐班调用 preview，不写分配。确认后调用既有 auto-assign，服务端重新计算冲突；候选数量是当前快照，不保证最终填满数量。

@@ -22,10 +22,14 @@ export type RequestStatus = "pending" | "approved" | "rejected";
 export type TaskKind = "oneoff" | "recurring" | "project";
 export type TaskStatus = "draft" | "open" | "scheduled" | "done" | "cancelled";
 export type ShiftStatus = "open" | "filled" | "cancelled";
-export type AssignmentStatus = "proposed" | "confirmed" | "declined" | "completed" | "no_show";
-export type ImportSourceKind = "excel" | "csv" | "ics" | "screenshot" | "manual" | "api";
-export type ImportJobStatus = "uploaded" | "parsing" | "needs_review" | "applied" | "failed";
-export type LlmProviderKind = "openai_compatible" | "anthropic" | "google" | "cloudflare_ai";
+export type AssignmentStatus =
+  "proposed" | "confirmed" | "declined" | "completed" | "no_show";
+export type ImportSourceKind =
+  "excel" | "csv" | "ics" | "screenshot" | "manual" | "api";
+export type ImportJobStatus =
+  "uploaded" | "parsing" | "needs_review" | "applied" | "failed";
+export type LlmProviderKind =
+  "openai_compatible" | "anthropic" | "google" | "cloudflare_ai";
 export type EnrollmentStatus = "active" | "dropped";
 
 export interface ListResponse<T> {
@@ -86,7 +90,13 @@ export interface CreateTermInput {
 export interface TermDetail {
   term: Term;
   periods: Period[];
-  counts: { persons: number; courses: number; memberships: number; tasks: number; slots: number };
+  counts: {
+    persons: number;
+    courses: number;
+    memberships: number;
+    tasks: number;
+    slots: number;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -422,6 +432,7 @@ export interface LlmProvider {
 }
 
 export interface LlmProviderInput {
+  apiKey?: string;
   name: string;
   kind: LlmProviderKind;
   baseUrl?: string;

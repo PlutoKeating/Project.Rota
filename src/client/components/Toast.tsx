@@ -1,4 +1,11 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { createPortal } from "react-dom";
 import { cx } from "../lib/cx";
 
@@ -21,8 +28,10 @@ const ToastContext = createContext<ToastApi | null>(null);
 let nextId = 0;
 
 const TONE_CLASSES: Record<ToastTone, string> = {
-  success: "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-200",
-  error: "border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-200",
+  success:
+    "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-200",
+  error:
+    "border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-200",
   info: "border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200",
 };
 
@@ -56,7 +65,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastContext.Provider value={value}>
       {children}
       {createPortal(
-        <div className="pointer-events-none fixed inset-x-0 top-3 z-[70] flex flex-col items-center gap-2 px-3 sm:right-6 sm:left-auto sm:items-end">
+        <div
+          aria-live="polite"
+          className="pointer-events-none fixed inset-x-0 top-20 z-[70] flex flex-col items-center gap-2 px-3 sm:right-6 sm:left-auto sm:items-end"
+        >
           {items.map((item) => (
             <button
               key={item.id}

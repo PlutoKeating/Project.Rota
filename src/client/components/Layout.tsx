@@ -1,131 +1,148 @@
-import type { ReactNode } from "react";
-import { cx } from "../lib/cx";
+import { QuickSearch } from "./QuickSearch";
+import { useEffect, useState, type ReactNode } from "react";
 import { Icon, type IconName } from "./Icon";
-
-const NAV: { path: string; label: string; short: string; icon: IconName }[] = [
-  { path: "/", label: "概览", short: "概览", icon: "overview" },
-  { path: "/terms", label: "学期与节次", short: "学期", icon: "terms" },
-  { path: "/people", label: "人员与组织", short: "人员", icon: "people" },
-  { path: "/timetable", label: "课表", short: "课表", icon: "timetable" },
-  { path: "/tasks", label: "任务", short: "任务", icon: "tasks" },
-  { path: "/schedule", label: "排班", short: "排班", icon: "schedule" },
-  { path: "/fairness", label: "公平账本", short: "公平", icon: "fairness" },
-  { path: "/imports", label: "导入", short: "导入", icon: "imports" },
-  { path: "/settings", label: "设置", short: "设置", icon: "settings" },
+import { useSession } from "./AuthGate";
+import { api, messageOf } from "../lib/api";
+const NAV: { path: string; label: string; icon: IconName }[] = [
+  { path: "/", label: "排班", icon: "schedule" },
+  { path: "/people", label: "人员", icon: "people" },
+  { path: "/imports", label: "导入", icon: "imports" },
 ];
-
-function isActive(path: string, current: string): boolean {
-  if (path === "/") return current === "/";
-  return current === path || current.startsWith(`${path}/`);
-}
-
-export interface LayoutProps {
+export function Layout({
+  title,
+  subtitle,
+  path,
+  children,
+}: {
   title: string;
   subtitle?: string;
   path: string;
   children: ReactNode;
-}
-
-/** 桌面左侧栏 + 手机底部 tab，全部是 hash 链接。 */
-export function Layout({ title, subtitle, path, children }: LayoutProps) {
+}) {
+  const session = useSession();
+  const [theme, setTheme] = useState(
+    () =>
+      localStorage.getItem("rota:theme") ||
+      (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"),
+  );
+  const [error, setError] = useState("");
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("rota:theme", theme);
+  }, [theme]);
+  const section = ["/schedule", "/tasks", "/fairness"].some((p) =>
+    path.startsWith(p),
+  )
+    ? "/"
+    : path.startsWith("/timetable")
+      ? "/people"
+      : path.startsWith("/terms")
+        ? "/settings"
+        : path;
+  const link = (item: (typeof NAV)[number]) => (
+    <a
+      key={item.path}
+      href={`#${item.path}`}
+      aria-current={
+        section === item.path ||
+        (item.path !== "/" && section.startsWith(item.path))
+          ? "page"
+          : undefined
+      }
+      className="flex items-center gap-3 rounded-xl px-4 py-3 text-sm text-slate-600 hover:bg-slate-100 aria-[current=page]:bg-indigo-600/10 aria-[current=page]:text-indigo-600 dark:text-slate-400 dark:hover:bg-slate-800"
+    >
+      <Icon name={item.icon} className="size-5" />
+      {item.label}
+    </a>
+  );
   return (
-    <div className="min-h-dvh bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+    <div className="h-dvh overflow-hidden">
       <a
         href="#main"
-        onClick={(event) => {
-          // 跳过导航：不能真的改 hash，否则会命中前端路由。
-          event.preventDefault();
+        className="sr-only focus:not-sr-only focus:fixed focus:z-[90] focus:bg-white focus:p-3"
+        onClick={(e) => {
+          e.preventDefault();
           document.getElementById("main")?.focus();
         }}
-        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[80] focus:rounded-lg focus:bg-indigo-600 focus:px-3 focus:py-2 focus:text-sm focus:text-white"
       >
         跳到主内容
       </a>
-
-      <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 flex-col border-r border-slate-200 bg-white md:flex dark:border-slate-800 dark:bg-slate-900">
-        <div className="flex items-center gap-2.5 px-5 py-5">
-          <span className="flex size-9 items-center justify-center rounded-xl bg-indigo-600 text-sm font-bold text-white shadow-sm">
+      <header className="fixed inset-x-0 top-0 z-40 flex h-16 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 dark:border-slate-800 dark:bg-slate-900 md:px-6">
+        <a href="#/" className="flex items-center gap-3 font-semibold">
+          <span className="grid size-8 place-items-center rounded-lg bg-indigo-600 text-white">
             R
           </span>
-          <div className="min-w-0">
-            <p className="text-sm font-semibold tracking-tight">Project.Rota</p>
-            <p className="text-[11px] text-slate-400">排班与公平账本</p>
-          </div>
-        </div>
-
-        <nav className="flex-1 space-y-1 overflow-y-auto px-3 pb-4" aria-label="主导航">
-          {NAV.map((item) => {
-            const active = isActive(item.path, path);
-            return (
+          <span>Project.Rota</span>
+        </a>
+        <div className="flex items-center gap-3">
+          <QuickSearch />
+          <button
+            aria-label="切换明暗主题"
+            className="rounded-lg px-2 py-2 text-xs"
+            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+          >
+            {theme === "dark" ? "浅色" : "深色"}
+          </button>
+          <details className="relative">
+            <summary className="cursor-pointer rounded-lg p-2 text-sm">
+              {session?.user?.name ?? "账号"}
+            </summary>
+            <div className="absolute right-0 mt-3 w-48 rounded-xl border border-slate-200 bg-white p-2 shadow-lg dark:border-slate-800 dark:bg-slate-900">
               <a
-                key={item.path}
-                href={`#${item.path}`}
-                aria-current={active ? "page" : undefined}
-                className={cx(
-                  "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition",
-                  active
-                    ? "bg-indigo-50 font-medium text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300"
-                    : "text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white",
-                )}
+                className="block rounded-lg p-3 hover:bg-slate-100 dark:hover:bg-slate-800"
+                href="#/settings"
               >
-                <Icon name={item.icon} className={cx("size-5", active ? "text-indigo-600 dark:text-indigo-300" : "text-slate-400")} />
-                {item.label}
+                管理
               </a>
-            );
-          })}
+              <button
+                className="w-full p-3 text-left"
+                onClick={async () => {
+                  try {
+                    await api.post("/auth/logout");
+                    location.assign("/");
+                  } catch (e) {
+                    setError(messageOf(e));
+                  }
+                }}
+              >
+                退出登录
+              </button>
+              {error && <p role="alert">{error}</p>}
+            </div>
+          </details>
+        </div>
+      </header>
+      <aside className="fixed bottom-0 left-0 top-16 hidden w-48 flex-col border-r border-slate-200 px-3 py-6 md:flex dark:border-slate-800">
+        <nav aria-label="主导航" className="space-y-2">
+          {NAV.map(link)}
         </nav>
-
-        <div className="border-t border-slate-100 px-5 py-3 text-[11px] text-slate-400 dark:border-slate-800">
-          <p>v0.1.0 · 单体 Worker</p>
-          <p className="mt-0.5">API 同源 /api</p>
+        <div className="mt-auto">
+          {link({ path: "/settings", label: "管理", icon: "settings" })}
+          <p className="px-4 pt-5 text-xs text-slate-500">
+            把合适的人，安排到位。
+          </p>
         </div>
       </aside>
-
-      <div className="md:pl-60">
-        <header className="sticky top-0 z-30 flex items-center gap-3 border-b border-slate-200 bg-white/85 px-4 py-3 backdrop-blur md:px-8 dark:border-slate-800 dark:bg-slate-900/85">
-          <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-sm font-bold text-white md:hidden">
-            R
-          </span>
-          <div className="min-w-0">
-            <h1 className="truncate text-base font-semibold tracking-tight sm:text-lg">{title}</h1>
-            {subtitle ? <p className="truncate text-[11px] text-slate-500 sm:text-xs dark:text-slate-400">{subtitle}</p> : null}
-          </div>
-        </header>
-
-        <main
-          id="main"
-          tabIndex={-1}
-          className="mx-auto w-full max-w-6xl px-4 py-4 pb-28 focus:outline-none md:px-8 md:py-6 md:pb-10"
-        >
-          {children}
-        </main>
-      </div>
-
-      <nav
-        className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden dark:border-slate-800 dark:bg-slate-900/95"
-        aria-label="主导航"
+      <main
+        id="main"
+        tabIndex={-1}
+        className="h-dvh overflow-y-auto px-4 pb-24 pt-24 focus:outline-none md:ml-48 md:px-8 md:pb-10"
       >
-        <div className="flex overflow-x-auto px-1 py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {NAV.map((item) => {
-            const active = isActive(item.path, path);
-            return (
-              <a
-                key={item.path}
-                href={`#${item.path}`}
-                aria-current={active ? "page" : undefined}
-                className={cx(
-                  "flex min-w-16 shrink-0 flex-col items-center gap-0.5 rounded-lg px-2 py-1.5 text-[10px] transition",
-                  active
-                    ? "bg-indigo-50 font-medium text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300"
-                    : "text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800",
-                )}
-              >
-                <Icon name={item.icon} className="size-5" />
-                {item.short}
-              </a>
-            );
-          })}
+        <div className="mx-auto max-w-[1440px]">
+          <div className="mb-6">
+            <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+            {subtitle && (
+              <p className="mt-2 text-sm text-slate-500">{subtitle}</p>
+            )}
+          </div>
+          {children}
         </div>
+      </main>
+      <nav
+        aria-label="手机主导航"
+        className="fixed inset-x-0 bottom-0 z-40 flex justify-around border-t border-slate-200 bg-white pb-[env(safe-area-inset-bottom)] md:hidden dark:border-slate-800 dark:bg-slate-900"
+      >
+        {NAV.map(link)}
       </nav>
     </div>
   );

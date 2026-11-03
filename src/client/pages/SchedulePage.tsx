@@ -1,3 +1,6 @@
+import { WorkComposer } from "../components/WorkComposer";
+import { FairnessPage } from "./FairnessPage";
+import { TasksPage } from "./TasksPage";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   CandidateView,
@@ -17,9 +20,20 @@ import { ScoreBar } from "../components/ScoreBar";
 import { Spinner } from "../components/Spinner";
 import { useToast } from "../components/Toast";
 import { api, messageOf } from "../lib/api";
-import { addDays, dateFull, durationMinutes, isoDate, minutesText, timeRange } from "../lib/format";
+import {
+  addDays,
+  dateFull,
+  durationMinutes,
+  isoDate,
+  minutesText,
+  timeRange,
+} from "../lib/format";
 import { useAsync } from "../lib/hooks";
-import { exclusionLabel, shiftStatusLabel, shiftStatusTone } from "../lib/labels";
+import {
+  exclusionLabel,
+  shiftStatusLabel,
+  shiftStatusTone,
+} from "../lib/labels";
 import { useOrgsState } from "../lib/resources";
 
 interface ShiftGroup {
@@ -32,7 +46,8 @@ function summarizeResult(result: unknown): string {
   if (typeof result === "object" && result !== null) {
     const record = result as Record<string, unknown>;
     const assigned = record.assigned ?? record.assignedCount ?? record.count;
-    if (typeof assigned === "number") return `已自动排 ${assigned} 个班次`;
+    if (typeof assigned === "number")
+      return `已安排 ${assigned} 人次，仍缺 ${record.skipped ?? 0} 席位`;
     if (typeof record.message === "string") return record.message;
   }
   return "自动排班已完成";
@@ -56,7 +71,10 @@ function PreviewModal({ shift, onClose, onAssigned }: PreviewModalProps) {
     setLoading(true);
     setError(null);
     try {
-      const result = await api.post<PreviewResult>(`/shifts/${encodeURIComponent(shift.id)}/preview`, {});
+      const result = await api.post<PreviewResult>(
+        `/shifts/${encodeURIComponent(shift.id)}/preview`,
+        {},
+      );
       setData(result);
       setSelectedId(result.candidates[0]?.personId ?? null);
     } catch (err) {
@@ -79,10 +97,13 @@ function PreviewModal({ shift, onClose, onAssigned }: PreviewModalProps) {
   async function assign(personId: string | null): Promise<void> {
     setBusy(personId ? "selected" : "auto");
     try {
-      await api.post(`/shifts/${encodeURIComponent(shift.id)}/assign`, personId ? { personId } : {});
+      await api.post(
+        `/shifts/${encodeURIComponent(shift.id)}/assign`,
+        personId ? { personId } : {},
+      );
       toast.success(personId ? "已分配给选中的候选" : "已自动选最高分分配");
       onAssigned();
-      onClose();
+      await load();
     } catch (err) {
       toast.error(messageOf(err));
     } finally {
@@ -92,7 +113,8 @@ function PreviewModal({ shift, onClose, onAssigned }: PreviewModalProps) {
 
   return (
     <Modal
-      title="试排预览"
+      side
+      title="班次与候选"
       description={`${shift.taskTitle} · ${dateFull(shift.startsAt)} ${timeRange(shift.startsAt, shift.endsAt)}`}
       size="xl"
       onClose={onClose}
@@ -119,25 +141,67 @@ function PreviewModal({ shift, onClose, onAssigned }: PreviewModalProps) {
         </>
       }
     >
+      {(shift.assignments?.length ?? 0) > 0 && (
+        <section className="space-y-2">
+          <h3 className="font-semibold">已安排人员</h3>
+          {shift.assignments?.map((a) => (
+            <div
+              key={a.id}
+              className="flex justify-between border-b border-slate-200 py-2"
+            >
+              <span>{a.personName}</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={busy !== null}
+                onClick={async () => {
+                  if (!confirm(`撤销 ${a.personName} 的本次分配？`)) return;
+                  setBusy("selected");
+                  try {
+                    await api.del(`/assignments/${a.id}`);
+                    onAssigned();
+                    await load();
+                  } catch (e) {
+                    toast.error(messageOf(e));
+                  } finally {
+                    setBusy(null);
+                  }
+                }}
+              >
+                撤销分配
+              </Button>
+            </div>
+          ))}
+        </section>
+      )}
       {loading ? (
         <div className="flex items-center justify-center gap-2 py-12 text-sm text-slate-500">
           <Spinner size="sm" />
           正在计算候选…
         </div>
       ) : error ? (
-        <ListState loading={false} error={error} empty={false} onRetry={() => void load()}>
+        <ListState
+          loading={false}
+          error={error}
+          empty={false}
+          onRetry={() => void load()}
+        >
           <div />
         </ListState>
       ) : (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
             <Badge tone="info">{`候选 ${candidates.length} 人`}</Badge>
-            <Badge tone={excluded.length > 0 ? "warning" : "neutral"}>{`排除 ${excluded.length} 人`}</Badge>
+            <Badge
+              tone={excluded.length > 0 ? "warning" : "neutral"}
+            >{`排除 ${excluded.length} 人`}</Badge>
             <span>冷却 {data?.cooldownDays ?? 0} 天</span>
             {data?.appliedWeights ? (
               <span className="font-mono">
-                权重 公平 {data.appliedWeights.fairness} / 饥饿 {data.appliedWeights.starvation} / 偏好{" "}
-                {data.appliedWeights.preference} / 优先级 {data.appliedWeights.priority} / 连排{" "}
+                权重 公平 {data.appliedWeights.fairness} / 饥饿{" "}
+                {data.appliedWeights.starvation} / 偏好{" "}
+                {data.appliedWeights.preference} / 优先级{" "}
+                {data.appliedWeights.priority} / 连排{" "}
                 {data.appliedWeights.recency}
               </span>
             ) : null}
@@ -166,24 +230,44 @@ function PreviewModal({ shift, onClose, onAssigned }: PreviewModalProps) {
                     >
                       <div className="flex flex-wrap items-start justify-between gap-2">
                         <div className="min-w-0">
-                          <p className="text-sm font-medium">{candidate.fullName}</p>
+                          <p className="text-sm font-medium">
+                            {candidate.fullName}
+                          </p>
                           <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
-                            已排 {candidate.assignedCount} 次 · 空闲 {minutesText(candidate.freeMinutes)}
+                            已排 {candidate.assignedCount} 次 · 空闲{" "}
+                            {minutesText(candidate.freeMinutes)}
                           </p>
                         </div>
                         <div className="text-right">
                           <p className="text-lg leading-none font-semibold tabular-nums text-indigo-600 dark:text-indigo-400">
-                            {Number.isFinite(candidate.score) ? candidate.score.toFixed(2) : "—"}
+                            {Number.isFinite(candidate.score)
+                              ? candidate.score.toFixed(2)
+                              : "—"}
                           </p>
                           <p className="text-[10px] text-slate-400">总分</p>
                         </div>
                       </div>
                       <div className="mt-2 space-y-1">
-                        <ScoreBar label="公平" value={candidate.breakdown?.fairness ?? 0} />
-                        <ScoreBar label="饥饿" value={candidate.breakdown?.starvation ?? 0} />
-                        <ScoreBar label="偏好" value={candidate.breakdown?.preference ?? 0} />
-                        <ScoreBar label="优先级" value={candidate.breakdown?.priority ?? 0} />
-                        <ScoreBar label="连排" value={candidate.breakdown?.recency ?? 0} />
+                        <ScoreBar
+                          label="公平"
+                          value={candidate.breakdown?.fairness ?? 0}
+                        />
+                        <ScoreBar
+                          label="饥饿"
+                          value={candidate.breakdown?.starvation ?? 0}
+                        />
+                        <ScoreBar
+                          label="偏好"
+                          value={candidate.breakdown?.preference ?? 0}
+                        />
+                        <ScoreBar
+                          label="优先级"
+                          value={candidate.breakdown?.priority ?? 0}
+                        />
+                        <ScoreBar
+                          label="连排"
+                          value={candidate.breakdown?.recency ?? 0}
+                        />
                       </div>
                     </button>
                   </li>
@@ -199,7 +283,10 @@ function PreviewModal({ shift, onClose, onAssigned }: PreviewModalProps) {
               </h3>
               <ul className="space-y-1 rounded-xl border border-slate-200 p-2 dark:border-slate-800">
                 {excluded.map((item: ExcludedView) => (
-                  <li key={item.personId} className="flex items-center justify-between gap-2 px-1 py-1 text-xs">
+                  <li
+                    key={item.personId}
+                    className="flex items-center justify-between gap-2 px-1 py-1 text-xs"
+                  >
                     <span className="truncate">{item.fullName}</span>
                     <Badge tone="danger">{exclusionLabel(item.reason)}</Badge>
                   </li>
@@ -214,11 +301,29 @@ function PreviewModal({ shift, onClose, onAssigned }: PreviewModalProps) {
 }
 
 export function SchedulePage() {
+  const [tab, setTab] = useState("shifts");
+  const [batch, setBatch] = useState<{
+    taskId: string;
+    rows: { s: ShiftView; p: PreviewResult }[];
+  } | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [detailTask, setDetailTask] = useState<string | null>(null);
+  useEffect(() => {
+    const open = () => setCreating(true);
+    window.addEventListener("rota:create-work", open);
+    return () => window.removeEventListener("rota:create-work", open);
+  }, []);
+  const [missingOnly, setMissingOnly] = useState(false);
+  const [taskQuery, setTaskQuery] = useState("");
   const toast = useToast();
   const orgsState = useOrgsState();
 
-  const [from, setFrom] = useState(isoDate());
-  const [to, setTo] = useState(addDays(isoDate(), 13));
+  const [from, setFrom] = useState(
+    () => sessionStorage.getItem("rota:from") || isoDate(),
+  );
+  const [to, setTo] = useState(
+    () => sessionStorage.getItem("rota:to") || addDays(isoDate(), 6),
+  );
   const [orgId, setOrgId] = useState("");
   const [version, setVersion] = useState(0);
   const [previewShift, setPreviewShift] = useState<ShiftView | null>(null);
@@ -234,7 +339,21 @@ export function SchedulePage() {
     return api.get<ListResponse<ShiftView>>(`/shifts?${params.toString()}`);
   }, [from, to, orgId, version]);
 
-  const shiftList = shifts.data?.items ?? [];
+  useEffect(() => {
+    sessionStorage.setItem("rota:from", from);
+    sessionStorage.setItem("rota:to", to);
+  }, [from, to]);
+  const shiftList = (shifts.data?.items ?? []).filter(
+    (s) =>
+      (!missingOnly || (s.assignments?.length ?? 0) < s.requiredHeadcount) &&
+      (s.taskTitle ?? "").includes(taskQuery),
+  );
+  useEffect(() => {
+    if (previewShift) {
+      const latest = shifts.data?.items.find((s) => s.id === previewShift.id);
+      if (latest) setPreviewShift(latest);
+    }
+  }, [shifts.data]);
 
   const groups = useMemo<ShiftGroup[]>(() => {
     const map = new Map<string, ShiftGroup>();
@@ -243,12 +362,18 @@ export function SchedulePage() {
       if (existing) {
         existing.shifts.push(shift);
       } else {
-        map.set(shift.taskId, { taskId: shift.taskId, taskTitle: shift.taskTitle ?? "未命名任务", shifts: [shift] });
+        map.set(shift.taskId, {
+          taskId: shift.taskId,
+          taskTitle: shift.taskTitle ?? "未命名任务",
+          shifts: [shift],
+        });
       }
     }
     const result = [...map.values()];
     for (const group of result) {
-      group.shifts.sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt));
+      group.shifts.sort(
+        (a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt),
+      );
     }
     return result;
   }, [shiftList]);
@@ -256,9 +381,18 @@ export function SchedulePage() {
   async function autoAssign(taskId: string): Promise<void> {
     setAutoTaskId(taskId);
     try {
-      const result = await api.post<unknown>(`/tasks/${encodeURIComponent(taskId)}/auto-assign`, {});
-      toast.success(summarizeResult(result));
-      setVersion((value) => value + 1);
+      const all = await api.get<ListResponse<ShiftView>>(
+        `/tasks/${encodeURIComponent(taskId)}/shifts`,
+      );
+      const previews = await Promise.all(
+        all.items
+          .filter((s) => s.status !== "cancelled")
+          .map(async (s) => ({
+            s,
+            p: await api.post<PreviewResult>(`/shifts/${s.id}/preview`, {}),
+          })),
+      );
+      setBatch({ taskId, rows: previews });
     } catch (error) {
       toast.error(messageOf(error));
     } finally {
@@ -268,137 +402,328 @@ export function SchedulePage() {
 
   return (
     <div className="space-y-4 sm:space-y-5">
-      <Card title="排班" description="按时间范围查看班次，先试排再确认；也可以整任务自动排。">
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-          <Field label="开始日期">
-            <TextInput type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
-          </Field>
-          <Field label="结束日期">
-            <TextInput type="date" value={to} onChange={(event) => setTo(event.target.value)} />
-          </Field>
-          <Field label="部门">
-            <Select value={orgId} onChange={(event) => setOrgId(event.target.value)}>
-              <option value="">全部部门</option>
-              {(orgsState.data?.items ?? []).map((org) => (
-                <option key={org.id} value={org.id}>
-                  {org.name}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <div className="flex items-end gap-2">
-            <Button variant="secondary" size="sm" onClick={() => setVersion((value) => value + 1)}>
-              刷新
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <nav aria-label="排班视图" className="flex gap-2">
+          {[
+            ["shifts", "班次"],
+            ["tasks", "任务"],
+            ["fairness", "公平账本"],
+          ].map(([id, label]) => (
+            <Button
+              key={id}
+              variant={tab === id ? "secondary" : "ghost"}
+              onClick={() => setTab(id)}
+            >
+              {label}
             </Button>
-            <span className="pb-2 text-[11px] text-slate-400">
-              {shifts.loading ? "加载中…" : `${shiftList.length} 个班次`}
-            </span>
-          </div>
-        </div>
-        {orgsState.error ? (
-          <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-400">组织加载失败：{orgsState.error}</p>
-        ) : null}
-      </Card>
-
-      <ListState
-        loading={shifts.loading}
-        error={shifts.error}
-        empty={groups.length === 0}
-        onRetry={shifts.reload}
-        emptyTitle="这个时间范围内没有班次"
-        emptyDescription="换一个时间范围，或先到任务页生成班次。"
-        emptyAction={
-          <a href="#/tasks" className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400">
-            去任务页 →
+          ))}
+        </nav>
+        <Button onClick={() => setCreating(true)}>安排工作</Button>
+      </div>
+      {tab === "tasks" && <TasksPage taskId={null} />}
+      {tab === "fairness" && <FairnessPage />}
+      <div hidden={tab !== "shifts"} className="space-y-5">
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => {
+              setFrom(addDays(from, -7));
+              setTo(addDays(to, -7));
+            }}
+          >
+            上一周
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => {
+              setFrom(isoDate());
+              setTo(addDays(isoDate(), 6));
+            }}
+          >
+            今天起一周
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => {
+              setFrom(addDays(from, 7));
+              setTo(addDays(to, 7));
+            }}
+          >
+            下一周
+          </Button>
+          <Button
+            variant={missingOnly ? "primary" : "ghost"}
+            size="sm"
+            onClick={() => setMissingOnly(!missingOnly)}
+          >
+            只看缺员
+          </Button>
+          <a
+            className="ml-auto text-sm underline"
+            href={`/api/export/schedule.csv?${new URLSearchParams({ from: from + "T00:00:00+08:00", to: to + "T23:59:59+08:00", ...(orgId ? { orgId } : {}) })}`}
+          >
+            导出班表
           </a>
-        }
-      >
-        <div className="space-y-4">
-          {groups.map((group) => {
-            const filled = group.shifts.reduce((total, shift) => total + (shift.assignments?.length ?? 0), 0);
-            const required = group.shifts.reduce((total, shift) => total + shift.requiredHeadcount, 0);
-            return (
-              <Card
-                key={group.taskId}
-                title={group.taskTitle}
-                description={`${group.shifts.length} 个班次 · 已排 ${filled}/${required} 人次`}
-                actions={
-                  <>
-                    <a
-                      href={`#/tasks/${group.taskId}`}
-                      className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
-                    >
-                      任务详情
-                    </a>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      loading={autoTaskId === group.taskId}
-                      onClick={() => void autoAssign(group.taskId)}
-                    >
-                      整任务自动排
-                    </Button>
-                  </>
-                }
-                bodyClassName="p-3 sm:p-4"
-              >
-                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                  {group.shifts.map((shift) => {
-                    const assigned = shift.assignments ?? [];
-                    const full = assigned.length >= shift.requiredHeadcount;
-                    return (
-                      <article
-                        key={shift.id}
-                        className="flex flex-col rounded-xl border border-slate-200 p-3 dark:border-slate-800"
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <p className="text-xs font-medium tabular-nums">
-                              {dateFull(shift.startsAt)} {timeRange(shift.startsAt, shift.endsAt)}
-                            </p>
-                            <p className="mt-0.5 text-[11px] text-slate-400">
-                              {minutesText(durationMinutes(shift.startsAt, shift.endsAt))}
-                              {shift.location ? ` · ${shift.location}` : ""}
-                            </p>
-                          </div>
-                          <Badge tone={shiftStatusTone(shift.status)}>{shiftStatusLabel(shift.status)}</Badge>
-                        </div>
-
-                        <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
-                          <span className={full ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"}>
-                            {assigned.length}/{shift.requiredHeadcount} 人
-                          </span>
-                          <span className="text-slate-300 dark:text-slate-600">·</span>
-                          <span>需求 {shift.requiredHeadcount}</span>
-                        </div>
-
-                        <div className="mt-2 flex min-h-6 flex-wrap gap-1">
-                          {assigned.length === 0 ? (
-                            <span className="text-[11px] text-slate-400">还没有人</span>
-                          ) : (
-                            assigned.map((assignment) => (
-                              <Badge key={assignment.id} tone="info">
-                                {assignment.personName}
-                              </Badge>
-                            ))
-                          )}
-                        </div>
-
-                        <div className="mt-3 flex justify-end">
-                          <Button size="sm" disabled={shift.status === "cancelled"} onClick={() => setPreviewShift(shift)}>
-                            试排
-                          </Button>
-                        </div>
-                      </article>
-                    );
-                  })}
-                </div>
-              </Card>
-            );
-          })}
         </div>
-      </ListState>
+        <TextInput
+          aria-label="搜索工作"
+          placeholder="搜索工作名称"
+          value={taskQuery}
+          onChange={(e) => setTaskQuery(e.target.value)}
+        />
+        <Card>
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <Field label="开始日期">
+              <TextInput
+                type="date"
+                value={from}
+                onChange={(event) => setFrom(event.target.value)}
+              />
+            </Field>
+            <Field label="结束日期">
+              <TextInput
+                type="date"
+                value={to}
+                onChange={(event) => setTo(event.target.value)}
+              />
+            </Field>
+            <Field label="部门">
+              <Select
+                value={orgId}
+                onChange={(event) => setOrgId(event.target.value)}
+              >
+                <option value="">全部部门</option>
+                {(orgsState.data?.items ?? []).map((org) => (
+                  <option key={org.id} value={org.id}>
+                    {org.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <div className="flex items-end gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setVersion((value) => value + 1)}
+              >
+                刷新
+              </Button>
+              <span className="pb-2 text-[11px] text-slate-400">
+                {shifts.loading ? "加载中…" : `${shiftList.length} 个班次`}
+              </span>
+            </div>
+          </div>
+          {orgsState.error ? (
+            <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-400">
+              组织加载失败：{orgsState.error}
+            </p>
+          ) : null}
+        </Card>
 
+        <ListState
+          loading={shifts.loading}
+          error={shifts.error}
+          empty={groups.length === 0}
+          onRetry={shifts.reload}
+          emptyTitle="这个时间范围内没有班次"
+          emptyDescription="调整筛选条件，或直接安排一项工作。"
+          emptyAction={
+            <Button onClick={() => setCreating(true)}>安排工作</Button>
+          }
+        >
+          <div className="space-y-4">
+            {groups.map((group) => {
+              const filled = group.shifts.reduce(
+                (total, shift) => total + (shift.assignments?.length ?? 0),
+                0,
+              );
+              const required = group.shifts.reduce(
+                (total, shift) => total + shift.requiredHeadcount,
+                0,
+              );
+              return (
+                <Card
+                  key={group.taskId}
+                  title={group.taskTitle}
+                  description={`${group.shifts.length} 个班次 · 已排 ${filled}/${required} 人次`}
+                  actions={
+                    <>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setDetailTask(group.taskId)}
+                      >
+                        任务详情
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        loading={autoTaskId === group.taskId}
+                        onClick={() => void autoAssign(group.taskId)}
+                      >
+                        整任务自动排
+                      </Button>
+                    </>
+                  }
+                  bodyClassName="p-3 sm:p-4"
+                >
+                  <div className="divide-y divide-slate-200 dark:divide-slate-800">
+                    {group.shifts.map((shift) => {
+                      const assigned = shift.assignments ?? [];
+                      const full = assigned.length >= shift.requiredHeadcount;
+                      return (
+                        <article
+                          key={shift.id}
+                          className="grid gap-3 py-4 md:grid-cols-[2fr_1fr_2fr_auto] md:items-center"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <p className="text-xs font-medium tabular-nums">
+                                {dateFull(shift.startsAt)}{" "}
+                                {timeRange(shift.startsAt, shift.endsAt)}
+                              </p>
+                              <p className="mt-0.5 text-[11px] text-slate-400">
+                                {minutesText(
+                                  durationMinutes(shift.startsAt, shift.endsAt),
+                                )}
+                                {shift.location ? ` · ${shift.location}` : ""}
+                              </p>
+                            </div>
+                            <Badge tone={shiftStatusTone(shift.status)}>
+                              {shiftStatusLabel(shift.status)}
+                            </Badge>
+                          </div>
+
+                          <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+                            <span
+                              className={
+                                full
+                                  ? "text-emerald-600 dark:text-emerald-400"
+                                  : "text-amber-600 dark:text-amber-400"
+                              }
+                            >
+                              {assigned.length}/{shift.requiredHeadcount} 人
+                            </span>
+                            <span className="text-slate-300 dark:text-slate-600">
+                              ·
+                            </span>
+                            <span>需求 {shift.requiredHeadcount}</span>
+                          </div>
+
+                          <div className="mt-2 flex min-h-6 flex-wrap gap-1">
+                            {assigned.length === 0 ? (
+                              <span className="text-[11px] text-slate-400">
+                                还没有人
+                              </span>
+                            ) : (
+                              assigned.map((assignment) => (
+                                <Badge key={assignment.id} tone="info">
+                                  {assignment.personName}
+                                </Badge>
+                              ))
+                            )}
+                          </div>
+
+                          <div className="mt-3 flex justify-end">
+                            <Button
+                              size="sm"
+                              disabled={shift.status === "cancelled"}
+                              onClick={() => setPreviewShift(shift)}
+                            >
+                              查看与安排
+                            </Button>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        </ListState>
+      </div>
+      {detailTask && (
+        <Modal side title="任务详情" onClose={() => setDetailTask(null)}>
+          <TasksPage taskId={detailTask} />
+        </Modal>
+      )}
+      {creating && (
+        <WorkComposer
+          onClose={() => setCreating(false)}
+          onCreated={(date) => {
+            setFrom(date);
+            setTo(addDays(date, 6));
+            setTab("shifts");
+            setVersion((v) => v + 1);
+          }}
+        />
+      )}
+      {batch && (
+        <Modal
+          side
+          title="批量排班预览"
+          description="覆盖本任务全部班次。以下是当前可用性检查；确认时逐次重新检查人员冲突，最终人数可能变化。"
+          onClose={() => setBatch(null)}
+          footer={
+            <Button
+              loading={autoTaskId !== null}
+              onClick={async () => {
+                setAutoTaskId(batch.taskId);
+                try {
+                  const result = await api.post(
+                    `/tasks/${batch.taskId}/auto-assign`,
+                    {},
+                  );
+                  toast.success(summarizeResult(result));
+                  setBatch(null);
+                  setVersion((v) => v + 1);
+                } catch (e) {
+                  toast.error(messageOf(e));
+                } finally {
+                  setAutoTaskId(null);
+                }
+              }}
+            >
+              确认自动分配
+            </Button>
+          }
+        >
+          <ul className="divide-y divide-slate-200">
+            {batch.rows.map(({ s, p }) => {
+              const gap = Math.max(
+                0,
+                s.requiredHeadcount - (s.assignments?.length ?? 0),
+              );
+              return (
+                <li key={s.id} className="py-4">
+                  <p className="font-medium">
+                    {dateFull(s.startsAt)} {timeRange(s.startsAt, s.endsAt)}
+                  </p>
+                  <p className="mt-2 text-sm">
+                    {gap === 0
+                      ? "已填满"
+                      : `缺 ${gap} 人 · 可用候选 ${p.candidates.length} 人`}
+                  </p>
+                  {gap > 0 && p.candidates.length === 0 && (
+                    <p className="mt-1 text-rose-600">
+                      需人工处理：
+                      {p.excluded
+                        .map(
+                          (e) => `${e.fullName}（${exclusionLabel(e.reason)}）`,
+                        )
+                        .join("、") || "部门暂无有效成员"}
+                    </p>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </Modal>
+      )}
       {previewShift ? (
         <PreviewModal
           shift={previewShift}

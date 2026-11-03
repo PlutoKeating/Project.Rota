@@ -1,29 +1,106 @@
 @import "tailwindcss";
-
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+@font-face {
+  font-family: Inter;
+  src: url("/fonts/InterVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+@theme {
+  --font-sans: Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --color-indigo-50: #fff3e6;
+  --color-indigo-100: #f9dfc5;
+  --color-indigo-300: #f5b67c;
+  --color-indigo-400: #f0a35e;
+  --color-indigo-500: #b85c21;
+  --color-indigo-600: #a94d12;
+  --color-indigo-700: #8a3d0c;
+  --color-slate-50: #f5f2ec;
+  --color-slate-100: #ede8df;
+  --color-slate-200: #ddd7ce;
+  --color-slate-300: #bcb4aa;
+  --color-slate-400: #72685e;
+  --color-emerald-600: #087650;
+  --color-amber-600: #945000;
+  --color-slate-500: #686159;
+  --color-slate-600: #57514a;
+  --color-slate-700: #403b35;
+  --color-slate-800: #302e2b;
+  --color-slate-900: #17181c;
+  --color-slate-950: #0e0f11;
+}
 :root {
-  color-scheme: light dark;
-  font-family: system-ui, -apple-system, "Noto Sans SC", "PingFang SC", sans-serif;
+  font-family: var(--font-sans);
+  color-scheme: light;
   -webkit-text-size-adjust: 100%;
 }
-
-html,
-body,
-#root {
-  min-height: 100%;
+[data-theme="dark"] {
+  color-scheme: dark;
+  --color-slate-400: #a9a49c;
+  --color-slate-500: #aaa49b;
+  --color-indigo-600: #f0a35e;
+  --color-indigo-500: #f5b67c;
+  --color-indigo-700: #e29651;
 }
-
-html {
-  scroll-behavior: smooth;
-}
-
 body {
-  @apply bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100;
   margin: 0;
+  @apply bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100;
+  font-size: 14px;
 }
-
-/* 深色模式下让日期/时间选择器图标仍可见 */
-input[type="date"]::-webkit-calendar-picker-indicator,
-input[type="time"]::-webkit-calendar-picker-indicator,
-input[type="datetime-local"]::-webkit-calendar-picker-indicator {
-  opacity: 0.55;
+button,
+a,
+input,
+select,
+textarea {
+  touch-action: manipulation;
+}
+button {
+  cursor: pointer;
+}
+button:disabled {
+  cursor: not-allowed;
+}
+:focus-visible {
+  outline: 2px solid var(--color-indigo-600);
+  outline-offset: 3px;
+}
+::selection {
+  background: #f0a35e55;
+}
+input,
+textarea {
+  caret-color: var(--color-indigo-600);
+}
+[data-theme="dark"] .bg-indigo-600 {
+  color: #1a120a;
+}
+[data-theme="dark"] .bg-white {
+  background-color: #17181c;
+}
+[data-theme="dark"] .text-slate-900 {
+  color: #e8e4dd;
+}
+[data-theme="dark"] .text-slate-600,
+[data-theme="dark"] .text-slate-700 {
+  color: #a9a49c;
+}
+[data-theme="dark"] .border-slate-200 {
+  border-color: #302e2b;
+}
+input[type="checkbox"],
+input[type="range"] {
+  accent-color: var(--color-indigo-600);
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #81786e66 transparent;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
 }

@@ -6,7 +6,7 @@
 
 ## 2. 组件与边界
 
-- `src/client`：React 19、Tailwind 4、hash 路由，九个业务页面。登录门禁先请求 `/api/auth/me`；会话失效后回到登录页。
+- `src/client`：React 19、Tailwind 4、hash 路由，排班/人员/导入三个日常入口及低频管理分区，旧路由兼容。登录门禁先请求 `/api/auth/me`；会话失效后回到登录页。
 - `src/worker/api`：Hono 接口、权限、输入校验与审计。
 - `src/worker/domain`：时间展开、可用性、评分及排班/账本服务。纯评分与时间函数不依赖运行时；排班和可用性服务使用 D1 兼容 SQL 接口访问 ECS SQLite。这与早期“所有领域代码不依赖 D1”的设计不同，以实际源码为准。
 - `src/worker/import`：Excel/CSV/ICS 与视觉识别。识别结果必须先人工确认。
@@ -70,3 +70,9 @@ Cloudflare Worker 同时部署前端与 API，Workers AI 绑定见 `wrangler.jso
 - 贪心算法不保证全局最优；先排某个任务会影响后续任务的候选。
 - 课表/请假与排班的同时编辑不是跨请求的全局事务；变更后应重新试排并复核已有安排。
 - 文件与数据库需分别备份，恢复时核对导入原件；首次上线前端验证不能替代真实用户的邮箱或第三方登录验证。
+
+## 交互与模型配置更新
+
+首页直接排班；班次、人员与初始化配置在侧栏完成。`POST /work` 将任务与显式日期班次合并为单事务写入；人员批量导入也整批校验、整批提交。
+
+模型目录从 models.dev 获取，缓存一小时，手动刷新失败保留旧目录并提示过期。模型密钥可通过管理界面粘贴，以独立 Secret 加密后保存在现有 params JSON，密文不出 API。模型排序保存在设置存储并影响未指定 provider 的首选。已有 Secret 名称与默认模型配置兼容。详见 [Worker 模块架构](../src/worker/docs/ARCHITECTURE.md)。

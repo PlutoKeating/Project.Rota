@@ -28,7 +28,11 @@ import type {
   UnavailabilityKind,
 } from "../../shared/types";
 import type { BusyInfo, BusyReason } from "../domain/availability";
-import { freeMinutes, loadAvailability, toTimetableCells } from "../domain/availability";
+import {
+  freeMinutes,
+  loadAvailability,
+  toTimetableCells,
+} from "../domain/availability";
 import { weekIndexOf } from "../domain/time";
 import type { Env } from "../env";
 import {
@@ -52,6 +56,63 @@ import {
 
 export const people = new Hono<{ Bindings: Env }>();
 
+people.post("/persons/import", async (c) => {
+  const body = await readJson<{
+    items: Record<string, unknown>[];
+    orgId?: string;
+  }>(c);
+  if (
+    !Array.isArray(body.items) ||
+    body.items.length < 1 ||
+    body.items.length > 300
+  )
+    throw badRequest("每次导入 1–300 人");
+  const orgId = optString(body.orgId, "orgId");
+  if (
+    orgId &&
+    !(await dbOne(c.env.DB, "select id from organization where id = ?", orgId))
+  )
+    throw badRequest("部门不存在");
+  const seen = new Set<string>();
+  const statements: { sql: string; params: (string | number | null)[] }[] = [];
+  for (const row of body.items) {
+    const name = asString(row.fullName, "姓名", 100),
+      number = asString(row.studentNo, "学号", 100);
+    if (
+      seen.has(number) ||
+      (await dbOne(
+        c.env.DB,
+        "select id from person where student_no = ?",
+        number,
+      ))
+    )
+      throw conflict(`学号 ${number} 重复，未导入任何人员`);
+    seen.add(number);
+    const id = ulid(),
+      at = nowIso();
+    statements.push({
+      sql: "insert into person (id,full_name,student_no,status,created_at) values (?,?,?,'active',?)",
+      params: [id, name, number, at],
+    });
+    if (orgId)
+      statements.push({
+        sql: "insert into membership (id,person_id,org_id,status,is_primary,created_at) values (?,?,?,'active',1,?)",
+        params: [ulid(), id, orgId, at],
+      });
+  }
+  statements.push({
+    sql: "insert into audit_event (id,actor_id,action,target_type,payload,created_at) values (?,?,'person.import','person',?,?)",
+    params: [
+      ulid(),
+      c.get("user").id,
+      JSON.stringify({ count: body.items.length, orgId }),
+      nowIso(),
+    ],
+  });
+  await dbBatch(c.env.DB, statements);
+  return c.json({ created: body.items.length }, 201);
+});
+
 type PeopleContext = Context<{ Bindings: Env }>;
 type BindValue = string | number | null;
 
@@ -70,12 +131,16 @@ const MEMBERSHIP_STATUSES = ["active", "suspended", "ended"] as const;
 const REQUEST_STATUSES = ["pending", "approved", "rejected"] as const;
 const UNAVAILABILITY_KINDS = ["leave", "blacklist", "other"] as const;
 
-const PERSON_COLUMNS = "id, student_no, full_name, email, phone, status, created_at";
+const PERSON_COLUMNS =
+  "id, student_no, full_name, email, phone, status, created_at";
 const ORG_COLUMNS = "id, code, name, parent_id, kind, status";
 const ROLE_COLUMNS = "id, code, name, org_id, description";
-const TERM_COLUMNS = "id, name, start_date, week_count, timezone, status, created_at";
-const SLOT_COLUMNS = "id, term_id, week_index, weekday, period_index, starts_at, ends_at";
-const UNAVAILABILITY_COLUMNS = "id, person_id, starts_at, ends_at, kind, status, reason";
+const TERM_COLUMNS =
+  "id, name, start_date, week_count, timezone, status, created_at";
+const SLOT_COLUMNS =
+  "id, term_id, week_index, weekday, period_index, starts_at, ends_at";
+const UNAVAILABILITY_COLUMNS =
+  "id, person_id, starts_at, ends_at, kind, status, reason";
 
 /** 成员关系视图：org / role 名称用 left join 带出来。 */
 const MEMBERSHIP_SELECT = `
@@ -98,13 +163,22 @@ function auditStatement(
 ): Statement {
   return {
     sql: "insert into audit_event (id, actor_id, action, target_type, target_id, payload, created_at) values (?, ?, ?, ?, ?, ?, ?)",
-    params: [ulid(), actor, action, targetType, targetId, JSON.stringify(payload), nowIso()],
+    params: [
+      ulid(),
+      actor,
+      action,
+      targetType,
+      targetId,
+      JSON.stringify(payload),
+      nowIso(),
+    ],
   };
 }
 
 function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  for (let i = 0; i < items.length; i += size)
+    out.push(items.slice(i, i + size));
   return out;
 }
 
@@ -126,15 +200,21 @@ function pathParam(c: PeopleContext, name: string): string {
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const DATETIME_RE = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d{1,3})?(Z|[+-]\d{2}:\d{2})?$/;
+const DATETIME_RE =
+  /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d{1,3})?(Z|[+-]\d{2}:\d{2})?$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function requireIsoDate(value: unknown, field: string): string {
   const raw = asString(value, field, 10);
   if (!DATE_RE.test(raw)) throw badRequest(`${field} 必须是 YYYY-MM-DD`);
-  const [year, month, day] = raw.split("-").map((part) => Number.parseInt(part, 10));
+  const [year, month, day] = raw
+    .split("-")
+    .map((part) => Number.parseInt(part, 10));
   const parsed = new Date(Date.UTC(year, month - 1, day));
-  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== raw) {
+  if (
+    Number.isNaN(parsed.getTime()) ||
+    parsed.toISOString().slice(0, 10) !== raw
+  ) {
     throw badRequest(`${field} 不是合法日期`);
   }
   return raw;
@@ -161,10 +241,18 @@ function optEmail(value: unknown, field: string): string | null {
 }
 
 async function loadPerson(db: D1Database, id: string): Promise<Person | null> {
-  return dbOne<Person>(db, `select ${PERSON_COLUMNS} from person where id = ?`, id);
+  return dbOne<Person>(
+    db,
+    `select ${PERSON_COLUMNS} from person where id = ?`,
+    id,
+  );
 }
 
-async function countRows(db: D1Database, sql: string, ...params: BindValue[]): Promise<number> {
+async function countRows(
+  db: D1Database,
+  sql: string,
+  ...params: BindValue[]
+): Promise<number> {
   const row = await dbOne<{ n: number }>(db, sql, ...params);
   return row?.n ?? 0;
 }
@@ -225,8 +313,15 @@ async function loadMembershipViews(
   return map;
 }
 
-async function loadMembershipView(db: D1Database, id: string): Promise<MembershipView> {
-  const row = await dbOne<MembershipRow>(db, `${MEMBERSHIP_SELECT} where m.id = ?`, id);
+async function loadMembershipView(
+  db: D1Database,
+  id: string,
+): Promise<MembershipView> {
+  const row = await dbOne<MembershipRow>(
+    db,
+    `${MEMBERSHIP_SELECT} where m.id = ?`,
+    id,
+  );
   if (!row) throw notFound("成员关系不存在");
   return toMembershipView(row);
 }
@@ -235,9 +330,16 @@ async function loadMembershipView(db: D1Database, id: string): Promise<Membershi
 // 学期与周次
 // ---------------------------------------------------------------------------
 
-async function resolveTerm(db: D1Database, termId: string | null): Promise<Term> {
+async function resolveTerm(
+  db: D1Database,
+  termId: string | null,
+): Promise<Term> {
   if (termId) {
-    const term = await dbOne<Term>(db, `select ${TERM_COLUMNS} from term where id = ?`, termId);
+    const term = await dbOne<Term>(
+      db,
+      `select ${TERM_COLUMNS} from term where id = ?`,
+      termId,
+    );
     if (!term) throw notFound("学期不存在");
     return term;
   }
@@ -264,7 +366,11 @@ function resolveWeek(raw: string | null, term: Term): number {
     return parsed;
   }
   if (!term.startDate) throw badRequest("学期缺少开学日期");
-  const current = weekIndexOf(new Date().toISOString().slice(0, 10), term.startDate, term.weekCount);
+  const current = weekIndexOf(
+    new Date().toISOString().slice(0, 10),
+    term.startDate,
+    term.weekCount,
+  );
   return current ?? 1;
 }
 
@@ -321,7 +427,11 @@ async function computeFreeMinutesBatch(
       else occurrenceSlots.set(row.personId, new Set([row.slotId]));
     }
 
-    const leaveRows = await dbAll<{ personId: string; startsAt: string | null; endsAt: string | null }>(
+    const leaveRows = await dbAll<{
+      personId: string;
+      startsAt: string | null;
+      endsAt: string | null;
+    }>(
       db,
       `select person_id, starts_at, ends_at
          from unavailability
@@ -382,10 +492,18 @@ async function computeFreeMinutesBatch(
   return result;
 }
 
-function overlaps(intervals: IntervalRow[], start: number, end: number): boolean {
+function overlaps(
+  intervals: IntervalRow[],
+  start: number,
+  end: number,
+): boolean {
   for (const interval of intervals) {
     if (interval.startsAt === null || interval.endsAt === null) continue;
-    if (Date.parse(interval.startsAt) < end && Date.parse(interval.endsAt) > start) return true;
+    if (
+      Date.parse(interval.startsAt) < end &&
+      Date.parse(interval.endsAt) > start
+    )
+      return true;
   }
   return false;
 }
@@ -424,7 +542,8 @@ const listPersons = async (c: PeopleContext) => {
     params.push(orgId);
   }
 
-  const where = conditions.length > 0 ? `where ${conditions.join(" and ")}` : "";
+  const where =
+    conditions.length > 0 ? `where ${conditions.join(" and ")}` : "";
   const persons = await dbAll<Person>(
     db,
     `select ${PERSON_COLUMNS} from person ${where} order by full_name, id`,
@@ -433,7 +552,9 @@ const listPersons = async (c: PeopleContext) => {
 
   const personIds = persons.map((person) => person.id);
   const membershipMap = await loadMembershipViews(db, personIds);
-  const minutesMap = termId ? await computeFreeMinutesBatch(db, termId, personIds) : null;
+  const minutesMap = termId
+    ? await computeFreeMinutesBatch(db, termId, personIds)
+    : null;
 
   const items = persons.map((person) =>
     toPersonView(
@@ -454,7 +575,9 @@ const createPerson = async (c: PeopleContext) => {
   const email = optEmail(body.email, "email");
   const phone = optString(body.phone, "phone", 40);
   const status: PersonStatus =
-    body.status === undefined ? "active" : oneOf(body.status, PERSON_STATUSES, "status");
+    body.status === undefined
+      ? "active"
+      : oneOf(body.status, PERSON_STATUSES, "status");
 
   if (studentNo !== null) {
     const duplicated = await dbOne<{ id: string }>(
@@ -472,10 +595,23 @@ const createPerson = async (c: PeopleContext) => {
       sql: "insert into person (id, student_no, full_name, email, phone, status, created_at) values (?, ?, ?, ?, ?, ?, ?)",
       params: [id, studentNo, fullName, email, phone, status, createdAt],
     },
-    auditStatement(c.get("user").id, "person.create", "person", id, { fullName, studentNo, email, status }),
+    auditStatement(c.get("user").id, "person.create", "person", id, {
+      fullName,
+      studentNo,
+      email,
+      status,
+    }),
   ]);
 
-  const person: Person = { id, studentNo, fullName, email, phone, status, createdAt };
+  const person: Person = {
+    id,
+    studentNo,
+    fullName,
+    email,
+    phone,
+    status,
+    createdAt,
+  };
   return c.json(toPersonView(person, [], null));
 };
 
@@ -551,7 +687,10 @@ const updatePerson = async (c: PeopleContext) => {
   params.push(nowIso());
 
   await dbBatch(db, [
-    { sql: `update person set ${sets.join(", ")} where id = ?`, params: [...params, id] },
+    {
+      sql: `update person set ${sets.join(", ")} where id = ?`,
+      params: [...params, id],
+    },
     auditStatement(c.get("user").id, "person.update", "person", id, changes),
   ]);
 
@@ -567,7 +706,11 @@ const deletePerson = async (c: PeopleContext) => {
   const person = await loadPerson(db, id);
   if (!person) throw notFound("人员不存在");
 
-  const assignments = await countRows(db, "select count(*) as n from assignment where person_id = ?", id);
+  const assignments = await countRows(
+    db,
+    "select count(*) as n from assignment where person_id = ?",
+    id,
+  );
   if (assignments > 0) throw conflict("该人员已有排班记录，无法删除");
 
   // 人员是很多表的被引用方：先把从属数据一并清掉，否则外键会拦住删除。
@@ -579,7 +722,9 @@ const deletePerson = async (c: PeopleContext) => {
     { sql: "delete from fairness_stat where person_id = ?", params: [id] },
     { sql: "delete from membership where person_id = ?", params: [id] },
     { sql: "delete from person where id = ?", params: [id] },
-    auditStatement(c.get("user").id, "person.delete", "person", id, { fullName: person.fullName }),
+    auditStatement(c.get("user").id, "person.delete", "person", id, {
+      fullName: person.fullName,
+    }),
   ]);
   return c.json({ ok: true });
 };
@@ -589,7 +734,10 @@ const getTimetable = async (c: PeopleContext) => {
   const id = pathParam(c, "id");
   if (!(await loadPerson(db, id))) throw notFound("人员不存在");
 
-  const term = await resolveTerm(db, optString(c.req.query("termId"), "termId", 64));
+  const term = await resolveTerm(
+    db,
+    optString(c.req.query("termId"), "termId", 64),
+  );
   const week = resolveWeek(optString(c.req.query("week"), "week", 10), term);
   const { slots, busy } = await loadAvailability(db, id, term.id, { week });
 
@@ -616,7 +764,11 @@ const getTimetable = async (c: PeopleContext) => {
     { courseId: string; courseName: string; location: string | null }[]
   >();
   for (const row of rows) {
-    const item = { courseId: row.courseId, courseName: row.courseName, location: row.location };
+    const item = {
+      courseId: row.courseId,
+      courseName: row.courseName,
+      location: row.location,
+    };
     const list = coursesBySlot.get(row.slotId);
     if (list) list.push(item);
     else coursesBySlot.set(row.slotId, [item]);
@@ -655,7 +807,10 @@ const getAvailability = async (c: PeopleContext) => {
   const id = pathParam(c, "id");
   if (!(await loadPerson(db, id))) throw notFound("人员不存在");
 
-  const term = await resolveTerm(db, optString(c.req.query("termId"), "termId", 64));
+  const term = await resolveTerm(
+    db,
+    optString(c.req.query("termId"), "termId", 64),
+  );
   const rawWeek = optString(c.req.query("week"), "week", 10);
   // 不传 week 就返回整学期，前端切周时再过滤。
   const week = rawWeek === null ? null : resolveWeek(rawWeek, term);
@@ -702,13 +857,18 @@ const createUnavailability = async (c: PeopleContext) => {
   const body = await readBody(c);
   const startsAt = requireDateTime(body.startsAt, "startsAt");
   const endsAt = requireDateTime(body.endsAt, "endsAt");
-  if (Date.parse(startsAt) >= Date.parse(endsAt)) throw badRequest("startsAt 必须早于 endsAt");
+  if (Date.parse(startsAt) >= Date.parse(endsAt))
+    throw badRequest("startsAt 必须早于 endsAt");
 
   const kind: UnavailabilityKind =
-    body.kind === undefined ? "leave" : oneOf(body.kind, UNAVAILABILITY_KINDS, "kind");
+    body.kind === undefined
+      ? "leave"
+      : oneOf(body.kind, UNAVAILABILITY_KINDS, "kind");
   // 接口契约：不传 status 时直接生效。
   const status: RequestStatus =
-    body.status === undefined ? "approved" : oneOf(body.status, REQUEST_STATUSES, "status");
+    body.status === undefined
+      ? "approved"
+      : oneOf(body.status, REQUEST_STATUSES, "status");
   const reason = optString(body.reason, "reason", 500);
 
   const id = ulid();
@@ -717,16 +877,30 @@ const createUnavailability = async (c: PeopleContext) => {
       sql: "insert into unavailability (id, person_id, starts_at, ends_at, kind, status, reason, created_at) values (?, ?, ?, ?, ?, ?, ?, ?)",
       params: [id, personId, startsAt, endsAt, kind, status, reason, nowIso()],
     },
-    auditStatement(c.get("user").id, "unavailability.create", "unavailability", id, {
-      personId,
-      startsAt,
-      endsAt,
-      kind,
-      status,
-    }),
+    auditStatement(
+      c.get("user").id,
+      "unavailability.create",
+      "unavailability",
+      id,
+      {
+        personId,
+        startsAt,
+        endsAt,
+        kind,
+        status,
+      },
+    ),
   ]);
 
-  const item: Unavailability = { id, personId, startsAt, endsAt, kind, status, reason };
+  const item: Unavailability = {
+    id,
+    personId,
+    startsAt,
+    endsAt,
+    kind,
+    status,
+    reason,
+  };
   return c.json(item);
 };
 
@@ -742,7 +916,13 @@ const deleteUnavailability = async (c: PeopleContext) => {
 
   await dbBatch(db, [
     { sql: "delete from unavailability where id = ?", params: [id] },
-    auditStatement(c.get("user").id, "unavailability.delete", "unavailability", id, { personId: row.personId }),
+    auditStatement(
+      c.get("user").id,
+      "unavailability.delete",
+      "unavailability",
+      id,
+      { personId: row.personId },
+    ),
   ]);
   return c.json({ ok: true });
 };
@@ -765,17 +945,30 @@ const createOrg = async (c: PeopleContext) => {
 
   const name = asString(body.name, "name", 100);
   const code = optString(body.code, "code", 50);
-  const kind: OrgKind = body.kind === undefined ? "department" : oneOf(body.kind, ORG_KINDS, "kind");
+  const kind: OrgKind =
+    body.kind === undefined
+      ? "department"
+      : oneOf(body.kind, ORG_KINDS, "kind");
   const status: OrgStatus =
-    body.status === undefined ? "active" : oneOf(body.status, ORG_STATUSES, "status");
+    body.status === undefined
+      ? "active"
+      : oneOf(body.status, ORG_STATUSES, "status");
   const parentId = optString(body.parentId, "parentId", 64);
 
   if (parentId !== null) {
-    const parent = await dbOne<{ id: string }>(db, "select id from organization where id = ?", parentId);
+    const parent = await dbOne<{ id: string }>(
+      db,
+      "select id from organization where id = ?",
+      parentId,
+    );
     if (!parent) throw badRequest("父级组织不存在");
   }
   if (code !== null) {
-    const duplicated = await dbOne<{ id: string }>(db, "select id from organization where code = ?", code);
+    const duplicated = await dbOne<{ id: string }>(
+      db,
+      "select id from organization where code = ?",
+      code,
+    );
     if (duplicated) throw conflict("组织代码已存在");
   }
 
@@ -785,7 +978,13 @@ const createOrg = async (c: PeopleContext) => {
       sql: "insert into organization (id, code, name, parent_id, kind, status, created_at) values (?, ?, ?, ?, ?, ?, ?)",
       params: [id, code, name, parentId, kind, status, nowIso()],
     },
-    auditStatement(c.get("user").id, "org.create", "organization", id, { name, code, parentId, kind, status }),
+    auditStatement(c.get("user").id, "org.create", "organization", id, {
+      name,
+      code,
+      parentId,
+      kind,
+      status,
+    }),
   ]);
 
   const org: Org = { id, code, name, parentId, kind, status };
@@ -795,7 +994,11 @@ const createOrg = async (c: PeopleContext) => {
 const updateOrg = async (c: PeopleContext) => {
   const db = c.env.DB;
   const id = pathParam(c, "id");
-  const existing = await dbOne<Org>(db, `select ${ORG_COLUMNS} from organization where id = ?`, id);
+  const existing = await dbOne<Org>(
+    db,
+    `select ${ORG_COLUMNS} from organization where id = ?`,
+    id,
+  );
   if (!existing) throw notFound("组织不存在");
 
   const body = await readBody(c);
@@ -858,11 +1061,18 @@ const updateOrg = async (c: PeopleContext) => {
   params.push(nowIso());
 
   await dbBatch(db, [
-    { sql: `update organization set ${sets.join(", ")} where id = ?`, params: [...params, id] },
+    {
+      sql: `update organization set ${sets.join(", ")} where id = ?`,
+      params: [...params, id],
+    },
     auditStatement(c.get("user").id, "org.update", "organization", id, changes),
   ]);
 
-  const updated = await dbOne<Org>(db, `select ${ORG_COLUMNS} from organization where id = ?`, id);
+  const updated = await dbOne<Org>(
+    db,
+    `select ${ORG_COLUMNS} from organization where id = ?`,
+    id,
+  );
   if (!updated) throw notFound("组织不存在");
   return c.json(updated);
 };
@@ -870,7 +1080,11 @@ const updateOrg = async (c: PeopleContext) => {
 const deleteOrg = async (c: PeopleContext) => {
   const db = c.env.DB;
   const id = pathParam(c, "id");
-  const org = await dbOne<Org>(db, `select ${ORG_COLUMNS} from organization where id = ?`, id);
+  const org = await dbOne<Org>(
+    db,
+    `select ${ORG_COLUMNS} from organization where id = ?`,
+    id,
+  );
   if (!org) throw notFound("组织不存在");
 
   const activeMembers = await countRows(
@@ -883,10 +1097,19 @@ const deleteOrg = async (c: PeopleContext) => {
   // 组织被 role / task / fairness / 子组织引用，删除前逐项解绑；
   // 非在职的成员关系随组织一起删除（历史保留需要软删，v1 先硬删）。
   await dbBatch(db, [
-    { sql: "update organization set parent_id = null where parent_id = ?", params: [id] },
+    {
+      sql: "update organization set parent_id = null where parent_id = ?",
+      params: [id],
+    },
     { sql: "update task set org_id = null where org_id = ?", params: [id] },
-    { sql: "update fairness_stat set org_id = null where org_id = ?", params: [id] },
-    { sql: "update membership set role_id = null where org_id = ?", params: [id] },
+    {
+      sql: "update fairness_stat set org_id = null where org_id = ?",
+      params: [id],
+    },
+    {
+      sql: "update membership set role_id = null where org_id = ?",
+      params: [id],
+    },
     {
       sql: "update shift set required_role_id = null where required_role_id in (select id from role where org_id = ?)",
       params: [id],
@@ -898,7 +1121,9 @@ const deleteOrg = async (c: PeopleContext) => {
     { sql: "delete from role where org_id = ?", params: [id] },
     { sql: "delete from membership where org_id = ?", params: [id] },
     { sql: "delete from organization where id = ?", params: [id] },
-    auditStatement(c.get("user").id, "org.delete", "organization", id, { name: org.name }),
+    auditStatement(c.get("user").id, "org.delete", "organization", id, {
+      name: org.name,
+    }),
   ]);
   return c.json({ ok: true });
 };
@@ -911,8 +1136,15 @@ const listRoles = async (c: PeopleContext) => {
   const db = c.env.DB;
   const orgId = optString(c.req.query("orgId"), "orgId", 64);
   const items = orgId
-    ? await dbAll<Role>(db, `select ${ROLE_COLUMNS} from role where org_id = ? order by name, id`, orgId)
-    : await dbAll<Role>(db, `select ${ROLE_COLUMNS} from role order by name, id`);
+    ? await dbAll<Role>(
+        db,
+        `select ${ROLE_COLUMNS} from role where org_id = ? order by name, id`,
+        orgId,
+      )
+    : await dbAll<Role>(
+        db,
+        `select ${ROLE_COLUMNS} from role order by name, id`,
+      );
   return c.json({ items });
 };
 
@@ -926,7 +1158,11 @@ const createRole = async (c: PeopleContext) => {
   const description = optString(body.description, "description", 500);
 
   if (orgId !== null) {
-    const org = await dbOne<{ id: string }>(db, "select id from organization where id = ?", orgId);
+    const org = await dbOne<{ id: string }>(
+      db,
+      "select id from organization where id = ?",
+      orgId,
+    );
     if (!org) throw notFound("组织不存在");
   }
 
@@ -936,7 +1172,11 @@ const createRole = async (c: PeopleContext) => {
       sql: "insert into role (id, code, name, org_id, description) values (?, ?, ?, ?, ?)",
       params: [id, code, name, orgId, description],
     },
-    auditStatement(c.get("user").id, "role.create", "role", id, { name, code, orgId }),
+    auditStatement(c.get("user").id, "role.create", "role", id, {
+      name,
+      code,
+      orgId,
+    }),
   ]);
 
   const role: Role = { id, code, name, orgId, description };
@@ -962,7 +1202,8 @@ const listMemberships = async (c: PeopleContext) => {
     conditions.push("m.person_id = ?");
     params.push(personId);
   }
-  const where = conditions.length > 0 ? `where ${conditions.join(" and ")}` : "";
+  const where =
+    conditions.length > 0 ? `where ${conditions.join(" and ")}` : "";
   const rows = await dbAll<MembershipRow>(
     db,
     `${MEMBERSHIP_SELECT} ${where} order by coalesce(o.name, ''), m.created_at, m.id`,
@@ -980,7 +1221,9 @@ const createMembership = async (c: PeopleContext) => {
   const orgId = asString(body.orgId, "orgId", 64);
   const roleId = optString(body.roleId, "roleId", 64);
   const status: MembershipStatus =
-    body.status === undefined ? "active" : oneOf(body.status, MEMBERSHIP_STATUSES, "status");
+    body.status === undefined
+      ? "active"
+      : oneOf(body.status, MEMBERSHIP_STATUSES, "status");
   const validFrom = optIsoDate(body.validFrom, "validFrom");
   const validTo = optIsoDate(body.validTo, "validTo");
   const isPrimary = asBool(body.isPrimary, false);
@@ -989,10 +1232,18 @@ const createMembership = async (c: PeopleContext) => {
     throw badRequest("validFrom 不能晚于 validTo");
   }
   if (!(await loadPerson(db, personId))) throw notFound("人员不存在");
-  const org = await dbOne<{ id: string }>(db, "select id from organization where id = ?", orgId);
+  const org = await dbOne<{ id: string }>(
+    db,
+    "select id from organization where id = ?",
+    orgId,
+  );
   if (!org) throw notFound("组织不存在");
   if (roleId !== null) {
-    const role = await dbOne<{ id: string }>(db, "select id from role where id = ?", roleId);
+    const role = await dbOne<{ id: string }>(
+      db,
+      "select id from role where id = ?",
+      roleId,
+    );
     if (!role) throw notFound("角色不存在");
   }
 
@@ -1022,7 +1273,12 @@ const createMembership = async (c: PeopleContext) => {
         nowIso(),
       ],
     },
-    auditStatement(c.get("user").id, "membership.create", "membership", id, { personId, orgId, roleId, status }),
+    auditStatement(c.get("user").id, "membership.create", "membership", id, {
+      personId,
+      orgId,
+      roleId,
+      status,
+    }),
   ]);
   return c.json(await loadMembershipView(db, id));
 };
@@ -1030,7 +1286,11 @@ const createMembership = async (c: PeopleContext) => {
 const updateMembership = async (c: PeopleContext) => {
   const db = c.env.DB;
   const id = pathParam(c, "id");
-  const existing = await dbOne<MembershipRow>(db, `${MEMBERSHIP_SELECT} where m.id = ?`, id);
+  const existing = await dbOne<MembershipRow>(
+    db,
+    `${MEMBERSHIP_SELECT} where m.id = ?`,
+    id,
+  );
   if (!existing) throw notFound("成员关系不存在");
 
   const body = await readBody(c);
@@ -1041,7 +1301,11 @@ const updateMembership = async (c: PeopleContext) => {
   if (body.roleId !== undefined) {
     const roleId = optString(body.roleId, "roleId", 64);
     if (roleId !== null) {
-      const role = await dbOne<{ id: string }>(db, "select id from role where id = ?", roleId);
+      const role = await dbOne<{ id: string }>(
+        db,
+        "select id from role where id = ?",
+        roleId,
+      );
       if (!role) throw notFound("角色不存在");
     }
     sets.push("role_id = ?");
@@ -1086,8 +1350,17 @@ const updateMembership = async (c: PeopleContext) => {
   if (sets.length === 0) throw badRequest("没有需要修改的字段");
 
   await dbBatch(db, [
-    { sql: `update membership set ${sets.join(", ")} where id = ?`, params: [...params, id] },
-    auditStatement(c.get("user").id, "membership.update", "membership", id, changes),
+    {
+      sql: `update membership set ${sets.join(", ")} where id = ?`,
+      params: [...params, id],
+    },
+    auditStatement(
+      c.get("user").id,
+      "membership.update",
+      "membership",
+      id,
+      changes,
+    ),
   ]);
   return c.json(await loadMembershipView(db, id));
 };
@@ -1104,8 +1377,13 @@ const deleteMembership = async (c: PeopleContext) => {
 
   // 软删：把状态置为 ended，保留任期历史。
   await dbBatch(db, [
-    { sql: "update membership set status = 'ended' where id = ?", params: [id] },
-    auditStatement(c.get("user").id, "membership.ended", "membership", id, { personId: existing.personId }),
+    {
+      sql: "update membership set status = 'ended' where id = ?",
+      params: [id],
+    },
+    auditStatement(c.get("user").id, "membership.ended", "membership", id, {
+      personId: existing.personId,
+    }),
   ]);
   return c.json(await loadMembershipView(db, id));
 };

@@ -1,0 +1,166 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-03T09:39:22.327364+00:00",
+  "title": "Design System: PlutoKeating / Project.Rota",
+  "extensions": {
+    "colorMeta": {
+      "indigo-600": {
+        "role": "primary",
+        "displayName": "动作橙"
+      },
+      "slate-50": {
+        "role": "neutral",
+        "displayName": "暖灰页面"
+      },
+      "slate-900": {
+        "role": "neutral",
+        "displayName": "深色表面 / 浅色正文"
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "页面标题",
+        "purpose": "Primary page heading."
+      },
+      "body": {
+        "displayName": "正文",
+        "purpose": "Operational content and standard controls."
+      }
+    },
+    "shadows": [
+      {
+        "name": "shadow-sm",
+        "value": "0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1)",
+        "purpose": "Buttons and inputs."
+      },
+      {
+        "name": "shadow-lg",
+        "value": "0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)",
+        "purpose": "Account menu."
+      },
+      {
+        "name": "shadow-2xl",
+        "value": "0 25px 50px -12px rgb(0 0 0 / 0.25)",
+        "purpose": "Modal panels."
+      }
+    ],
+    "motion": [
+      {
+        "name": "transition",
+        "value": "150ms cubic-bezier(0.4, 0, 0.2, 1)",
+        "purpose": "Tailwind default control transitions; disabled under prefers-reduced-motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "sm",
+        "value": "640px"
+      },
+      {
+        "name": "md",
+        "value": "768px"
+      },
+      {
+        "name": "lg",
+        "value": "1024px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Shared Button primary variant; light-theme preview.",
+      "html": "<button class=\"ds-button-primary\">确认操作</button>",
+      "css": ".ds-button-primary{font-family:var(--font-sans,Inter,sans-serif);font-size:14px;border-radius:8px;padding:8px 14px;font-weight:500;cursor:pointer;transition:all 150ms cubic-bezier(.4,0,.2,1);background:var(--color-indigo-600,#a94d12);color:#fff;border:0;}.ds-button-primary:hover{background:var(--color-indigo-500,#b85c21);}.ds-button-primary:focus-visible{outline:2px solid var(--color-indigo-500,#b85c21);outline-offset:3px}.ds-button-primary:disabled{opacity:.6;cursor:not-allowed}"
+    },
+    {
+      "name": "Secondary button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Shared Button secondary variant; light-theme preview.",
+      "html": "<button class=\"ds-button-secondary\">确认操作</button>",
+      "css": ".ds-button-secondary{font-family:var(--font-sans,Inter,sans-serif);font-size:14px;border-radius:8px;padding:8px 14px;font-weight:500;cursor:pointer;transition:all 150ms cubic-bezier(.4,0,.2,1);background:var(--color-white,#fff);color:var(--color-slate-700,#403b35);border:1px solid var(--color-slate-300,#bcb4aa);}.ds-button-secondary:hover{background:var(--color-slate-50,#f5f2ec);}.ds-button-secondary:focus-visible{outline:2px solid var(--color-indigo-500,#b85c21);outline-offset:3px}.ds-button-secondary:disabled{opacity:.6;cursor:not-allowed}"
+    },
+    {
+      "name": "Ghost button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Shared Button ghost variant; light-theme preview.",
+      "html": "<button class=\"ds-button-ghost\">确认操作</button>",
+      "css": ".ds-button-ghost{font-family:var(--font-sans,Inter,sans-serif);font-size:14px;border-radius:8px;padding:8px 14px;font-weight:500;cursor:pointer;transition:all 150ms cubic-bezier(.4,0,.2,1);background:transparent;color:var(--color-slate-600,#57514a);border:0;}.ds-button-ghost:hover{background:var(--color-slate-100,#ede8df);}.ds-button-ghost:focus-visible{outline:2px solid var(--color-indigo-500,#b85c21);outline-offset:3px}.ds-button-ghost:disabled{opacity:.6;cursor:not-allowed}"
+    },
+    {
+      "name": "Danger button",
+      "kind": "button",
+      "description": "Shared Button danger variant; light-theme preview.",
+      "html": "<button class=\"ds-button-danger\">确认操作</button>",
+      "css": ".ds-button-danger{font-family:var(--font-sans,Inter,sans-serif);font-size:14px;border-radius:8px;padding:8px 14px;font-weight:500;cursor:pointer;transition:all 150ms cubic-bezier(.4,0,.2,1);background:var(--color-rose-600,oklch(58.6% .253 17.585));color:white;border:0;}.ds-button-danger:hover{background:var(--color-rose-500,oklch(64.5% .246 16.439));}.ds-button-danger:focus-visible{outline:2px solid var(--color-indigo-500,#b85c21);outline-offset:3px}.ds-button-danger:disabled{opacity:.6;cursor:not-allowed}"
+    },
+    {
+      "name": "Text field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Labelled shared input; light-theme preview.",
+      "html": "<label class=\"ds-field\">工作名称<input class=\"ds-input\" placeholder=\"填写名称\"></label>",
+      "css": ".ds-field{display:grid;gap:6px;font:500 12px var(--font-sans,sans-serif);color:var(--color-slate-600,#57514a)}.ds-input{font:400 14px var(--font-sans,sans-serif);padding:8px 12px;border:1px solid var(--color-slate-300,#bcb4aa);border-radius:8px;background:var(--color-white,#fff);color:var(--color-slate-900,#17181c)}.ds-input:focus-visible{outline:2px solid var(--color-indigo-500,#b85c21);outline-offset:2px}.ds-input::placeholder{color:var(--color-slate-400,#72685e)}"
+    },
+    {
+      "name": "Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Flat bordered container.",
+      "html": "<section class=\"ds-card\">本周安排</section>",
+      "css": ".ds-card{padding:16px;border:1px solid var(--color-slate-200,#ddd7ce);border-radius:14px;background:var(--color-white,#fff);color:var(--color-slate-900,#17181c);font:400 14px var(--font-sans,sans-serif)}"
+    },
+    {
+      "name": "Neutral badge",
+      "kind": "chip",
+      "refersTo": "badge-neutral",
+      "description": "Noninteractive status label.",
+      "html": "<span class=\"ds-badge\">待处理</span>",
+      "css": ".ds-badge{display:inline-flex;padding:2px 8px;border-radius:9999px;background:var(--color-slate-100,#ede8df);color:var(--color-slate-600,#57514a);font:500 11px var(--font-sans,sans-serif)}"
+    },
+    {
+      "name": "Daily navigation",
+      "kind": "nav",
+      "refersTo": "navigation-active",
+      "description": "Three daily destinations with current-page marker.",
+      "html": "<nav class=\"ds-nav\" aria-label=\"主导航\"><a href=\"#/\" aria-current=\"page\">排班</a><a href=\"#/people\">人员</a><a href=\"#/imports\">导入</a></nav>",
+      "css": ".ds-nav{display:flex;gap:8px;font:400 14px var(--font-sans,sans-serif)}.ds-nav a{padding:12px 16px;border-radius:12px;color:var(--color-slate-600,#57514a);text-decoration:none}.ds-nav a:hover{background:var(--color-slate-100,#ede8df)}.ds-nav a[aria-current]{color:var(--color-indigo-600,#a94d12);background:color-mix(in srgb,var(--color-indigo-600,#a94d12) 10%,transparent)}.ds-nav a:focus-visible{outline:2px solid var(--color-indigo-600,#a94d12);outline-offset:3px}"
+    }
+  ],
+  "narrative": {
+    "northStar": "PlutoKeating Design System",
+    "overview": "暖中性色、橙色动作强调、精简工作界面；排班为首页，真实数据与上下文操作优先。",
+    "keyCharacteristics": [
+      "Three daily destinations",
+      "Contextual side panels",
+      "Flat bordered surfaces",
+      "Light and dark themes"
+    ],
+    "rules": [
+      {
+        "name": "Source authority",
+        "body": "CSS and shared component implementations define tokens; indigo utility names map to orange.",
+        "section": "colors"
+      },
+      {
+        "name": "Modal stack",
+        "body": "Only the top dialog handles keyboard events; underlying panels and root are inert. Closing restores focus and final closure restores scrolling.",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "Use shared components and verify both themes.",
+      "Keep previews separate from confirmed writes.",
+      "Provide keyboard alternatives for model reordering."
+    ],
+    "donts": [
+      "Do not add decorative gradients or demonstration data.",
+      "Do not expose persisted API keys.",
+      "Do not promise automatic model fallback or universal draft protection."
+    ]
+  }
+}

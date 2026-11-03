@@ -1,3 +1,5 @@
+import { seal } from "../llm/secrets";
+import { catalog } from "../llm/catalog";
 import { requireOwner } from "../auth";
 import { Hono } from "hono";
 import type { Context } from "hono";
@@ -40,7 +42,10 @@ import {
  */
 export const admin = new Hono<{ Bindings: Env }>();
 
-admin.use("*", async (c, next) => { await requireOwner(c); await next(); });
+admin.use("*", async (c, next) => {
+  await requireOwner(c);
+  await next();
+});
 
 const PROVIDER_KINDS: readonly LlmProviderKind[] = [
   "openai_compatible",
@@ -129,6 +134,35 @@ admin.put("/settings", async (c) => {
 // 模型供应商
 // ---------------------------------------------------------------------------
 
+admin.get("/model-catalog", async (c) => c.json(await catalog(c.env)));
+admin.post("/model-catalog/refresh", async (c) =>
+  c.json(await catalog(c.env, true)),
+);
+admin.get("/model-order", async (c) =>
+  c.json({ ids: JSON.parse((await c.env.CONFIG.get("llm:order")) || "[]") }),
+);
+admin.put("/model-order", async (c) => {
+  const body = await readObjectBody(c);
+  if (
+    !Array.isArray(body.ids) ||
+    body.ids.length > 200 ||
+    body.ids.some((id) => typeof id !== "string") ||
+    new Set(body.ids).size !== body.ids.length
+  )
+    throw badRequest("模型顺序无效");
+  const rows = await dbAll<{ id: string }>(
+    c.env.DB,
+    "select id from llm_provider",
+  );
+  if (body.ids.some((id) => !rows.some((r) => r.id === id)))
+    throw badRequest("模型已删除，请刷新后重试");
+  await c.env.CONFIG.put("llm:order", JSON.stringify(body.ids));
+  await audit(c, "admin.llm_order.update", "settings", "llm:order", {
+    ids: body.ids,
+  });
+  return c.json({ ok: true });
+});
+
 admin.get("/llm-providers", async (c) => {
   const rows = await dbAll<ProviderRow>(
     c.env.DB,
@@ -145,7 +179,12 @@ admin.post("/llm-providers", async (c) => {
   const model = asString(body.model, "model", 200);
   const apiKeySecret = providerSecretName(body.apiKeySecret);
   const enabled = asBool(body.enabled, true);
-  const params = providerParams(body.params);
+  const params = providerParams(body.params) ?? {};
+  if (body.apiKey !== undefined)
+    params.encryptedKey = await seal(
+      c.env,
+      asString(body.apiKey, "apiKey", 4096),
+    );
 
   const id = ulid();
   await dbRun(
@@ -182,27 +221,45 @@ admin.patch("/llm-providers/:id", async (c) => {
   if (!existing) throw notFound("模型供应商不存在");
 
   const body = await readObjectBody(c);
-  const name = body.name !== undefined ? asString(body.name, "name", 100) : existing.name ?? "";
+  const name =
+    body.name !== undefined
+      ? asString(body.name, "name", 100)
+      : (existing.name ?? "");
   const kind =
-    body.kind !== undefined ? oneOf(body.kind, PROVIDER_KINDS, "kind") : existing.kind;
+    body.kind !== undefined
+      ? oneOf(body.kind, PROVIDER_KINDS, "kind")
+      : existing.kind;
   const baseUrl = normalizeBaseUrl(
     body.baseUrl !== undefined ? body.baseUrl : existing.baseUrl,
     kind,
   );
   const model =
-    body.model !== undefined ? asString(body.model, "model", 200) : existing.model ?? "";
+    body.model !== undefined
+      ? asString(body.model, "model", 200)
+      : (existing.model ?? "");
   if (!model) throw badRequest("model 必须是非空字符串");
   const apiKeySecret =
     body.apiKeySecret !== undefined
       ? providerSecretName(body.apiKeySecret)
       : existing.apiKeySecret;
   const enabled =
-    body.enabled !== undefined ? asBool(body.enabled, true) : toBool(existing.enabled);
+    body.enabled !== undefined
+      ? asBool(body.enabled, true)
+      : toBool(existing.enabled);
   const params =
     body.params !== undefined
       ? providerParams(body.params)
       : parseJson<Record<string, unknown>>(existing.params);
 
+  const storedParams = { ...(params ?? {}) };
+  const oldParams = parseJson<Record<string, unknown>>(existing.params);
+  if (oldParams?.encryptedKey)
+    storedParams.encryptedKey = oldParams.encryptedKey;
+  if (body.apiKey !== undefined)
+    storedParams.encryptedKey = await seal(
+      c.env,
+      asString(body.apiKey, "apiKey", 4096),
+    );
   await dbRun(
     c.env.DB,
     "update llm_provider set name = ?, kind = ?, base_url = ?, model = ?, api_key_secret = ?, enabled = ?, params = ?, updated_at = ? where id = ?",
@@ -212,7 +269,7 @@ admin.patch("/llm-providers/:id", async (c) => {
     model,
     apiKeySecret,
     enabled ? 1 : 0,
-    params ? JSON.stringify(params) : null,
+    JSON.stringify(storedParams),
     nowIso(),
     id,
   );
@@ -292,7 +349,10 @@ function normalizeSettings(value: unknown): AppSettings {
 
   const settings = cloneDefaults();
 
-  if (input.defaultCooldownDays !== undefined && input.defaultCooldownDays !== null) {
+  if (
+    input.defaultCooldownDays !== undefined &&
+    input.defaultCooldownDays !== null
+  ) {
     const days = asInt(input.defaultCooldownDays, "defaultCooldownDays", 0);
     if (days > 365) throw badRequest("defaultCooldownDays 不能超过 365");
     settings.defaultCooldownDays = days;
@@ -301,7 +361,11 @@ function normalizeSettings(value: unknown): AppSettings {
   settings.weights = normalizeWeights(input.weights, settings.weights);
 
   if ("importProviderId" in input) {
-    settings.importProviderId = optString(input.importProviderId, "importProviderId", 100);
+    settings.importProviderId = optString(
+      input.importProviderId,
+      "importProviderId",
+      100,
+    );
   }
 
   if (input.exportIncludePhone !== undefined) {
@@ -339,7 +403,10 @@ function normalizeWeights(value: unknown, base: ScoreWeights): ScoreWeights {
 // 供应商校验与序列化
 // ---------------------------------------------------------------------------
 
-async function getProviderRow(db: D1Database, id: string): Promise<ProviderRow | null> {
+async function getProviderRow(
+  db: D1Database,
+  id: string,
+): Promise<ProviderRow | null> {
   return dbOne<ProviderRow>(
     db,
     `select ${PROVIDER_COLUMNS} from llm_provider where id = ?`,
@@ -357,12 +424,20 @@ function providerView(row: ProviderRow): LlmProvider {
     // 只回密钥名，绝不回密钥值。
     apiKeySecret: row.apiKeySecret,
     enabled: toBool(row.enabled),
-    params: parseJson<Record<string, unknown>>(row.params),
+    params: publicParams(row.params),
     updatedAt: row.updatedAt,
   };
 }
 
-function normalizeBaseUrl(value: unknown, kind: LlmProviderKind): string | null {
+function publicParams(raw: string | null) {
+  const params = parseJson<Record<string, unknown>>(raw) ?? {};
+  const { encryptedKey, ...visible } = params;
+  return { ...visible, hasKey: !!encryptedKey };
+}
+function normalizeBaseUrl(
+  value: unknown,
+  kind: LlmProviderKind,
+): string | null {
   const raw = optString(value, "baseUrl", 500);
   if (!raw) {
     if (kind === "cloudflare_ai") return null;
@@ -385,7 +460,9 @@ function providerSecretName(value: unknown): string | null {
   const name = optString(value, "apiKeySecret", 100);
   if (!name) return null;
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
-    throw badRequest("apiKeySecret 必须是 Worker Secret 名称（字母、数字、下划线，且不能以数字开头）");
+    throw badRequest(
+      "apiKeySecret 必须是 Worker Secret 名称（字母、数字、下划线，且不能以数字开头）",
+    );
   }
   return name;
 }
@@ -395,7 +472,8 @@ function providerParams(value: unknown): Record<string, unknown> | null {
   const input = asRecord(value);
   if (!input) throw badRequest("params 必须是 JSON 对象");
   if (JSON.stringify(input).length > 10_000) throw badRequest("params 过大");
-  return input;
+  const { encryptedKey, hasKey, ...safe } = input;
+  return safe;
 }
 
 function auditView(row: AuditRow): AuditEvent {
@@ -414,7 +492,9 @@ function auditView(row: AuditRow): AuditEvent {
 // 通用工具
 // ---------------------------------------------------------------------------
 
-async function readObjectBody(c: Context<{ Bindings: Env }>): Promise<Record<string, unknown>> {
+async function readObjectBody(
+  c: Context<{ Bindings: Env }>,
+): Promise<Record<string, unknown>> {
   const body = await readJson<unknown>(c);
   const record = asRecord(body);
   if (!record) throw badRequest("请求体必须是 JSON 对象");
@@ -453,38 +533,75 @@ async function audit(
 }
 
 // 账号只保存公开的 OIDC subject 与本系统授权，不接触身份服务实现。
-admin.get("/users", async c => c.json({ items: await dbAll(c.env.DB,
-  "select id, oidc_subject, full_name, role, enabled, last_login_at, created_at from admin_user order by created_at") }));
+admin.get("/users", async (c) =>
+  c.json({
+    items: await dbAll(
+      c.env.DB,
+      "select id, oidc_subject, full_name, role, enabled, last_login_at, created_at from admin_user order by created_at",
+    ),
+  }),
+);
 
-admin.post("/users", async c => {
+admin.post("/users", async (c) => {
   const body = await readObjectBody(c);
   const subject = asString(body.oidcSubject, "oidcSubject", 255);
   const name = asString(body.fullName, "fullName", 100);
   const role = oneOf(body.role ?? "admin", ["owner", "admin"] as const, "role");
   const id = ulid();
-  if (await dbOne(c.env.DB, "select id from admin_user where oidc_subject=?", subject)) throw badRequest("账号已存在");
+  if (
+    await dbOne(
+      c.env.DB,
+      "select id from admin_user where oidc_subject=?",
+      subject,
+    )
+  )
+    throw badRequest("账号已存在");
   await c.env.DB.batch([
-    c.env.DB.prepare("insert into admin_user (id,oidc_subject,full_name,role,enabled,created_at) values (?,?,?,?,1,?)")
-      .bind(id, subject, name, role, nowIso()),
-    c.env.DB.prepare("insert into audit_event (id,actor_id,action,target_type,target_id,created_at) values (?,?,'admin.user.create','admin_user',?,?)")
-      .bind(ulid(), c.get("user").id, id, nowIso()),
+    c.env.DB.prepare(
+      "insert into admin_user (id,oidc_subject,full_name,role,enabled,created_at) values (?,?,?,?,1,?)",
+    ).bind(id, subject, name, role, nowIso()),
+    c.env.DB.prepare(
+      "insert into audit_event (id,actor_id,action,target_type,target_id,created_at) values (?,?,'admin.user.create','admin_user',?,?)",
+    ).bind(ulid(), c.get("user").id, id, nowIso()),
   ]);
   return c.json({ id }, 201);
 });
 
-admin.patch("/users/:id", async c => {
+admin.patch("/users/:id", async (c) => {
   const id = c.req.param("id");
   if (id === c.get("user").id) throw badRequest("不能修改自己的角色或停用自己");
-  const existing = await dbOne<{ role: string; enabled: number }>(c.env.DB, "select role,enabled from admin_user where id=?", id);
+  const existing = await dbOne<{ role: string; enabled: number }>(
+    c.env.DB,
+    "select role,enabled from admin_user where id=?",
+    id,
+  );
   if (!existing) throw notFound("账号不存在");
   const body = await readObjectBody(c);
-  const role = oneOf(body.role ?? existing.role, ["owner", "admin"] as const, "role");
-  const enabled = body.enabled === undefined ? existing.enabled : Number(asBool(body.enabled));
+  const role = oneOf(
+    body.role ?? existing.role,
+    ["owner", "admin"] as const,
+    "role",
+  );
+  const enabled =
+    body.enabled === undefined
+      ? existing.enabled
+      : Number(asBool(body.enabled));
   await c.env.DB.batch([
-    c.env.DB.prepare("update admin_user set role=?,enabled=? where id=?").bind(role, enabled, id),
+    c.env.DB.prepare("update admin_user set role=?,enabled=? where id=?").bind(
+      role,
+      enabled,
+      id,
+    ),
     c.env.DB.prepare("delete from auth_session where user_id=?").bind(id),
-    c.env.DB.prepare("insert into audit_event (id,actor_id,action,target_type,target_id,payload,created_at) values (?,?,'admin.user.update','admin_user',?,?,?)")
-      .bind(ulid(), c.get("user").id, id, JSON.stringify({ role, enabled }), nowIso()),
+    c.env.DB.prepare(
+      "insert into audit_event (id,actor_id,action,target_type,target_id,payload,created_at) values (?,?,'admin.user.update','admin_user',?,?,?)",
+    ).bind(
+      ulid(),
+      c.get("user").id,
+      id,
+      JSON.stringify({ role, enabled }),
+      nowIso(),
+    ),
   ]);
   return c.json({ ok: true });
 });

@@ -7,7 +7,7 @@ import { ToastProvider } from "./components/Toast";
 import { useRoute } from "./lib/router";
 import { FairnessPage } from "./pages/FairnessPage";
 import { ImportsPage } from "./pages/ImportsPage";
-import { OverviewPage } from "./pages/OverviewPage";
+
 import { PeoplePage } from "./pages/PeoplePage";
 import { SchedulePage } from "./pages/SchedulePage";
 import { SettingsPage } from "./pages/SettingsPage";
@@ -16,15 +16,21 @@ import { TermsPage } from "./pages/TermsPage";
 import { TimetablePage } from "./pages/TimetablePage";
 
 const PAGE_META: Record<string, { title: string; subtitle: string }> = {
-  "": { title: "概览", subtitle: "当前学期、人员与待排班次一览" },
-  terms: { title: "学期与节次", subtitle: "校历网格的起点：开学日、周数、节次" },
+  "": {
+    title: "排班",
+    subtitle: "查看本周安排，处理缺员，随时开始一项新工作。",
+  },
+  terms: {
+    title: "学期与节次",
+    subtitle: "校历网格的起点：开学日、周数、节次",
+  },
   people: { title: "人员与组织", subtitle: "成员、部门、角色与可排时长" },
   timetable: { title: "课表", subtitle: "7 天 × 节次网格，课程与请假一目了然" },
   tasks: { title: "任务", subtitle: "一件活、它的班次与按周生成规则" },
   schedule: { title: "排班", subtitle: "试排、确认分配、整任务自动排" },
   fairness: { title: "公平账本", subtitle: "按次数升序，谁最亏谁在前" },
   imports: { title: "导入", subtitle: "上传课表，解析后人工确认再落库" },
-  settings: { title: "设置", subtitle: "评分权重、冷却、模型供应商与审计" },
+  settings: { title: "管理", subtitle: "校历、排班规则与服务配置" },
 };
 
 function metaFor(segments: string[]): { title: string; subtitle: string } {
@@ -35,7 +41,12 @@ function metaFor(segments: string[]): { title: string; subtitle: string } {
   if (head === "imports" && segments[1]) {
     return { title: "导入详情", subtitle: "解析状态与结果确认" };
   }
-  return PAGE_META[head] ?? { title: "页面不存在", subtitle: "检查一下地址，或从左侧导航进入" };
+  return (
+    PAGE_META[head] ?? {
+      title: "页面不存在",
+      subtitle: "检查一下地址，或从左侧导航进入",
+    }
+  );
 }
 
 function renderPage(segments: string[]) {
@@ -44,7 +55,7 @@ function renderPage(segments: string[]) {
 
   switch (head) {
     case "":
-      return <OverviewPage />;
+      return <SchedulePage />;
     case "terms":
       return <TermsPage />;
     case "people":
@@ -89,7 +100,9 @@ function RoutedApp() {
 
   return (
     <Layout title={meta.title} subtitle={meta.subtitle} path={route.path}>
-      <ErrorBoundary key={route.path}>{renderPage(route.segments)}</ErrorBoundary>
+      <ErrorBoundary key={route.path}>
+        {renderPage(route.segments)}
+      </ErrorBoundary>
     </Layout>
   );
 }
@@ -97,7 +110,9 @@ function RoutedApp() {
 export default function App() {
   return (
     <ToastProvider>
-      <AuthGate><RoutedApp /></AuthGate>
+      <AuthGate>
+        <RoutedApp />
+      </AuthGate>
     </ToastProvider>
   );
 }

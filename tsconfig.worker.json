@@ -12,5 +12,6 @@
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src/worker/**/*.ts", "test/**/*.ts"]
+  "include": ["src/worker/**/*.ts", "test/**/*.ts"],
+  "exclude": ["test/browser/**"]
 }

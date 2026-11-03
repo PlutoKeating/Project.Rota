@@ -1,3 +1,4 @@
+import { TimetablePage } from "./TimetablePage";
 import { useMemo, useState } from "react";
 import type {
   ListResponse,
@@ -55,7 +56,9 @@ interface PersonFormModalProps {
 
 function PersonFormModal({ person, onClose, onSaved }: PersonFormModalProps) {
   const toast = useToast();
-  const [values, setValues] = useState<PersonFormValues>(() => personFormValues(person));
+  const [values, setValues] = useState<PersonFormValues>(() =>
+    personFormValues(person),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -114,21 +117,37 @@ function PersonFormModal({ person, onClose, onSaved }: PersonFormModalProps) {
     >
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="姓名" required error={error ?? undefined}>
-          <TextInput value={values.fullName} onChange={(event) => update({ fullName: event.target.value })} autoFocus />
+          <TextInput
+            value={values.fullName}
+            onChange={(event) => update({ fullName: event.target.value })}
+            autoFocus
+          />
         </Field>
         <Field label="学号">
-          <TextInput value={values.studentNo} onChange={(event) => update({ studentNo: event.target.value })} />
+          <TextInput
+            value={values.studentNo}
+            onChange={(event) => update({ studentNo: event.target.value })}
+          />
         </Field>
         <Field label="邮箱">
-          <TextInput type="email" value={values.email} onChange={(event) => update({ email: event.target.value })} />
+          <TextInput
+            type="email"
+            value={values.email}
+            onChange={(event) => update({ email: event.target.value })}
+          />
         </Field>
         <Field label="手机号">
-          <TextInput value={values.phone} onChange={(event) => update({ phone: event.target.value })} />
+          <TextInput
+            value={values.phone}
+            onChange={(event) => update({ phone: event.target.value })}
+          />
         </Field>
         <Field label="状态">
           <Select
             value={values.status}
-            onChange={(event) => update({ status: event.target.value as PersonStatus })}
+            onChange={(event) =>
+              update({ status: event.target.value as PersonStatus })
+            }
           >
             {PERSON_STATUS_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
@@ -150,12 +169,20 @@ interface MembershipModalProps {
   onChanged: () => void;
 }
 
-function MembershipModal({ person, orgs, roles, onClose, onChanged }: MembershipModalProps) {
+function MembershipModal({
+  person,
+  orgs,
+  roles,
+  onClose,
+  onChanged,
+}: MembershipModalProps) {
   const toast = useToast();
   const [version, setVersion] = useState(0);
   const list = useAsync(
     async () =>
-      api.get<ListResponse<MembershipView>>(`/memberships?personId=${encodeURIComponent(person.id)}`),
+      api.get<ListResponse<MembershipView>>(
+        `/memberships?personId=${encodeURIComponent(person.id)}`,
+      ),
     [person.id, version],
   );
 
@@ -167,7 +194,12 @@ function MembershipModal({ person, orgs, roles, onClose, onChanged }: Membership
   const [busy, setBusy] = useState(false);
 
   const availableRoles = useMemo(
-    () => roles.filter((role) => (orgId ? role.orgId === orgId || role.orgId === null : role.orgId === null)),
+    () =>
+      roles.filter((role) =>
+        orgId
+          ? role.orgId === orgId || role.orgId === null
+          : role.orgId === null,
+      ),
     [roles, orgId],
   );
 
@@ -240,7 +272,9 @@ function MembershipModal({ person, orgs, roles, onClose, onChanged }: Membership
                 render: (item: MembershipView) => (
                   <div>
                     <p className="font-medium">{item.orgName}</p>
-                    <p className="text-[11px] text-slate-400">{item.roleName ?? "无角色"}</p>
+                    <p className="text-[11px] text-slate-400">
+                      {item.roleName ?? "无角色"}
+                    </p>
                   </div>
                 ),
               },
@@ -249,7 +283,8 @@ function MembershipModal({ person, orgs, roles, onClose, onChanged }: Membership
                 header: "起止",
                 render: (item: MembershipView) => (
                   <span className="text-xs tabular-nums">
-                    {item.validFrom ? dateFull(item.validFrom) : "—"} → {item.validTo ? dateFull(item.validTo) : "至今"}
+                    {item.validFrom ? dateFull(item.validFrom) : "—"} →{" "}
+                    {item.validTo ? dateFull(item.validTo) : "至今"}
                   </span>
                 ),
               },
@@ -257,7 +292,9 @@ function MembershipModal({ person, orgs, roles, onClose, onChanged }: Membership
                 key: "status",
                 header: "状态",
                 render: (item: MembershipView) => (
-                  <Badge tone={membershipStatusTone(item.status)}>{membershipStatusLabel(item.status)}</Badge>
+                  <Badge tone={membershipStatusTone(item.status)}>
+                    {membershipStatusLabel(item.status)}
+                  </Badge>
                 ),
               },
               {
@@ -270,7 +307,11 @@ function MembershipModal({ person, orgs, roles, onClose, onChanged }: Membership
                 header: "",
                 className: "text-right",
                 render: (item: MembershipView) => (
-                  <Button variant="ghost" size="sm" onClick={() => void removeMembership(item.id)}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void removeMembership(item.id)}
+                  >
                     移除
                   </Button>
                 ),
@@ -284,7 +325,9 @@ function MembershipModal({ person, orgs, roles, onClose, onChanged }: Membership
       </ListState>
 
       <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-800">
-        <h3 className="mb-2 text-xs font-semibold text-slate-700 dark:text-slate-200">添加成员关系</h3>
+        <h3 className="mb-2 text-xs font-semibold text-slate-700 dark:text-slate-200">
+          添加成员关系
+        </h3>
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="组织" required>
             <Select
@@ -302,8 +345,15 @@ function MembershipModal({ person, orgs, roles, onClose, onChanged }: Membership
               ))}
             </Select>
           </Field>
-          <Field label="角色" hint={orgId ? "含本组织角色与全局角色" : "先选组织"}>
-            <Select value={roleId} onChange={(event) => setRoleId(event.target.value)} disabled={!orgId}>
+          <Field
+            label="角色"
+            hint={orgId ? "含本组织角色与全局角色" : "先选组织"}
+          >
+            <Select
+              value={roleId}
+              onChange={(event) => setRoleId(event.target.value)}
+              disabled={!orgId}
+            >
               <option value="">无角色</option>
               {availableRoles.map((role) => (
                 <option key={role.id} value={role.id}>
@@ -313,15 +363,32 @@ function MembershipModal({ person, orgs, roles, onClose, onChanged }: Membership
             </Select>
           </Field>
           <Field label="开始日期">
-            <TextInput type="date" value={validFrom} onChange={(event) => setValidFrom(event.target.value)} />
+            <TextInput
+              type="date"
+              value={validFrom}
+              onChange={(event) => setValidFrom(event.target.value)}
+            />
           </Field>
           <Field label="结束日期" hint="留空表示至今">
-            <TextInput type="date" value={validTo} onChange={(event) => setValidTo(event.target.value)} />
+            <TextInput
+              type="date"
+              value={validTo}
+              onChange={(event) => setValidTo(event.target.value)}
+            />
           </Field>
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-          <Checkbox label="设为主属部门" checked={isPrimary} onChange={(event) => setIsPrimary(event.target.checked)} />
-          <Button size="sm" loading={busy} disabled={!orgId} onClick={() => void addMembership()}>
+          <Checkbox
+            label="设为主属部门"
+            checked={isPrimary}
+            onChange={(event) => setIsPrimary(event.target.checked)}
+          />
+          <Button
+            size="sm"
+            loading={busy}
+            disabled={!orgId}
+            onClick={() => void addMembership()}
+          >
             添加
           </Button>
         </div>
@@ -393,7 +460,9 @@ function OrgRoleModal({ orgs, roles, onChanged, onClose }: OrgRoleModalProps) {
         name: roleName.trim(),
         orgId: roleOrgId || null,
         ...(roleCode.trim() ? { code: roleCode.trim() } : {}),
-        ...(roleDescription.trim() ? { description: roleDescription.trim() } : {}),
+        ...(roleDescription.trim()
+          ? { description: roleDescription.trim() }
+          : {}),
       });
       toast.success("角色已创建");
       setRoleName("");
@@ -421,23 +490,34 @@ function OrgRoleModal({ orgs, roles, onChanged, onClose }: OrgRoleModalProps) {
     >
       <div className="grid gap-4 lg:grid-cols-2">
         <section className="space-y-3">
-          <h3 className="text-xs font-semibold text-slate-700 dark:text-slate-200">组织（{orgs.length}）</h3>
+          <h3 className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+            组织（{orgs.length}）
+          </h3>
           <div className="max-h-64 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-800">
             {orgs.length === 0 ? (
-              <p className="px-3 py-4 text-xs text-slate-400">暂无组织，先新建一个。</p>
+              <p className="px-3 py-4 text-xs text-slate-400">
+                暂无组织，先新建一个。
+              </p>
             ) : (
               <ul className="divide-y divide-slate-100 dark:divide-slate-800">
                 {orgs.map((org) => (
-                  <li key={org.id} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
+                  <li
+                    key={org.id}
+                    className="flex items-center justify-between gap-2 px-3 py-2 text-sm"
+                  >
                     <div className="min-w-0">
                       <p className="truncate font-medium">{org.name}</p>
                       <p className="text-[11px] text-slate-400">
                         {orgKindLabel(org.kind)}
-                        {org.parentId ? ` · 上级：${orgNameById.get(org.parentId) ?? org.parentId}` : ""}
+                        {org.parentId
+                          ? ` · 上级：${orgNameById.get(org.parentId) ?? org.parentId}`
+                          : ""}
                         {org.code ? ` · ${org.code}` : ""}
                       </p>
                     </div>
-                    <Badge tone={org.status === "active" ? "success" : "neutral"}>
+                    <Badge
+                      tone={org.status === "active" ? "success" : "neutral"}
+                    >
                       {org.status === "active" ? "正常" : "归档"}
                     </Badge>
                   </li>
@@ -448,13 +528,26 @@ function OrgRoleModal({ orgs, roles, onChanged, onClose }: OrgRoleModalProps) {
           <div className="space-y-2 rounded-xl bg-slate-50 p-3 dark:bg-slate-800/50">
             <div className="grid gap-2 sm:grid-cols-2">
               <Field label="名称" required>
-                <TextInput value={orgName} onChange={(event) => setOrgName(event.target.value)} placeholder="宣传部" />
+                <TextInput
+                  value={orgName}
+                  onChange={(event) => setOrgName(event.target.value)}
+                  placeholder="宣传部"
+                />
               </Field>
               <Field label="编码">
-                <TextInput value={orgCode} onChange={(event) => setOrgCode(event.target.value)} placeholder="PR" />
+                <TextInput
+                  value={orgCode}
+                  onChange={(event) => setOrgCode(event.target.value)}
+                  placeholder="PR"
+                />
               </Field>
               <Field label="类型">
-                <Select value={orgKind} onChange={(event) => setOrgKind(event.target.value as Org["kind"])}>
+                <Select
+                  value={orgKind}
+                  onChange={(event) =>
+                    setOrgKind(event.target.value as Org["kind"])
+                  }
+                >
                   {ORG_KIND_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>
                       {option.label}
@@ -463,7 +556,10 @@ function OrgRoleModal({ orgs, roles, onChanged, onClose }: OrgRoleModalProps) {
                 </Select>
               </Field>
               <Field label="上级组织">
-                <Select value={parentId} onChange={(event) => setParentId(event.target.value)}>
+                <Select
+                  value={parentId}
+                  onChange={(event) => setParentId(event.target.value)}
+                >
                   <option value="">无（顶级）</option>
                   {orgs.map((org) => (
                     <option key={org.id} value={org.id}>
@@ -474,7 +570,11 @@ function OrgRoleModal({ orgs, roles, onChanged, onClose }: OrgRoleModalProps) {
               </Field>
             </div>
             <div className="flex justify-end">
-              <Button size="sm" loading={orgBusy} onClick={() => void createOrg()}>
+              <Button
+                size="sm"
+                loading={orgBusy}
+                onClick={() => void createOrg()}
+              >
                 新建组织
               </Button>
             </div>
@@ -482,7 +582,9 @@ function OrgRoleModal({ orgs, roles, onChanged, onClose }: OrgRoleModalProps) {
         </section>
 
         <section className="space-y-3">
-          <h3 className="text-xs font-semibold text-slate-700 dark:text-slate-200">角色（{roles.length}）</h3>
+          <h3 className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+            角色（{roles.length}）
+          </h3>
           <div className="max-h-64 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-800">
             {roles.length === 0 ? (
               <p className="px-3 py-4 text-xs text-slate-400">暂无角色。</p>
@@ -492,7 +594,9 @@ function OrgRoleModal({ orgs, roles, onChanged, onClose }: OrgRoleModalProps) {
                   <li key={role.id} className="px-3 py-2 text-sm">
                     <p className="font-medium">{role.name}</p>
                     <p className="text-[11px] text-slate-400">
-                      {role.orgId ? (orgNameById.get(role.orgId) ?? role.orgId) : "全局角色"}
+                      {role.orgId
+                        ? (orgNameById.get(role.orgId) ?? role.orgId)
+                        : "全局角色"}
                       {role.code ? ` · ${role.code}` : ""}
                       {role.description ? ` · ${role.description}` : ""}
                     </p>
@@ -504,13 +608,24 @@ function OrgRoleModal({ orgs, roles, onChanged, onClose }: OrgRoleModalProps) {
           <div className="space-y-2 rounded-xl bg-slate-50 p-3 dark:bg-slate-800/50">
             <div className="grid gap-2 sm:grid-cols-2">
               <Field label="名称" required>
-                <TextInput value={roleName} onChange={(event) => setRoleName(event.target.value)} placeholder="部长" />
+                <TextInput
+                  value={roleName}
+                  onChange={(event) => setRoleName(event.target.value)}
+                  placeholder="部长"
+                />
               </Field>
               <Field label="编码">
-                <TextInput value={roleCode} onChange={(event) => setRoleCode(event.target.value)} placeholder="HEAD" />
+                <TextInput
+                  value={roleCode}
+                  onChange={(event) => setRoleCode(event.target.value)}
+                  placeholder="HEAD"
+                />
               </Field>
               <Field label="所属组织">
-                <Select value={roleOrgId} onChange={(event) => setRoleOrgId(event.target.value)}>
+                <Select
+                  value={roleOrgId}
+                  onChange={(event) => setRoleOrgId(event.target.value)}
+                >
                   <option value="">全局</option>
                   {orgs.map((org) => (
                     <option key={org.id} value={org.id}>
@@ -528,7 +643,11 @@ function OrgRoleModal({ orgs, roles, onChanged, onClose }: OrgRoleModalProps) {
               </Field>
             </div>
             <div className="flex justify-end">
-              <Button size="sm" loading={roleBusy} onClick={() => void createRole()}>
+              <Button
+                size="sm"
+                loading={roleBusy}
+                onClick={() => void createRole()}
+              >
                 新建角色
               </Button>
             </div>
@@ -544,6 +663,7 @@ export function PeoplePage() {
   const orgsState = useOrgsState();
 
   const [q, setQ] = useState("");
+  const [detailPerson, setDetailPerson] = useState<PersonView | null>(null);
   const debouncedQ = useDebouncedValue(q);
   const [orgFilter, setOrgFilter] = useState("");
   const [peopleVersion, setPeopleVersion] = useState(0);
@@ -551,15 +671,23 @@ export function PeoplePage() {
 
   const [formOpen, setFormOpen] = useState(false);
   const [formPerson, setFormPerson] = useState<PersonView | null>(null);
-  const [membershipPerson, setMembershipPerson] = useState<PersonView | null>(null);
+  const [membershipPerson, setMembershipPerson] = useState<PersonView | null>(
+    null,
+  );
   const [orgRoleOpen, setOrgRoleOpen] = useState(false);
 
   const orgs = orgsState.data?.items ?? [];
 
-  const roles = useAsync(async () => api.get<ListResponse<Role>>("/roles"), [rolesVersion]);
+  const roles = useAsync(
+    async () => api.get<ListResponse<Role>>("/roles"),
+    [rolesVersion],
+  );
 
   // 列表接口若没有内嵌 memberships，用一次全量成员关系兜底，避免「部门」整列空白。
-  const allMemberships = useAsync(async () => api.get<ListResponse<MembershipView>>("/memberships"), [peopleVersion]);
+  const allMemberships = useAsync(
+    async () => api.get<ListResponse<MembershipView>>("/memberships"),
+    [peopleVersion],
+  );
 
   const membershipsByPerson = useMemo(() => {
     const map = new Map<string, MembershipView[]>();
@@ -578,7 +706,9 @@ export function PeoplePage() {
     if (orgFilter) params.set("orgId", orgFilter);
     if (termId) params.set("termId", termId);
     const query = params.toString();
-    return api.get<ListResponse<PersonView>>(`/persons${query ? `?${query}` : ""}`);
+    return api.get<ListResponse<PersonView>>(
+      `/persons${query ? `?${query}` : ""}`,
+    );
   }, [debouncedQ, orgFilter, termId, peopleVersion]);
 
   function openCreate(): void {
@@ -608,25 +738,39 @@ export function PeoplePage() {
       header: "姓名",
       render: (person) => (
         <div className="min-w-0">
-          <p className="font-medium">{person.fullName}</p>
-          {person.email ? <p className="truncate text-[11px] text-slate-400">{person.email}</p> : null}
+          <button
+            className="font-medium text-indigo-600 hover:underline"
+            onClick={() => setDetailPerson(person)}
+          >
+            {person.fullName}
+          </button>
+          {person.email ? (
+            <p className="truncate text-[11px] text-slate-400">
+              {person.email}
+            </p>
+          ) : null}
         </div>
       ),
     },
     {
       key: "studentNo",
       header: "学号",
-      render: (person) => <span className="font-mono text-xs">{person.studentNo ?? "—"}</span>,
+      render: (person) => (
+        <span className="font-mono text-xs">{person.studentNo ?? "—"}</span>
+      ),
     },
     {
       key: "orgs",
       header: "部门",
       render: (person) => {
         const embedded = person.memberships ?? [];
-        const memberships = (embedded.length > 0 ? embedded : (membershipsByPerson.get(person.id) ?? [])).filter(
-          (item) => item.status !== "ended",
-        );
-        if (memberships.length === 0) return <span className="text-xs text-slate-400">—</span>;
+        const memberships = (
+          embedded.length > 0
+            ? embedded
+            : (membershipsByPerson.get(person.id) ?? [])
+        ).filter((item) => item.status !== "ended");
+        if (memberships.length === 0)
+          return <span className="text-xs text-slate-400">—</span>;
         const visible = memberships.slice(0, 3);
         return (
           <div className="flex flex-wrap gap-1">
@@ -636,7 +780,11 @@ export function PeoplePage() {
                 {item.roleName ? ` · ${item.roleName}` : ""}
               </Badge>
             ))}
-            {memberships.length > visible.length ? <Badge tone="neutral">+{memberships.length - visible.length}</Badge> : null}
+            {memberships.length > visible.length ? (
+              <Badge tone="neutral">
+                +{memberships.length - visible.length}
+              </Badge>
+            ) : null}
           </div>
         );
       },
@@ -644,7 +792,11 @@ export function PeoplePage() {
     {
       key: "status",
       header: "状态",
-      render: (person) => <Badge tone={personStatusTone(person.status)}>{personStatusLabel(person.status)}</Badge>,
+      render: (person) => (
+        <Badge tone={personStatusTone(person.status)}>
+          {personStatusLabel(person.status)}
+        </Badge>
+      ),
     },
     {
       key: "free",
@@ -668,7 +820,11 @@ export function PeoplePage() {
           <Button variant="ghost" size="sm" onClick={() => openEdit(person)}>
             编辑
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => setMembershipPerson(person)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setMembershipPerson(person)}
+          >
             成员关系
           </Button>
         </div>
@@ -683,7 +839,11 @@ export function PeoplePage() {
         description={`当前学期：${terms.current?.name ?? "未选择"}${termId ? "（可排时长按学期计算）" : ""}`}
         actions={
           <>
-            <Button variant="secondary" size="sm" onClick={() => setOrgRoleOpen(true)}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setOrgRoleOpen(true)}
+            >
               部门与角色
             </Button>
             <Button size="sm" onClick={openCreate}>
@@ -719,7 +879,9 @@ export function PeoplePage() {
           </p>
         ) : null}
         {orgsState.error ? (
-          <p className="mb-2 text-[11px] text-amber-600 dark:text-amber-400">组织加载失败：{orgsState.error}</p>
+          <p className="mb-2 text-[11px] text-amber-600 dark:text-amber-400">
+            组织加载失败：{orgsState.error}
+          </p>
         ) : null}
 
         <ListState
@@ -729,7 +891,9 @@ export function PeoplePage() {
           onRetry={persons.reload}
           emptyTitle={q || orgFilter ? "没有匹配的人员" : "还没有人员"}
           emptyDescription={
-            q || orgFilter ? "换个关键词或清除筛选再试。" : "先导入名单，或手动新建第一位成员。"
+            q || orgFilter
+              ? "换个关键词或清除筛选再试。"
+              : "先导入名单，或手动新建第一位成员。"
           }
           emptyAction={
             q || orgFilter ? (
@@ -759,8 +923,22 @@ export function PeoplePage() {
         </ListState>
       </Card>
 
+      {detailPerson && (
+        <Modal
+          side
+          title={detailPerson.fullName}
+          description="课表、请假与不可用时间"
+          onClose={() => setDetailPerson(null)}
+        >
+          <TimetablePage initialPersonId={detailPerson.id} />
+        </Modal>
+      )}
       {formOpen ? (
-        <PersonFormModal person={formPerson} onClose={() => setFormOpen(false)} onSaved={refreshPeople} />
+        <PersonFormModal
+          person={formPerson}
+          onClose={() => setFormOpen(false)}
+          onSaved={refreshPeople}
+        />
       ) : null}
 
       {membershipPerson ? (

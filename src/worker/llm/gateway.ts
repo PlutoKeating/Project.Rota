@@ -1,6 +1,7 @@
+import { unseal } from "./secrets";
 import type { LlmProviderKind } from "../../shared/types";
 import type { Env } from "../env";
-import { HttpError, dbOne, parseJson } from "../lib/core";
+import { HttpError, dbAll, dbOne, parseJson } from "../lib/core";
 
 /**
  * 模型网关：配置读 D1，密钥读 Cloudflare Secret。
@@ -69,7 +70,31 @@ const PROVIDER_COLUMNS =
 export async function resolveProvider(
   env: Env,
   providerId?: string | null,
+  needsVision = false,
 ): Promise<ResolvedProvider> {
+  if (!providerId) {
+    const order = JSON.parse(
+      (await env.CONFIG.get("llm:order")) || "[]",
+    ) as string[];
+    const enabled = (
+      await dbAll<{ id: string; params: string | null }>(
+        env.DB,
+        "select id, params from llm_provider where enabled = 1 order by name, id",
+      )
+    ).filter(
+      (p) =>
+        !needsVision ||
+        parseJson<Record<string, unknown>>(p.params)?.vision !== false,
+    );
+    providerId =
+      order.find((id) => enabled.some((p) => p.id === id)) ?? enabled[0]?.id;
+    if (!providerId)
+      throw new HttpError(
+        503,
+        "llm_not_configured",
+        "没有已启用且支持当前输入的模型",
+      );
+  }
   const row = providerId
     ? await dbOne<ProviderRow>(
         env.DB,
@@ -82,26 +107,44 @@ export async function resolveProvider(
       );
 
   if (!row) {
-    if (providerId) throw new HttpError(404, "not_found", "模型供应商不存在或已停用");
-    throw new HttpError(503, "llm_not_configured", "还没有启用任何模型供应商，请先在管理后台配置");
+    if (providerId)
+      throw new HttpError(404, "not_found", "模型供应商不存在或已停用");
+    throw new HttpError(
+      503,
+      "llm_not_configured",
+      "还没有启用任何模型供应商，请先在管理后台配置",
+    );
   }
 
   const model = row.model?.trim() ?? "";
   if (!model) {
-    throw new HttpError(500, "llm_misconfigured", `模型供应商「${row.name ?? row.id}」缺少 model`);
+    throw new HttpError(
+      500,
+      "llm_misconfigured",
+      `模型供应商「${row.name ?? row.id}」缺少 model`,
+    );
   }
 
   const baseUrl = (row.baseUrl ?? "").trim().replace(/\/+$/, "");
   if (row.kind !== "cloudflare_ai" && !baseUrl) {
-    throw new HttpError(500, "llm_misconfigured", `模型供应商「${row.name ?? row.id}」缺少 baseUrl`);
+    throw new HttpError(
+      500,
+      "llm_misconfigured",
+      `模型供应商「${row.name ?? row.id}」缺少 baseUrl`,
+    );
   }
 
   // Secret 在 Worker 里以同名绑定暴露在 env 上；Env 没有索引签名，只能安全断言。
   let apiKey = "";
   if (row.apiKeySecret) {
-    const secret = (env as unknown as Record<string, unknown>)[row.apiKeySecret];
+    const secret = (env as unknown as Record<string, unknown>)[
+      row.apiKeySecret
+    ];
     if (typeof secret === "string") apiKey = secret.trim();
   }
+  const storedParams = parseJson<Record<string, unknown>>(row.params) ?? {};
+  if (typeof storedParams.encryptedKey === "string")
+    apiKey = await unseal(env, storedParams.encryptedKey);
   if (!apiKey && row.kind !== "cloudflare_ai") {
     throw new HttpError(
       500,
@@ -123,15 +166,26 @@ export async function resolveProvider(
 }
 
 /** 发一条对话，返回纯文本。HTTP 非 2xx 统一 502，超时 504。 */
-export async function complete(env: Env, options: CompleteOptions): Promise<string> {
-  const provider = await resolveProvider(env, options.providerId);
+export async function complete(
+  env: Env,
+  options: CompleteOptions,
+): Promise<string> {
+  const provider = await resolveProvider(
+    env,
+    options.providerId,
+    !!options.images?.length,
+  );
   const temperature =
     options.temperature ?? paramNumber(provider.params, "temperature") ?? 0.2;
   if (provider.kind === "cloudflare_ai") {
-    if (!env.AI) throw new HttpError(503, "llm_not_configured", "Workers AI 绑定尚未配置");
+    if (!env.AI)
+      throw new HttpError(503, "llm_not_configured", "Workers AI 绑定尚未配置");
     const input = buildOpenAi(provider, options, temperature).body;
     const result = asRecord(await env.AI.run(provider.model, input));
-    const text = typeof result?.response === "string" ? result.response : extractOpenAiText(result);
+    const text =
+      typeof result?.response === "string"
+        ? result.response
+        : extractOpenAiText(result);
     if (!text.trim()) throw new HttpError(502, "llm_error", "模型返回内容为空");
     return text;
   }
@@ -144,12 +198,17 @@ export async function complete(env: Env, options: CompleteOptions): Promise<stri
       headers: request.headers,
       body: JSON.stringify(request.body),
       signal: AbortSignal.timeout(30_000),
+      redirect: "manual",
     });
   } catch (error) {
     if (error instanceof Error && error.name === "TimeoutError") {
       throw new HttpError(504, "llm_timeout", "模型请求超时（30 秒）");
     }
-    throw new HttpError(502, "llm_error", `模型请求失败：${truncate(errorText(error))}`);
+    throw new HttpError(
+      502,
+      "llm_error",
+      "模型请求失败，请检查服务地址与网络连接",
+    );
   }
 
   if (!response.ok) {
@@ -162,7 +221,7 @@ export async function complete(env: Env, options: CompleteOptions): Promise<stri
     throw new HttpError(
       502,
       "llm_error",
-      `模型返回 HTTP ${response.status}：${truncate(detail || response.statusText)}`,
+      `模型返回 HTTP ${response.status}，请检查密钥、权限与模型配置`,
     );
   }
 
@@ -220,7 +279,11 @@ function buildRequest(
         "Workers AI 必须通过绑定调用",
       );
     default:
-      throw new HttpError(501, "not_implemented", `未知的模型供应商类型：${provider.kind}`);
+      throw new HttpError(
+        501,
+        "not_implemented",
+        `未知的模型供应商类型：${provider.kind}`,
+      );
   }
 }
 
@@ -282,7 +345,11 @@ function buildAnthropic(
       content: [
         ...imageParts(options.images, (image) => ({
           type: "image",
-          source: { type: "base64", media_type: image.mime, data: image.base64 },
+          source: {
+            type: "base64",
+            media_type: image.mime,
+            data: image.base64,
+          },
         })),
         { type: "text", text: message.content },
       ],
@@ -422,7 +489,10 @@ function asText(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-function paramNumber(params: Record<string, unknown>, key: string): number | null {
+function paramNumber(
+  params: Record<string, unknown>,
+  key: string,
+): number | null {
   const value = params[key];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }

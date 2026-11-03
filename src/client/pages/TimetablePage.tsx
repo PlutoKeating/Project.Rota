@@ -23,12 +23,14 @@ import { useAsync } from "../lib/hooks";
 import { WEEK_PATTERN_OPTIONS } from "../lib/labels";
 import { usePeriodsState, useTermsState } from "../lib/resources";
 
-export function TimetablePage() {
+export function TimetablePage({
+  initialPersonId = "",
+}: { initialPersonId?: string } = {}) {
   const toast = useToast();
   const terms = useTermsState();
 
   const [termId, setTermId] = useState("");
-  const [personId, setPersonId] = useState("");
+  const [personId, setPersonId] = useState(initialPersonId);
   const [week, setWeek] = useState(1);
   const [version, setVersion] = useState(0);
 
@@ -40,10 +42,14 @@ export function TimetablePage() {
     setWeek(1);
   }, [termId]);
 
-  const selectedTerm = terms.terms.find((term) => term.id === termId) ?? terms.current;
+  const selectedTerm =
+    terms.terms.find((term) => term.id === termId) ?? terms.current;
   const weekCount = selectedTerm?.weekCount ?? 20;
 
-  const persons = useAsync(async () => api.get<ListResponse<PersonView>>("/persons"), []);
+  const persons = useAsync(
+    async () => api.get<ListResponse<PersonView>>("/persons"),
+    [],
+  );
   const periods = usePeriodsState(termId || null);
 
   useEffect(() => {
@@ -69,7 +75,10 @@ export function TimetablePage() {
 
   const personList = persons.data?.items ?? [];
   const periodList = useMemo(
-    () => [...(periods.data?.items ?? [])].sort((a, b) => a.periodIndex - b.periodIndex),
+    () =>
+      [...(periods.data?.items ?? [])].sort(
+        (a, b) => a.periodIndex - b.periodIndex,
+      ),
     [periods.data],
   );
   const periodCount = periodList.length > 0 ? periodList.length : 12;
@@ -92,7 +101,9 @@ export function TimetablePage() {
 
   function togglePerson(id: string, checked: boolean): void {
     setSelectedPersonIds((previous) =>
-      checked ? [...new Set([...previous, id])] : previous.filter((value) => value !== id),
+      checked
+        ? [...new Set([...previous, id])]
+        : previous.filter((value) => value !== id),
     );
   }
 
@@ -153,7 +164,12 @@ export function TimetablePage() {
   const gridContent = (() => {
     if (persons.error) {
       return (
-        <ListState loading={false} error={persons.error} empty={false} onRetry={persons.reload}>
+        <ListState
+          loading={false}
+          error={persons.error}
+          empty={false}
+          onRetry={persons.reload}
+        >
           <div />
         </ListState>
       );
@@ -164,7 +180,10 @@ export function TimetablePage() {
           title="先选择一位人员"
           description="课表按人展示，选择后可以看到每周的课程与请假。"
           action={
-            <a href="#/people" className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400">
+            <a
+              href="#/people"
+              className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+            >
               去人员页 →
             </a>
           }
@@ -173,7 +192,12 @@ export function TimetablePage() {
     }
     if (periods.error) {
       return (
-        <ListState loading={false} error={periods.error} empty={false} onRetry={periods.reload}>
+        <ListState
+          loading={false}
+          error={periods.error}
+          empty={false}
+          onRetry={periods.reload}
+        >
           <div />
         </ListState>
       );
@@ -184,7 +208,10 @@ export function TimetablePage() {
           title="这个学期还没有节次"
           description="课表网格依赖节次定义，请先在学期页创建学期（会同时生成节次）。"
           action={
-            <a href="#/terms" className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400">
+            <a
+              href="#/terms"
+              className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+            >
               去学期页 →
             </a>
           }
@@ -201,7 +228,12 @@ export function TimetablePage() {
     }
     if (timetable.error) {
       return (
-        <ListState loading={false} error={timetable.error} empty={false} onRetry={timetable.reload}>
+        <ListState
+          loading={false}
+          error={timetable.error}
+          empty={false}
+          onRetry={timetable.reload}
+        >
           <div />
         </ListState>
       );
@@ -229,9 +261,13 @@ export function TimetablePage() {
             {periodList.map((period) => (
               <tr key={period.id}>
                 <th className="sticky left-0 z-10 border-b border-slate-100 bg-white px-2 py-2 text-left align-top dark:border-slate-800 dark:bg-slate-900">
-                  <span className="font-medium text-slate-700 dark:text-slate-200">{period.periodIndex}</span>
+                  <span className="font-medium text-slate-700 dark:text-slate-200">
+                    {period.periodIndex}
+                  </span>
                   {period.label ? (
-                    <span className="ml-1 text-[10px] text-slate-400">{period.label}</span>
+                    <span className="ml-1 text-[10px] text-slate-400">
+                      {period.label}
+                    </span>
                   ) : null}
                   <p className="mt-0.5 text-[10px] text-slate-400 tabular-nums">
                     {period.startTime.slice(0, 5)}–{period.endTime.slice(0, 5)}
@@ -250,7 +286,9 @@ export function TimetablePage() {
                           key={course.courseId}
                           className="mb-1 rounded-md bg-indigo-50 px-1.5 py-1 text-indigo-900 dark:bg-indigo-500/15 dark:text-indigo-200"
                         >
-                          <p className="text-[11px] leading-tight font-medium">{course.courseName}</p>
+                          <p className="text-[11px] leading-tight font-medium">
+                            {course.courseName}
+                          </p>
                           {course.location ? (
                             <p className="mt-0.5 text-[10px] text-indigo-700/70 dark:text-indigo-300/70">
                               {course.location}
@@ -259,7 +297,13 @@ export function TimetablePage() {
                         </div>
                       ))}
                       {cell?.unavailable ? (
-                        <Badge tone={cell.unavailable.kind === "blacklist" ? "danger" : "warning"}>
+                        <Badge
+                          tone={
+                            cell.unavailable.kind === "blacklist"
+                              ? "danger"
+                              : "warning"
+                          }
+                        >
                           {cell.unavailable.kind === "leave"
                             ? "请假"
                             : cell.unavailable.kind === "blacklist"
@@ -268,7 +312,9 @@ export function TimetablePage() {
                         </Badge>
                       ) : null}
                       {courses.length === 0 && !cell?.unavailable ? (
-                        <span className="text-[10px] text-slate-300 dark:text-slate-600">空闲</span>
+                        <span className="text-[10px] text-slate-300 dark:text-slate-600">
+                          空闲
+                        </span>
                       ) : null}
                     </td>
                   );
@@ -283,12 +329,32 @@ export function TimetablePage() {
 
   return (
     <div className="space-y-4 sm:space-y-5">
-      {termId && personId && <CourseAdjustments key={`${termId}-${personId}-${version}`} termId={termId} personId={personId} week={week} onChanged={() => setVersion(v => v + 1)} />}
-      {personId && <UnavailabilityEditor key={personId} personId={personId} onChanged={() => setVersion(v => v + 1)} />}
-      <Card title="周课表" description="按人、按周查看；课程与请假会直接进入可用性计算。">
+      {termId && personId && (
+        <CourseAdjustments
+          key={`${termId}-${personId}-${version}`}
+          termId={termId}
+          personId={personId}
+          week={week}
+          onChanged={() => setVersion((v) => v + 1)}
+        />
+      )}
+      {personId && (
+        <UnavailabilityEditor
+          key={personId}
+          personId={personId}
+          onChanged={() => setVersion((v) => v + 1)}
+        />
+      )}
+      <Card
+        title="周课表"
+        description="按人、按周查看；课程与请假会直接进入可用性计算。"
+      >
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
           <Field label="学期">
-            <Select value={termId} onChange={(event) => setTermId(event.target.value)}>
+            <Select
+              value={termId}
+              onChange={(event) => setTermId(event.target.value)}
+            >
               <option value="">选择学期</option>
               {terms.terms.map((term) => (
                 <option key={term.id} value={term.id}>
@@ -298,7 +364,10 @@ export function TimetablePage() {
             </Select>
           </Field>
           <Field label="人员">
-            <Select value={personId} onChange={(event) => setPersonId(event.target.value)}>
+            <Select
+              value={personId}
+              onChange={(event) => setPersonId(event.target.value)}
+            >
               <option value="">选择人员</option>
               {personList.map((person) => (
                 <option key={person.id} value={person.id}>
@@ -309,8 +378,14 @@ export function TimetablePage() {
             </Select>
           </Field>
           <Field label="周次">
-            <Select value={week} onChange={(event) => setWeek(Number(event.target.value))}>
-              {Array.from({ length: Math.max(1, weekCount) }, (_, index) => index + 1).map((value) => (
+            <Select
+              value={week}
+              onChange={(event) => setWeek(Number(event.target.value))}
+            >
+              {Array.from(
+                { length: Math.max(1, weekCount) },
+                (_, index) => index + 1,
+              ).map((value) => (
                 <option key={value} value={value}>
                   第 {value} 周
                 </option>
@@ -333,16 +408,23 @@ export function TimetablePage() {
         </div>
 
         {persons.error ? (
-          <p className="mt-3 text-[11px] text-amber-600 dark:text-amber-400">人员加载失败：{persons.error}</p>
+          <p className="mt-3 text-[11px] text-amber-600 dark:text-amber-400">
+            人员加载失败：{persons.error}
+          </p>
         ) : null}
         {terms.error ? (
-          <p className="mt-3 text-[11px] text-amber-600 dark:text-amber-400">学期加载失败：{terms.error}</p>
+          <p className="mt-3 text-[11px] text-amber-600 dark:text-amber-400">
+            学期加载失败：{terms.error}
+          </p>
         ) : null}
 
         <div className="mt-4">{gridContent}</div>
       </Card>
 
-      <Card title="添加课程" description="一门课可以同时选给多个人；规则只存一份。">
+      <Card
+        title="添加课程"
+        description="一门课可以同时选给多个人；规则只存一份。"
+      >
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <Field label="课程名" required>
             <TextInput
@@ -352,13 +434,24 @@ export function TimetablePage() {
             />
           </Field>
           <Field label="教师">
-            <TextInput value={teacher} onChange={(event) => setTeacher(event.target.value)} placeholder="可选" />
+            <TextInput
+              value={teacher}
+              onChange={(event) => setTeacher(event.target.value)}
+              placeholder="可选"
+            />
           </Field>
           <Field label="地点">
-            <TextInput value={location} onChange={(event) => setLocation(event.target.value)} placeholder="教三-201" />
+            <TextInput
+              value={location}
+              onChange={(event) => setLocation(event.target.value)}
+              placeholder="教三-201"
+            />
           </Field>
           <Field label="星期">
-            <Select value={weekday} onChange={(event) => setWeekday(Number(event.target.value))}>
+            <Select
+              value={weekday}
+              onChange={(event) => setWeekday(Number(event.target.value))}
+            >
               {WEEKDAYS.map((day) => (
                 <option key={day} value={day}>
                   {weekdayName(day)}
@@ -368,16 +461,28 @@ export function TimetablePage() {
           </Field>
           <Field label="起止节次">
             <div className="flex items-center gap-2">
-              <Select value={periodFrom} onChange={(event) => setPeriodFrom(Number(event.target.value))}>
-                {Array.from({ length: periodCount }, (_, index) => index + 1).map((value) => (
+              <Select
+                value={periodFrom}
+                onChange={(event) => setPeriodFrom(Number(event.target.value))}
+              >
+                {Array.from(
+                  { length: periodCount },
+                  (_, index) => index + 1,
+                ).map((value) => (
                   <option key={value} value={value}>
                     第 {value} 节
                   </option>
                 ))}
               </Select>
               <span className="text-xs text-slate-400">至</span>
-              <Select value={periodTo} onChange={(event) => setPeriodTo(Number(event.target.value))}>
-                {Array.from({ length: periodCount }, (_, index) => index + 1).map((value) => (
+              <Select
+                value={periodTo}
+                onChange={(event) => setPeriodTo(Number(event.target.value))}
+              >
+                {Array.from(
+                  { length: periodCount },
+                  (_, index) => index + 1,
+                ).map((value) => (
                   <option key={value} value={value}>
                     第 {value} 节
                   </option>
@@ -388,7 +493,9 @@ export function TimetablePage() {
           <Field label="周次模式">
             <Select
               value={patternKind}
-              onChange={(event) => setPatternKind(event.target.value as WeekPatternKind)}
+              onChange={(event) =>
+                setPatternKind(event.target.value as WeekPatternKind)
+              }
             >
               {WEEK_PATTERN_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
@@ -399,7 +506,11 @@ export function TimetablePage() {
           </Field>
           {patternKind === "ranges" ? (
             <Field label="周次范围" hint="例如 1-8,10-16,18">
-              <TextInput value={weekRanges} onChange={(event) => setWeekRanges(event.target.value)} placeholder="1-8" />
+              <TextInput
+                value={weekRanges}
+                onChange={(event) => setWeekRanges(event.target.value)}
+                placeholder="1-8"
+              />
             </Field>
           ) : null}
         </div>
@@ -409,7 +520,9 @@ export function TimetablePage() {
             上课人（{selectedPersonIds.length}）
           </p>
           {personList.length === 0 ? (
-            <p className="text-[11px] text-slate-400">还没有人员，先到「人员」页新建。</p>
+            <p className="text-[11px] text-slate-400">
+              还没有人员，先到「人员」页新建。
+            </p>
           ) : (
             <div className="grid max-h-48 gap-1 overflow-y-auto rounded-lg border border-slate-200 p-2 sm:grid-cols-2 lg:grid-cols-3 dark:border-slate-800">
               {personList.map((person) => (
@@ -417,7 +530,9 @@ export function TimetablePage() {
                   key={person.id}
                   label={`${person.fullName}${person.studentNo ? `（${person.studentNo}）` : ""}`}
                   checked={selectedPersonIds.includes(person.id)}
-                  onChange={(event) => togglePerson(person.id, event.target.checked)}
+                  onChange={(event) =>
+                    togglePerson(person.id, event.target.checked)
+                  }
                 />
               ))}
             </div>
@@ -425,7 +540,11 @@ export function TimetablePage() {
         </div>
 
         <div className="mt-3 flex justify-end">
-          <Button loading={creating} disabled={!termId || !personId} onClick={() => void addCourse()}>
+          <Button
+            loading={creating}
+            disabled={!termId || !personId}
+            onClick={() => void addCourse()}
+          >
             添加课程
           </Button>
         </div>
