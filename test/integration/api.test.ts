@@ -318,3 +318,24 @@ describe("导入事务", () => {
     expect((await call(env, "GET", `/api/imports/${job.id}`)).data.status).toBe("needs_review");
   });
 });
+
+describe("单次调课", () => {
+  it("调课与停课立即改变可用性，不能跨学期移动", async () => {
+    const env = makeEnv();
+    const { termId, zhangId } = await bootstrap(env);
+    const course = await call(env, "POST", "/api/courses", { termId, name: "调课测试", personIds: [zhangId], meetings: [{ weekday: 1, periodFrom: 1, periodTo: 1, patternKind: "all" }] });
+    const occurrences = await call(env, "GET", `/api/courses/${course.data.course.id}/occurrences`);
+    expect(occurrences.status).toBe(200);
+    const occurrence = occurrences.data.items[0];
+    const slots = await call(env, "GET", `/api/terms/${termId}/slots?week=1&weekday=2`);
+    const target = slots.data.items[0];
+    expect((await call(env, "PATCH", `/api/occurrences/${occurrence.id}`, { slotId: target.id, status: "moved" })).status).toBe(200);
+    const availability = await call(env, "GET", `/api/persons/${zhangId}/availability?termId=${termId}&week=1`);
+    expect(availability.data.cells.find((c: any) => c.slotId === occurrence.slotId).free).toBe(true);
+    expect(availability.data.cells.find((c: any) => c.slotId === target.id).free).toBe(false);
+    expect((await call(env, "PATCH", `/api/occurrences/${occurrence.id}`, { status: "cancelled" })).status).toBe(200);
+    const after = await call(env, "GET", `/api/persons/${zhangId}/availability?termId=${termId}&week=1`);
+    expect(after.data.cells.find((c: any) => c.slotId === target.id).free).toBe(true);
+    expect((await call(env, "PATCH", `/api/occurrences/${occurrence.id}`, { slotId: "unknown" })).status).toBe(400);
+  });
+});

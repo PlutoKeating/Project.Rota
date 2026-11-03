@@ -662,4 +662,32 @@ courses.post("/courses/:id/meetings", addMeeting);
 courses.delete("/meetings/:id", deleteMeeting);
 courses.post("/terms/:id/recompute-occurrences", recomputeOccurrences);
 
+
+courses.get("/courses/:id/occurrences", async c => {
+  const id = c.req.param("id");
+  if (!(await loadCourse(c.env.DB, id))) throw notFound("课程不存在");
+  return c.json({ items: await dbAll(c.env.DB, `select o.id, o.meeting_id, o.slot_id, o.status, o.note,
+    s.week_index, s.weekday, s.period_index, s.starts_at, s.ends_at
+    from course_occurrence o join course_meeting m on m.id=o.meeting_id join slot s on s.id=o.slot_id
+    where m.course_id=? order by s.starts_at`, id) });
+});
+
+courses.patch("/occurrences/:id", async c => {
+  const id = c.req.param("id");
+  const existing = await dbOne<{ termId: string; slotId: string }>(c.env.DB,
+    "select m.term_id,o.slot_id from course_occurrence o join course_meeting m on m.id=o.meeting_id where o.id=?", id);
+  if (!existing) throw notFound("课程时段不存在");
+  const body = await readJson<Record<string, unknown>>(c);
+  const slotId = typeof body.slotId === "string" ? body.slotId : existing.slotId;
+  const slot = await dbOne<{ termId: string }>(c.env.DB, "select term_id from slot where id=?", slotId);
+  if (!slot || slot.termId !== existing.termId) throw badRequest("只能调到同一学期内的节次");
+  const status = oneOf(body.status ?? (slotId === existing.slotId ? "scheduled" : "moved"), ["scheduled", "cancelled", "moved"] as const, "status");
+  const note = optString(body.note, "note", 500);
+  await dbBatch(c.env.DB, [
+    { sql: "update course_occurrence set slot_id=?,status=?,note=? where id=?", params: [slotId,status,note,id] },
+    auditStatement(c.get("user").id, "course.occurrence.update", "course_occurrence", id, { slotId, status, note }),
+  ]);
+  return c.json({ ok: true });
+});
+
 export default courses;

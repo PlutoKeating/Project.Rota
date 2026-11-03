@@ -62,9 +62,13 @@
 | `POST` | `/courses/:id/enroll` | 追加选课人 |
 | `POST` | `/courses/:id/meetings` | 追加一条上课规则并展开 |
 | `DELETE` | `/meetings/:id` | 删规则及其 occurrence |
+| `GET` | `/courses/:id/occurrences` | 具体上课时段，含周次/节次/status |
+| `PATCH` | `/occurrences/:id` | `{slotId?,status?,note?}`；只可移到同学期格子，status 为 scheduled/cancelled/moved |
 | `POST` | `/terms/:id/recompute-occurrences` | 全量重算（幂等） |
 
 `POST /courses` 接收 `CreateCourseInput`：同一门课可被多人选（`personIds`），规则只存一份，展开时按人复制？
+
+调课影响本课程全部选课人；停课不产生占用。重算 occurrence 会按原规则重新生成并覆盖单次调课，请先确认再执行。
 
 **不复制。** `course_meeting` 属于课程，`occurrence` 也属于课程；某个人的占用 = 他 `enrollment` 的课程的 occurrence。这样 30 个人选同一门课只存一份规则、一份 occurrence。
 
