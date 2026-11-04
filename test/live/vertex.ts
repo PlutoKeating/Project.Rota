@@ -12,7 +12,7 @@ export function vertexFetch({
 }: {
   project: string;
   location?: string;
-  getToken: () => Promise<string>;
+  getToken: (refresh?: boolean) => Promise<string>;
   upstream?: typeof fetch;
 }): typeof fetch {
   if (
@@ -40,14 +40,20 @@ export function vertexFetch({
       target.searchParams.set("alt", "sse");
     const headers = new Headers(request.headers);
     headers.delete("x-goog-api-key");
-    headers.set("authorization", `Bearer ${await getToken()}`);
-    return upstream(target, {
-      method: "POST",
-      headers,
-      body: await request.text(),
-      signal: request.signal,
-      redirect: "manual",
-    });
+    const body = await request.text();
+    for (let attempt = 0; ; attempt++) {
+      headers.set("authorization", `Bearer ${await getToken(attempt > 0)}`);
+      const response = await upstream(target, {
+        method: "POST",
+        headers: new Headers(headers),
+        body,
+        signal: request.signal,
+        redirect: "manual",
+      });
+      if (response.status !== 401 || attempt > 0 || request.signal.aborted)
+        return response;
+      await response.body?.cancel();
+    }
   };
 }
 
@@ -65,15 +71,16 @@ export async function vertexTestEnvironment() {
     project,
     location,
     upstream: previousFetch,
-    getToken: async () => {
-      if (Date.now() >= refreshAt) {
+    getToken: async (refresh = false) => {
+      if (refresh || Date.now() >= refreshAt) {
         cachedToken = (
           await exec("gcloud", ["auth", "print-access-token"], {
             timeout: 30000,
           })
         ).stdout.trim();
         if (!cachedToken) throw Error("gcloud returned no access token");
-        refreshAt = Date.now() + 40 * 60000;
+        // gcloud may return a cached token with less than an hour remaining.
+        refreshAt = Date.now() + 5 * 60000;
       }
       return cachedToken;
     },

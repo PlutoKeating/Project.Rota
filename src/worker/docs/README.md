@@ -45,4 +45,4 @@ Agent 单轮代理新增 `work/compact/checkpoint/verify` 模式、批次内成�
 
 params.api="responses" 可为 openai_compatible 选择原生 Responses（含管理页连接测试），默认保持 Chat Completions。额度耗尽单独脱敏分类；Retry-After 秒数进入诊断，浏览器不对已知额度耗尽立即重试。未新增依赖、环境变量或数据库迁移。
 
-本地 Vertex 验收复用 agentTurn 与 Google SDK，OAuth 路由适配仅位于 test/live/vertex.ts，不进入生产 Worker。此模式不读取生产模型配置，亦不更改既有密钥/排序。
+本地 Vertex 验收复用 agentTurn 与 Google SDK，OAuth 路由适配仅位于 test/live/vertex.ts，不进入生产 Worker。此模式不读取生产模型配置，亦不更改既有密钥/排序。测试代理在 Vertex 返回 401 时重新获取 gcloud token 并仅重试一次，避免缓存 token 提前到期导致长任务暂停。

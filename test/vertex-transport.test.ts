@@ -65,3 +65,20 @@ describe("local Vertex test transport", () => {
     ).toThrow("Invalid");
   });
 });
+
+it("refreshes expired Vertex credentials once and replays the exact SDK body", async () => {
+  const requests: RequestInit[] = [];
+  const getToken = vi.fn(async (refresh?: boolean) => refresh ? "fresh-token" : "expired-token");
+  const send = vertexFetch({ project: "test-project", getToken, upstream: async (_url, init) => {
+    requests.push(init!);
+    return new Response("unauthorized", { status: 401 });
+  } });
+  const response = await send("https://vertex-test.invalid/v1beta/models/gemini-4-argon:generateContent", {
+    method: "POST", body: '{"contents":[]}',
+  });
+  expect(response.status).toBe(401);
+  expect(requests).toHaveLength(2);
+  expect(getToken.mock.calls).toEqual([[false], [true]]);
+  expect(requests.map((r) => r.body)).toEqual(['{"contents":[]}', '{"contents":[]}']);
+  expect(requests.map((r) => new Headers(r.headers).get("authorization"))).toEqual(["Bearer expired-token", "Bearer fresh-token"]);
+});
