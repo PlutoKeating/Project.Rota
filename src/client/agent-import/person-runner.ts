@@ -20,6 +20,7 @@ import {
 } from "../../shared/agent-import/coverage";
 import {
   courseConflicts,
+  retainedConsistencyReviews,
   validateCheckedVariants,
   validateConsistencyReview,
 } from "../../shared/agent-import/consistency";
@@ -438,8 +439,9 @@ export class ImportRunner {
         session.phase = "people";
         return { result: { queued: p.key } };
       }
+      case "review_consistency":
       case "finish_import": {
-        if (agent.pending.length !== 1) throw Error("交付必须为最后一个调用");
+        if (call.name === "finish_import" && agent.pending.length !== 1) throw Error("交付必须为最后一个调用");
         if (Object.values(session.people).some((p) => p.status !== "done"))
           throw Error("人员对象尚未完成");
         projectPeople(job);
@@ -448,11 +450,13 @@ export class ImportRunner {
             (t) => !job.excluded.includes(t.person.id),
           ),
         );
-        validateConsistencyReview(conflicts, args.consistency_review);
-        for (const group of conflicts) {
-          const review = args.consistency_review.find(
-            (r: any) => r.key === group.key,
-          )!;
+        const submitted = call.name === "review_consistency" ? args.reviews : args.consistency_review;
+        if (new Set(submitted.map((r: { key: string }) => r.key)).size !== submitted.length)
+          throw Error("同一批核对不能重复 key");
+        const checkpoints = { ...session.consistencyCheckpoints };
+        for (const review of submitted) {
+          const group = conflicts.find((g) => g.key === review.key);
+          if (!group) throw Error("核对项已不属于当前差异：" + review.key);
           validateCheckedVariants(group, review);
           if (review.resolution === "different_context") {
             const paths = [
@@ -463,10 +467,16 @@ export class ImportRunner {
             if ((await this.sourcesRead(agent, paths)).length)
               throw Error("任课差异结论须回看来源：" + group.key);
           }
+          checkpoints[group.key] = { signature: canonical(group), review };
         }
+        session.consistencyCheckpoints = checkpoints;
+        const reviews = retainedConsistencyReviews(conflicts, checkpoints);
+        if (call.name === "review_consistency")
+          return { result: { checked: reviews.length, remaining: conflicts.length - reviews.length } };
+        validateConsistencyReview(conflicts, reviews);
         job.importCheck = {
           signature: importSignature(job),
-          consistency_review: args.consistency_review,
+          consistency_review: reviews,
           calendar_review: "公共日历证据已协调；缺项保留",
           identity_review: "按 A 匹配现有人员，冲突保留",
           unresolved: args.unresolved,
@@ -488,7 +498,7 @@ export class ImportRunner {
                 (x) => c.name + "：" + x,
               ),
             ),
-            ...args.consistency_review
+            ...reviews
               .filter((r: any) => r.resolution === "unresolved")
               .map((r: any) => r.key + "：" + r.explanation),
             ...checked.issues.map((i) => i.message),
@@ -517,7 +527,21 @@ export class ImportRunner {
           key: person.key,
           label: person.label,
           information: person.information,
-          timetables: person.timetables,
+          timetables:
+            person.status === "verifying"
+              ? Object.fromEntries(
+                  Object.entries(person.timetables).map(([key, table]) => [
+                    key,
+                    {
+                      ...table,
+                      entries: table.entries.map((entry, index) => ({
+                        index,
+                        name: entry.name,
+                      })),
+                    },
+                  ]),
+                )
+              : person.timetables,
           sources: person.sources,
           instruction: person.instruction,
           unresolved: person.unresolved,
@@ -525,6 +549,11 @@ export class ImportRunner {
         calendars: job.calendars ?? {},
         feedback: job.notes["最近操作员意见"],
       });
+    const conflicts = courseConflicts(Object.values(job.timetables ?? {}).filter(
+      (t) => !job.excluded.includes(t.person.id),
+    ));
+    const reviewed = retainedConsistencyReviews(conflicts, job.session!.consistencyCheckpoints);
+    const pending = conflicts.filter((g) => !reviewed.some((r) => r.key === g.key));
     return JSON.stringify({
       materials: (await materials(job.id)).map((f) => ({
         path: f.path,
@@ -553,7 +582,9 @@ export class ImportRunner {
           unresolved: t.unresolved,
         })),
       })),
-      conflicts: courseConflicts(Object.values(job.timetables ?? {})),
+      conflicts: pending.slice(0, 5),
+      remainingConflictCount: pending.length,
+      completedConsistencyKeys: reviewed.map((r) => r.key),
       issues: job.session!.issues,
       feedback: job.notes["最近操作员意见"],
     });

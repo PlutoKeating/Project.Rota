@@ -2,6 +2,7 @@ import { z } from "zod";
 import { calendarSchema, type FieldChecks } from "./calendar";
 import { timetableProposalSchema } from "./timetable";
 import { canonical, evidenceSchema, type Row } from "./model";
+import type { ConsistencyCheckpoints } from "./consistency";
 import type { CoverageState } from "./coverage";
 import type { ModelMessage } from "ai";
 
@@ -129,6 +130,7 @@ export interface ImportSession {
   coordinator: AgentState;
   people: Record<string, PersonWorkspace>;
   organizations: z.infer<typeof organizationSchema>[];
+  consistencyCheckpoints?: ConsistencyCheckpoints;
   concurrency: number;
   issues: string[];
 }

@@ -84,3 +84,17 @@ export function validateCheckedVariants(
       "核对结论须逐项引用当前真实的 timetable_id 与 teacher，不能编造或遗漏；请读取当前差异详情。",
     );
 }
+
+export type ConsistencyCheckpoints = Record<string, {
+  signature: string;
+  review: ConsistencyReview;
+}>;
+export function retainedConsistencyReviews(
+  conflicts: ReturnType<typeof courseConflicts>,
+  checkpoints: ConsistencyCheckpoints = {},
+): ConsistencyReview[] {
+  return conflicts.flatMap((group) => {
+    const saved = checkpoints[group.key];
+    return saved?.signature === canonical(group) ? [saved.review] : [];
+  });
+}

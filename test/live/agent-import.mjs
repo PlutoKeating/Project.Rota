@@ -305,7 +305,7 @@ try {
   const bytes = Array.from(await fs.readFile(archivePath));
   const start = Date.now();
   const result = await page.evaluate(
-    async ({ bytes, name, maxMs }) => {
+    async ({ bytes, name, maxMs, feedback }) => {
       const r = await import("/src/client/agent-import/runtime.ts"),
         s = await import("/src/client/agent-import/store.ts");
       const existing = (await s.listJobs("live-test"))[0];
@@ -314,6 +314,10 @@ try {
         (await r.createJob("live-test", [
           new File([new Uint8Array(bytes)], name),
         ]));
+      if (feedback) {
+        if (!existing) throw Error("ROTA_LIVE_FEEDBACK requires an existing isolated test batch");
+        await r.feedback(job, feedback);
+      }
       const runner = new r.ImportRunner(job, (j) => {
         void window.saveLiveProgress(j);
       });
@@ -339,6 +343,7 @@ try {
       bytes,
       name: path.basename(archivePath),
       maxMs: Number(process.env.ROTA_LIVE_MAX_MS ?? 1200000),
+      feedback: process.env.ROTA_LIVE_FEEDBACK ?? "",
     },
   );
   await progressWrites;

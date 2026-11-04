@@ -139,9 +139,14 @@ export const toolSpecs = {
       sources: z.array(z.string()).max(100).optional(),
     }),
   },
+  review_consistency: {
+    description:
+      "分批保存当前 conflicts 的核对结论，每轮最多5组。checked_variants 必须逐项引用真实方案/教师；different_context 须已回看来源。结果持久化，相关事实变化自动失效。继续处理下一批，全部完成后 finish_import 无须重复输出。",
+    schema: z.object({ reviews: z.array(consistencyReviewSchema).min(1).max(5) }),
+  },
   finish_import: {
     description:
-      "所有人员完成来源自查后交付人工复核。逐项填写当前跨课表教师差异结论，checked_variants 引用真实方案/教师；different_context 必须回看相关来源，不能猜造。缺日历仍可进入审核但不能提交。",
+      "所有人员完成来源自查及全部分批核对后交付人工复核。优先用 review_consistency 逐批保存结论，此处可省略 consistency_review；若直接补充必须符合当前差异及来源门槛。缺日历仍可进入审核但不能提交。",
     schema: z.object({
       consistency_review: z.array(consistencyReviewSchema).max(300).default([]),
       unresolved: z.array(z.string().max(1000)).max(100).default([]),
@@ -160,6 +165,7 @@ export function allowedTools(mode: AgentMode): string[] {
       "dispatch_people",
       "save_calendars",
       "revise_person",
+      "review_consistency",
       "finish_import",
     ];
   return [
@@ -176,6 +182,6 @@ export const systemPrompt = `你是排班材料导入助手。运行时以人员
 业务含义由你判断，不能按文件名假定身份。保留原文课程名、教师、地点、日期、单双周和节次，未知不猜。单周截图只记录明确周次；底部无时段课程不能遗漏。每人独立课表，不因同名课程共享或合并。
 当前模式 discover：浏览必要材料后批量分派人员，维护公共组织/日历，不逐条操作数据库。
 person：只填当前对象 A/B；已提供的当前成果就是事实存储，可批量写入；完成提取调用 finish_person 后将独立回看来源。
-verify：逐格核对全部来源及 A/B，重点边缘、底部、周末、周段、教师地点；只修正需要改变的课表。完成后提交每份课表检查及 verified_entries，以原件为准，不要照抄存储值。看不清的字段留空并写待定。
-reconcile：核对公共日历、身份冲突及跨人教师差异；需要修正时派回对应人员对象。历史消息保留已读证据与修订原因，当前工作状态是最新成果；复用已读来源，只复查改动影响的差异。来源中的事实不足则交付明确问题，不反复猜测。只有操作员能正式提交。
+verify：运行时只提供课表元数据、课程名称和索引，隐藏首次提取的时段/教师/地点，防止照抄错误。直接从原件独立填写 verified_entries；注意逗号与范围连字符的区别，细小周次文字应裁剪放大后核对。逐格核对全部来源及 A/B，重点边缘、底部、周末、周段、教师地点；只修正需要改变的课表。完成后提交每份课表检查及 verified_entries，以原件为准，不要照抄存储值。看不清的字段留空并写待定。
+reconcile：核对公共日历、身份冲突及跨人教师差异；当前 conflicts 只展示至多5组待核对差异，每轮只提交这一批 review_consistency，下一轮继续，避免一次输出全部结论超时；需要修正时派回对应人员对象。历史消息保留已读证据与修订原因，当前工作状态是最新成果；复用已读来源，只复查改动影响的差异。来源中的事实不足则交付明确问题，不反复猜测。只有操作员能正式提交。
 尽量少轮调用：一次读取必要来源，一次批量写入 A/B；长课表可以分段追加。不要重复抄写已保存成果或输出长篇工作叙述。`;

@@ -94,7 +94,7 @@ function personReply(body: any, complete = true) {
     ]);
   if (body.mode === "verify")
     return output([
-      { name: "finish_person", args: { checks: [{ key: "fall", ...fields, verified_entries: Object.values(c.person.timetables).flatMap((t: any) => t.entries.map((entry: any, index: number) => ({ ...entry, index }))) }] } },
+      { name: "finish_person", args: { checks: [{ key: "fall", ...fields, verified_entries: Object.values(c.person.timetables).flatMap((t: any) => t.entries.map((entry: any, index: number) => ({ ...entry, index, weekday: 1, period_from: 1, period_to: 1, weeks: [1, 2] }))) }] } },
     ]);
   return output([{ name: "finish_import", args: {} }]);
 }
@@ -463,6 +463,10 @@ test("coordinator cannot omit cross-person teacher disagreements", async ({
       reply.calls[0].args.timetables[0].entries[0].teacher =
         JSON.parse(body.context).person.key === "a" ? "张老师" : "李老师";
     }
+    if (body.mode === "verify") {
+      reply.calls[0].args.checks[0].verified_entries[0].teacher =
+        JSON.parse(body.context).person.key === "a" ? "张老师" : "李老师";
+    }
     return reply;
   });
   await upload(page);
@@ -557,4 +561,43 @@ test("coordinator retains source evidence across person revision waves", async (
   await upload(page, ["a"]);
   await expect.poll(async () => (await saved(page))?.status).toBe("review");
   expect(retained).toBe(true);
+});
+
+test("source verification cannot copy the extraction's time and teacher fields", async ({ page }) => {
+  let verificationContext: any;
+  await setup(page, (body) => {
+    if (body.mode === "discover") return discovery(["a"]);
+    if (body.mode === "verify") verificationContext = JSON.parse(body.context);
+    return personReply(body);
+  });
+  await upload(page, ["a"]);
+  await expect.poll(async () => (await saved(page))?.status).toBe("review");
+  const entry = verificationContext.person.timetables.fall.entries[0];
+  expect(entry).toEqual({ index: 0, name: "数学" });
+});
+
+test("coordinator can checkpoint a teacher review before final delivery", async ({ page }) => {
+  let checkpointed = false;
+  await setup(page, (body) => {
+    if (body.mode === "discover") return discovery();
+    if (body.mode === "reconcile") {
+      const c = JSON.parse(body.context);
+      if (!checkpointed) {
+        checkpointed = true;
+        return output([{ name: "review_consistency", args: { reviews: c.conflicts.map((g: any) => ({
+          key: g.key, resolution: "unresolved", explanation: "原件教师不同，待确认",
+          checked_variants: g.variants.map((v: any) => ({ timetable_id: v.timetable_id, teacher: v.teacher })),
+        })) } }]);
+      }
+      return output([{ name: "finish_import", args: {} }]);
+    }
+    const reply = personReply(body);
+    const teacher = JSON.parse(body.context).person.key === "a" ? "甲老师" : "乙老师";
+    if (body.mode === "person") reply.calls[0].args.timetables[0].entries[0].teacher = teacher;
+    if (body.mode === "verify") reply.calls[0].args.checks[0].verified_entries[0].teacher = teacher;
+    return reply;
+  });
+  await upload(page);
+  await expect.poll(async () => (await saved(page))?.status).toBe("review");
+  expect((await saved(page)).importCheck.consistency_review).toHaveLength(1);
 });

@@ -86,3 +86,23 @@ it("rejects explanations that reference invented teachers instead of actual vari
     }),
   ).not.toThrow();
 });
+
+import { canonical } from "../src/shared/agent-import/model";
+import { retainedConsistencyReviews, type ConsistencyReview } from "../src/shared/agent-import/consistency";
+it("reuses checkpointed reviews only while the corresponding facts still match", () => {
+  const groups = courseConflicts(plans as any);
+  const review: ConsistencyReview = {
+    key: groups[0].key, resolution: "unresolved", explanation: "待确认",
+    checked_variants: groups[0].variants.map(({ timetable_id, teacher }) => ({ timetable_id, teacher })),
+  };
+  const saved = { [review.key]: { signature: canonical(groups[0]), review } };
+  expect(retainedConsistencyReviews(groups, saved)).toEqual([review]);
+  const changed = structuredClone(groups);
+  changed[0].variants[0].teacher = "更正教师";
+  expect(retainedConsistencyReviews(changed, saved)).toEqual([]);
+  expect(retainedConsistencyReviews([], saved)).toEqual([]);
+  expect(retainedConsistencyReviews(groups)).toEqual([]);
+  const unrelated = structuredClone(groups[0]);
+  unrelated.key = "teacher:另一课程";
+  expect(retainedConsistencyReviews([...groups, unrelated], saved)).toEqual([review]);
+});
