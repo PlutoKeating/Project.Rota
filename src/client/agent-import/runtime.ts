@@ -383,7 +383,9 @@ async function feedbackUnlocked(job: Job, text: string) {
     throw Error("请先暂停处理");
   job.notes["最近操作员意见"] = text.trim();
   job.session.phase = "reconcile";
-  job.session.coordinator = emptyAgent();
+  // Cancel unexecuted instructions; completed source evidence remains valid.
+  if (job.session.coordinator.pending.length)
+    job.session.coordinator = emptyAgent();
   job.importCheck = undefined;
   job.revision++;
   job.validatedRevision = -1;

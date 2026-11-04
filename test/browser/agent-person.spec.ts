@@ -601,3 +601,25 @@ test("coordinator can checkpoint a teacher review before final delivery", async 
   await expect.poll(async () => (await saved(page))?.status).toBe("review");
   expect((await saved(page)).importCheck.consistency_review).toHaveLength(1);
 });
+
+test("operator feedback retains completed coordinator evidence", async ({ page }) => {
+  await setup(page, (body) => body.mode === "discover" ? discovery(["a"]) : personReply(body));
+  await upload(page, ["a"]);
+  await expect.poll(async () => (await saved(page))?.status).toBe("review");
+  const result = await page.evaluate(async () => {
+    const r = await import("/src/client/agent-import/runtime.ts");
+    const s = await import("/src/client/agent-import/store.ts");
+    const job = (await s.listJobs("owner"))[0];
+    const before = job.session.coordinator.runId;
+    await r.feedback(job, "请独立回看原件，不预设答案");
+    const retained = { before, after: job.session.coordinator.runId, coverage: job.session.coordinator.coverage };
+    job.session.coordinator.pending = [{ id: "stale", name: "finish_import", args: {} }];
+    await s.saveJob(job);
+    await r.feedback(job, "取消旧指令，重新核对");
+    return { ...retained, pending: job.session.coordinator.pending, reset: job.session.coordinator.runId !== before };
+  });
+  expect(result.after).toBe(result.before);
+  expect(Object.keys(result.coverage)).toContain("a.txt");
+  expect(result.pending).toEqual([]);
+  expect(result.reset).toBe(true);
+});
