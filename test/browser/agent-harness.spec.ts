@@ -1813,3 +1813,57 @@ test("a large invalid tool batch gets a model repair turn before pausing", async
   expect(result).toEqual({ status: "review", pending: 0 });
   expect(turns).toBe(2);
 });
+
+for (const allNetworkFailures of [false, true])
+  test(`transport retries have their own bounded budget (${allNetworkFailures ? "exhausted" : "recovered"})`, async ({
+    page,
+  }) => {
+    let requests = 0;
+    await routes(page, () => reply([]));
+    await page.route("**/api/agent-imports/*/turn", (route) => {
+      requests++;
+      if (!allNetworkFailures && requests === 4)
+        return route.fulfill({
+          json: reply([
+            { id: "validate", name: "validate_draft", args: {} },
+            {
+              id: "finish",
+              name: "finish_review",
+              args: { summary: "恢复成功", unresolved: [] },
+            },
+          ]),
+        });
+      return route.fulfill({
+        status: 502,
+        json: {
+          error: "临时失败",
+          code: "llm_error",
+          metrics: {
+            requestId: `retry-${requests}`,
+            durationMs: 1,
+            purpose: "work",
+            attempts: [
+              {
+                providerId: "test",
+                model: "test",
+                durationMs: 1,
+                status: "error",
+                code:
+                  !allNetworkFailures && requests === 1
+                    ? "timeout"
+                    : "network_error",
+              },
+            ],
+          },
+        },
+      });
+    });
+    const status = await page.evaluate(async () => {
+      const r = await import("/src/client/agent-import/runtime.ts");
+      const job = await r.createJob("owner", []);
+      await new r.ImportRunner(job, () => {}).run();
+      return job.status;
+    });
+    expect(requests).toBe(4);
+    expect(status).toBe(allNetworkFailures ? "paused" : "review");
+  });

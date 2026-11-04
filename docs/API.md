@@ -261,6 +261,6 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 
 `GET /api/agent-imports` 返回当前操作员最近 20 条已提交批次 `{items:[{id,summary,applied_at}]}`；`GET /api/agent-imports/:id/report` 返回 `{review:...|null}`，旧批次无记录时 null。两接口均沿用批次归属校验。
 
-`POST /agent-imports/:id/turn` 的 `mode` 新增 `reconcile`：开放跨课表差异读取/结论、原件回看、方案修订、日历和最终审核工具，关闭目录/历史遍历。`review` 审核报告新增可选 `consistency_review`（默认空数组）：每项 `key`、`resolution`（`different_context` / `unresolved`）、`explanation`。模型请求诊断增加脱敏 `errorType` / `causeCode`；明确临时连接错误分类 `network_error`，客户端最多自动重试一次。
+`POST /agent-imports/:id/turn` 的 `mode` 新增 `reconcile`：开放跨课表差异读取/结论、原件回看、方案修订、日历和最终审核工具，关闭目录/历史遍历。`review` 审核报告新增可选 `consistency_review`（默认空数组）：每项 `key`、`resolution`（`different_context` / `unresolved`）、`explanation`。模型请求诊断增加脱敏 `errorType` / `causeCode`；明确临时连接错误分类 `network_error`，使用独立的最多三次退避重试预算；模型超时/无效输出及其他短暂代理失败仍最多修正重试一次。
 
 `record_consistency_check` 必须提供 `checked_variants: [{timetable_id, teacher}]`，与当前差异逐项匹配。确认 `different_context` 还要求本轮全批复核已回看相关来源；`unresolved` 明确保留待人工确认。旧审核报告缺省此字段为空数组，不表示已经执行新版核对。

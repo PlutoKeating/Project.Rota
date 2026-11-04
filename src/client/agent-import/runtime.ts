@@ -186,7 +186,9 @@ async function requestTurn<T>(
     body = { ...(body as object), messages: job.messages };
   };
   reduceTimedOutResponse();
-  for (let retry = 0; ; retry++) {
+  let networkRetries = 0;
+  let modelRetries = 0;
+  for (;;) {
     const start = Date.now();
     try {
       const transport = {
@@ -245,14 +247,25 @@ async function requestTurn<T>(
                 (a.retryAfterMs ?? 0) <= 30000) ||
               (a.httpStatus ?? 0) >= 500,
           ));
-      if (!transient || retry >= 1) throw e;
+      if (!transient) throw e;
+      const networkFailure =
+        (e instanceof ApiError && e.status === 0) ||
+        (metrics.attempts.length > 0 &&
+          metrics.attempts.every((a) => a.code === "network_error"));
+      if (networkFailure) {
+        if (networkRetries >= 3) throw e;
+        networkRetries++;
+      } else {
+        if (modelRetries >= 1) throw e;
+        modelRetries++;
+      }
       const retryDelay = Math.max(
-        2000,
+        networkFailure ? 2000 * 2 ** (networkRetries - 1) : 2000,
         ...metrics.attempts.map((a) => Math.min(a.retryAfterMs ?? 0, 30000)),
       );
       log(
         job,
-        `模型请求暂时失败，进度已保存；${Math.ceil(retryDelay / 1000)} 秒后重试一次。请求编号：` +
+        `模型请求暂时失败，进度已保存；${Math.ceil(retryDelay / 1000)} 秒后进行第 ${networkFailure ? networkRetries : modelRetries} 次${networkFailure ? "网络" : "模型"}重试。请求编号：` +
           metrics.requestId,
       );
       job.phase = "模型请求暂时失败，正在重试";
