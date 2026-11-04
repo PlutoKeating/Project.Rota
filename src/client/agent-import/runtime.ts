@@ -1,3 +1,15 @@
+import { reviewArtifactSchema } from "../../shared/agent-import/review-artifact";
+import {
+  calendarSchema,
+  calendarMissing,
+  stageCalendar,
+} from "../../shared/agent-import/calendar";
+import {
+  calendarBindingIssues,
+  importSignature,
+  needsImportCheck,
+  reviewSummary,
+} from "./readiness";
 import { fitImagePayload } from "./image-payload";
 import {
   startVerification,
@@ -53,6 +65,12 @@ export function changesFor(job: Job): Change[] {
   const changes = diff(job.base, job.draft, job.evidence);
   const excluded = new Set(job.excluded);
   const skip = new Set<string>(job.excluded.map((id) => "person:" + id));
+  for (const p of Object.values(job.timetables ?? {}))
+    if (excluded.has(p.person.id))
+      for (const c of changes.filter(
+        (c) => c.entity === "course" && c.id.startsWith(p.id + ":untimed:"),
+      ))
+        skip.add("course:" + c.id);
   let grew = true;
   while (grew) {
     grew = false;
@@ -130,10 +148,20 @@ async function requestTurn<T>(
   update: () => void,
 ): Promise<T> {
   const reduceTimedOutResponse = () => {
-    if (!job.metrics?.at(-1)?.attempts.some((a) => a.code === "timeout"))
+    if (
+      !job.metrics
+        ?.at(-1)
+        ?.attempts.some((a) =>
+          ["timeout", "output_truncated", "invalid_tool_call"].includes(
+            a.code ?? "",
+          ),
+        )
+    )
       return;
     const guidance =
-      "上次模型响应超时，未返回的工具调用没有执行。请缩小本次响应：只处理一个人的一小部分，每次 save_timetable 最多保存 8 条 entries，后续用 mode=append 继续；不要丢弃其余课程或提前标记材料完成。note 仅保留必要原文周次、定位和疑点，不重复已有字段。复核每次只修正少量差异；交接摘要只写下一步和未决事项，不复述已保存的全部课表。";
+      (body as { mode?: string }).mode === "compact"
+        ? "上一响应未成功返回有效工具；没有执行任何业务动作。请仅调用 save_handoff 一次，简短填写下一步和待定事项，参数必须符合工具契约。"
+        : "上一响应超时、截断或未返回有效工具，未返回的工具调用没有执行。请缩小本次响应：只处理一个人的一小部分，每次 save_timetable 最多保存 8 条 entries，后续用 mode=append 继续；不要丢弃其余课程或提前标记材料完成。note 仅保留必要原文周次、定位和疑点，不重复已有字段。复核每次只修正少量差异；交接摘要只写下一步和未决事项，不复述已保存的全部课表。";
     if (job.messages.at(-1)?.content !== guidance)
       job.messages.push({ role: "user", content: guidance });
     body = { ...(body as object), messages: job.messages };
@@ -142,7 +170,10 @@ async function requestTurn<T>(
   for (let retry = 0; ; retry++) {
     const start = Date.now();
     try {
-      const transport = { ...(body as object), messages: await fitImagePayload(job.messages) };
+      const transport = {
+        ...(body as object),
+        messages: await fitImagePayload(job.messages),
+      };
       return await api.post<T>(`/agent-imports/${job.id}/turn`, transport, {
         timeoutMs: 130000,
       });
@@ -182,7 +213,9 @@ async function requestTurn<T>(
         (!supplied ||
           supplied.attempts.some(
             (a) =>
-              a.code === "timeout" ||
+              ["timeout", "output_truncated", "invalid_tool_call"].includes(
+                a.code ?? "",
+              ) ||
               (a.httpStatus === 429 &&
                 a.code !== "quota_exhausted" &&
                 (a.retryAfterMs ?? 0) <= 30000) ||
@@ -286,11 +319,19 @@ export async function checkJob(job: Job) {
         issues.push({
           message: `${t.person.full_name}：已保存 ${t.entries.length} 项课程，待绑定学期/作息后才能正式导入`,
         });
-      else if (t.entries.length !== t.entryIds.length)
+      else if (
+        t.entries.length !==
+        t.entryIds.length + (t.unscheduledIds?.length ?? 0)
+      )
         issues.push({
           message: `${t.person.full_name}：部分课程缺少星期、节次或周次，尚未形成完整占用`,
         });
     }
+  issues.push(...calendarBindingIssues(job).map((message) => ({ message })));
+  if (needsImportCheck(job))
+    issues.push({
+      message: "等待 Agent 全批核对日期、作息、人员关系与材料缺项",
+    });
   job.checkedRevision = job.revision;
   job.validatedRevision = issues.length ? -1 : job.revision;
   return {
@@ -316,13 +357,141 @@ async function execute(
   const name = call.name as ToolName;
   if (!(name in toolSpecs)) throw Error("未知工具");
   const args = toolSpecs[name].schema.parse(call.args) as Record<string, any>;
-  if (job.verification && ["change_record", "bind_timetables"].includes(name))
+  if (
+    job.verification &&
+    [
+      "change_record",
+      "bind_timetables",
+      "materialize_calendar",
+      "confirm_import_check",
+    ].includes(name)
+  )
     throw Error(
       "逐人复核期间只用 revise_timetable 修正当前方案；其他业务变化留到回到主任务后处理",
     );
   switch (name) {
+    case "read_calendars": {
+      if (args.id) {
+        const calendar = job.calendars?.[args.id];
+        return {
+          result: calendar
+            ? { ...calendar, missing: calendarMissing(calendar) }
+            : { error: "日历方案不存在" },
+        };
+      }
+      const rows = Object.values(job.calendars ?? {});
+      return {
+        result: {
+          total: rows.length,
+          items: rows
+            .slice(args.offset, args.offset + 20)
+            .map((c) => ({
+              id: c.id,
+              name: c.name,
+              start_date: c.start_date,
+              week_count: c.week_count,
+              minimum_weeks: c.minimum_weeks,
+              periods: c.periods.length,
+              applicable: c.timetable_ids.length,
+              missing: calendarMissing(c),
+            })),
+          nextOffset: args.offset + 20 < rows.length ? args.offset + 20 : null,
+        },
+      };
+    }
+    case "save_calendar": {
+      const calendar = calendarSchema.parse(args);
+      const files = await materials(job.id);
+      for (const e of calendar.sources)
+        if (
+          !["现有数据", "操作员意见"].includes(e.source) &&
+          !files.some((f) => f.path === e.source && f.inspected)
+        )
+          throw Error("日历来源未读取：" + e.source);
+      for (const id of calendar.timetable_ids)
+        if (!job.timetables?.[id]) throw Error("适用课表不存在：" + id);
+      if (canonical(job.calendars?.[calendar.id]) !== canonical(calendar)) {
+        (job.calendars ??= {})[calendar.id] = calendar;
+        job.revision++;
+        job.validatedRevision = -1;
+      }
+      return {
+        result: {
+          saved: true,
+          id: calendar.id,
+          missing: calendarMissing(calendar),
+        },
+      };
+    }
+    case "materialize_calendar": {
+      const calendar = job.calendars?.[args.id];
+      if (!calendar) throw Error("日历方案不存在");
+      const staged = stageCalendar(job.draft, job.evidence, calendar);
+      if (diff(job.draft, staged.draft, staged.evidence).length) {
+        job.revision++;
+        job.validatedRevision = -1;
+      }
+      job.draft = staged.draft;
+      job.evidence = staged.evidence;
+      return {
+        result: {
+          term_id: staged.termId,
+          profile_id: staged.profileId,
+          timetable_ids: calendar.timetable_ids,
+        },
+      };
+    }
+    case "confirm_import_check": {
+      if (
+        job.verification ||
+        Object.values(job.timetables ?? {}).some((t) =>
+          needsVerification(job, t),
+        )
+      )
+        throw Error("请先完成逐人原件核对");
+      if ((await materials(job.id)).some((f) => !f.status))
+        throw Error("仍有未处理材料");
+      const plans = Object.values(job.timetables ?? {}).filter(
+        (t) => !job.excluded.includes(t.person.id),
+      );
+      const calendars = Object.values(job.calendars ?? {});
+      const missing = plans.filter(
+        (t) =>
+          !t.bound && !calendars.some((c) => c.timetable_ids.includes(t.id)),
+      );
+      if (missing.length)
+        throw Error(
+          "这些未绑定课表尚未保存日历证据方案（未知字段可 null，但须逐项汇总线索）：" +
+            missing.map((p) => p.id).join("、"),
+        );
+      const bindable = calendars.filter(
+        (c) =>
+          !calendarMissing(c).length &&
+          c.timetable_ids.some(
+            (id) => job.timetables?.[id] && !job.timetables[id].bound,
+          ),
+      );
+      if (bindable.length)
+        throw Error(
+          "已有完整日历，请先生成并绑定适用课表：" +
+            bindable.map((c) => c.id).join("、"),
+        );
+      job.importCheck = {
+        signature: importSignature(job),
+        calendar_review: args.calendar_review,
+        identity_review: args.identity_review,
+        unresolved: args.unresolved,
+      };
+      return { result: { checked: true, summary: reviewSummary(job) } };
+    }
     case "confirm_timetable_check":
-      confirmVerification(job, args.id, args.summary, await materials(job.id));
+      confirmVerification(
+        job,
+        args.id,
+        args.summary,
+        await materials(job.id),
+        args.checks,
+      );
       return { result: { checked: true, id: args.id } };
     case "revise_timetable": {
       const previous = job.timetables?.[args.id];
@@ -534,7 +703,10 @@ async function execute(
         const plan = job.timetables?.[args.id];
         return {
           result: plan
-            ? proposalForModel(plan)
+            ? {
+                ...proposalForModel(plan),
+                fieldCheck: job.timetableChecks?.[plan.id]?.checks,
+              }
             : {
                 error: "方案不存在",
                 availableIds: Object.keys(job.timetables ?? {}),
@@ -802,14 +974,23 @@ async function execute(
         throw Error("请先完成本轮其他工具，再提交复核");
       if (job.checkedRevision !== job.revision)
         throw Error("请先调用 validate_draft 检查本次草稿");
+      if (needsImportCheck(job))
+        throw Error("先 confirm_import_check 核对全批日历、身份和材料缺项");
       const checked = await checkJob(job);
       if (checked.unread.length)
         throw Error(
           "仍有未交代的文件：" + checked.unread.slice(0, 20).join("，"),
         );
-      job.summary = args.summary;
+      job.agentSummary = args.summary;
+      job.summary = reviewSummary(job);
       job.unresolved = [
         ...args.unresolved,
+        ...(job.importCheck?.unresolved ?? []),
+        ...Object.values(job.calendars ?? {}).flatMap((c) =>
+          [...calendarMissing(c), ...c.unresolved].map(
+            (x) => c.name + "：" + x,
+          ),
+        ),
         ...checked.issues.map((x) => x.message),
         ...checked.warnings,
         ...Object.values(job.timetables ?? {}).flatMap((t) =>
@@ -823,7 +1004,8 @@ async function execute(
       job.status = "review";
       return {
         result: {
-          ready: true,
+          readyForReview: true,
+          readyToApply: !checked.issues.length,
           summary: job.summary,
           unresolved: job.unresolved,
         },
@@ -1096,6 +1278,29 @@ export class ImportRunner {
                   seen: job.verification.seen,
                 }
               : null,
+            calendarPlans: Object.values(job.calendars ?? {})
+              .slice(-20)
+              .map((c) => ({
+                id: c.id,
+                name: c.name,
+                start_date: c.start_date,
+                week_count: c.week_count,
+                minimum_weeks: c.minimum_weeks,
+                periods: c.periods.length,
+                applicable: c.timetable_ids.length,
+              })),
+            calendarCount: Object.keys(job.calendars ?? {}).length,
+            calendarInstruction:
+              "这里只列最近20份索引。read_calendars 分页浏览，指定 id 查完整字段与来源。",
+            importCheckRequired: needsImportCheck(job),
+            fieldChecks: Object.entries(job.timetableChecks ?? {})
+              .slice(-8)
+              .map(([id, c]) => ({
+                id,
+                calendar: c.checks?.calendar.slice(0, 800),
+                coverage: c.checks?.coverage,
+                coverage_reason: c.checks?.coverage_reason.slice(0, 300),
+              })),
             title: job.title,
             observationPaths: Object.keys(job.observations ?? {}).slice(-20),
             timetablePlans: Object.values(job.timetables ?? {}).map((t) => ({
@@ -1280,6 +1485,7 @@ export class ImportRunner {
   }
 }
 export async function feedback(job: Job, text: string) {
+  job.importCheck = undefined;
   if (!text.trim()) return;
   job.messages.push({
     role: "user",
@@ -1326,6 +1532,7 @@ export async function editProposalEntry(
   job.timetables![id] = staged.proposal;
   if (checked)
     job.timetableChecks![id] = {
+      ...job.timetableChecks![id],
       signature: proposalSignature(staged.proposal),
       summary: "操作员在已核对方案中直接修订课程",
       at: Date.now(),
@@ -1336,6 +1543,8 @@ export async function editProposalEntry(
     role: "user",
     content: `操作员已直接修正课表方案 ${id} 的第 ${index + 1} 项，请用 read_timetables 读取当前版本，不得用旧笔记覆盖这些修改。`,
   });
+  if (checked && job.importCheck)
+    job.importCheck.signature = importSignature(job);
   await saveJob(job);
 }
 export async function editRecord(
@@ -1356,6 +1565,7 @@ export async function editRecord(
           toolSpecs.save_timetable.schema.shape.person.parse(person);
         if (checked)
           job.timetableChecks![proposal.id] = {
+            ...job.timetableChecks![proposal.id],
             signature: proposalSignature(proposal),
             summary: "操作员在已核对方案中直接修订身份字段",
             at: Date.now(),
@@ -1372,6 +1582,7 @@ export async function editRecord(
   ];
   job.revision++;
   job.validatedRevision = -1;
+  if (job.importCheck) job.importCheck.signature = importSignature(job);
   await saveJob(job);
 }
 export async function applyJob(job: Job) {
@@ -1382,11 +1593,99 @@ export async function applyJob(job: Job) {
   if (result.issues.length)
     throw Error(result.issues.map((x) => x.message).join("；"));
   await renewLease(job);
+  const committedSummary = reviewSummary(job, true);
   await api.post(`/agent-imports/${job.id}/apply`, {
     changes: changesFor(job),
-    summary: job.summary,
+    summary: committedSummary,
+    review: reviewArtifactSchema.parse({
+      version: 1,
+      timetables: Object.values(job.timetables ?? {}).filter(
+        (t) => !job.excluded.includes(t.person.id),
+      ),
+      calendars: Object.values(job.calendars ?? {}),
+      checks: Object.fromEntries(
+        Object.entries(job.timetableChecks ?? {})
+          .filter(
+            ([id, c]) =>
+              c.checks &&
+              !job.excluded.includes(job.timetables?.[id]?.person.id ?? ""),
+          )
+          .map(([id, c]) => [id, c.checks]),
+      ),
+      unresolved: job.unresolved,
+    }),
   });
   job.status = "applied";
+  job.summary = committedSummary;
   job.expiresAt = Date.now() + RETENTION;
+  await saveJob(job);
+}
+
+export async function editCalendar(job: Job, value: unknown) {
+  if (["running", "applied", "cancelled"].includes(job.status))
+    throw Error("当前状态不能编辑日历");
+  const calendar = calendarSchema.parse(value);
+  calendar.sources = [
+    ...calendar.sources.filter((s) => s.source !== "操作员意见").slice(0, 29),
+    {
+      source: "操作员意见",
+      locator: "日历复核",
+      explanation: "操作员直接修订日历字段",
+      inferred: false,
+    },
+  ];
+  await execute(job, {
+    id: "operator-calendar",
+    name: "save_calendar",
+    args: calendar,
+  });
+  if (!calendarMissing(calendar).length) {
+    const state = {
+      draft: job.draft,
+      evidence: job.evidence,
+      timetables: job.timetables,
+      revision: job.revision,
+    };
+    try {
+      const result = await execute(job, {
+        id: "operator-materialize",
+        name: "materialize_calendar",
+        args: { id: calendar.id },
+      });
+      const refs = result.result as { term_id: string; profile_id: string };
+      if (calendar.timetable_ids.length)
+        await execute(job, {
+          id: "operator-bind",
+          name: "bind_timetables",
+          args: { ids: calendar.timetable_ids, ...refs },
+        });
+    } catch (e) {
+      Object.assign(job, state);
+      await saveJob(job);
+      throw e;
+    }
+  }
+  // Human edits update an already reviewed batch, without claiming a new model check.
+  if (job.importCheck) job.importCheck.signature = importSignature(job);
+  job.summary = reviewSummary(job);
+  await saveJob(job);
+}
+
+export async function setPersonIncluded(
+  job: Job,
+  id: string,
+  included: boolean,
+) {
+  if (["running", "applied", "cancelled"].includes(job.status))
+    throw Error("当前状态不能修改导入范围");
+  const checked = !needsImportCheck(job);
+  job.excluded = included
+    ? job.excluded.filter((x) => x !== id)
+    : [...new Set([...job.excluded, id])];
+  job.revision++;
+  job.validatedRevision = -1;
+  if (checked && job.importCheck)
+    job.importCheck.signature = importSignature(job);
+  job.summary = reviewSummary(job);
   await saveJob(job);
 }

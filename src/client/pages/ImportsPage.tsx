@@ -1,3 +1,4 @@
+import { SavedReports } from "../agent-import/SavedReports";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "../components/Button";
 import { Textarea } from "../components/Field";
@@ -474,6 +475,7 @@ export function ImportsPage() {
           </ul>
         </details>
       )}
+      {!job && <SavedReports />}
       <p className="text-xs leading-5 text-slate-500">
         材料在本机处理，模型按需读取内容。正式数据仅在你确认后写入。完成或取消后保留
         8 小时；浏览器关闭期间到期的材料，下次打开时清理。

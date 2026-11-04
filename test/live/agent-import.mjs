@@ -69,6 +69,24 @@ if (process.env.ROTA_CAPTURE_PROVIDER_RESPONSES === "1") {
           { mode: 0o600 },
         );
     }
+    if (url.hostname.endsWith("aiplatform.googleapis.com")) {
+      const value = await response
+        .clone()
+        .json()
+        .catch(() => null);
+      if (value?.candidates)
+        await fs.writeFile(
+          path.join(
+            out,
+            `vertex-response-${Date.now()}-${crypto.randomUUID()}.json`,
+          ),
+          JSON.stringify({
+            candidates: value.candidates,
+            usageMetadata: value.usageMetadata,
+          }),
+          { mode: 0o600 },
+        );
+    }
     return response;
   };
 }

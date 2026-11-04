@@ -26,6 +26,7 @@ export const timetableProposalSchema = z.object({
       z
         .object({
           name: z.string().min(1).max(200),
+          no_fixed_time: z.boolean().optional(),
           weekday: z.number().int().min(1).max(7).nullable().default(null),
           period_from: z.number().int().min(1).max(48).nullable().default(null),
           period_to: z.number().int().min(1).max(48).nullable().default(null),
@@ -45,6 +46,14 @@ export const timetableProposalSchema = z.object({
             e.period_to === null ||
             e.period_from <= e.period_to,
           "节次起止颠倒",
+        )
+        .refine(
+          (e) =>
+            !e.no_fixed_time ||
+            (e.weekday === null &&
+              e.period_from === null &&
+              e.period_to === null),
+          "明确无固定时段不能同时提供固定星期节次",
         ),
     )
     .max(120),
@@ -55,6 +64,7 @@ export const timetableProposalSchema = z.object({
 export type TimetableProposal = z.infer<typeof timetableProposalSchema> & {
   entryIds: string[];
   bound: boolean;
+  unscheduledIds?: string[];
 };
 /** Explicit model-produced fields only. No filename matching, text parsing, or inferred dates. */
 export function stageTimetable(
@@ -113,9 +123,52 @@ export function stageTimetable(
     mutate(draft, "timetable_entry", "delete", {}, id);
     proof["timetable_entry:" + id] = input.sources;
   }
-  const entryIds: string[] = [];
+  for (const id of previous?.unscheduledIds ?? []) {
+    mutate(draft, "enrollment", "delete", {}, id + ":enrollment");
+    mutate(draft, "course", "delete", {}, id);
+    proof["enrollment:" + id + ":enrollment"] = input.sources;
+    proof["course:" + id] = input.sources;
+  }
+  const entryIds: string[] = [],
+    unscheduledIds: string[] = [];
   if (bound)
     for (const [i, e] of input.entries.entries()) {
+      if (e.no_fixed_time) {
+        const id = input.id + ":untimed:" + i;
+        if (draft.course.some((c) => c.id === id))
+          throw Error("无固定时段课程 ID 冲突：" + id);
+        mutate(
+          draft,
+          "course",
+          "create",
+          {
+            id,
+            term_id: input.term_id,
+            name: e.name,
+            teacher: e.teacher ?? null,
+            created_at: base.course.find((c) => c.id === id)?.created_at,
+          },
+          id,
+        );
+        mutate(
+          draft,
+          "enrollment",
+          "create",
+          {
+            id: id + ":enrollment",
+            person_id: input.person.id,
+            course_id: id,
+            term_id: input.term_id,
+            created_at: base.enrollment.find((c) => c.id === id + ":enrollment")
+              ?.created_at,
+          },
+          id + ":enrollment",
+        );
+        proof["course:" + id] = input.sources;
+        proof["enrollment:" + id + ":enrollment"] = input.sources;
+        unscheduledIds.push(id);
+        continue;
+      }
       if (
         e.weekday === null ||
         e.period_from === null ||
@@ -153,7 +206,7 @@ export function stageTimetable(
   return {
     draft,
     evidence: proof,
-    proposal: { ...input, bound, entryIds },
+    proposal: { ...input, bound, entryIds, unscheduledIds },
     changed: diff(base, draft, proof).length > 0,
   };
 }

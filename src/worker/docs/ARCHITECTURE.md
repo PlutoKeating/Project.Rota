@@ -44,3 +44,7 @@ Agent 代理在 `compact` 模式仅开放 `save_handoff`；普通模式不开放
 导入单轮代理支持 `work`、`compact`、`checkpoint`、`verify`：保存成果阶段仅提供持久化与查询工具，暂不提供新文件读取工具，返回调用须属于当轮开放工具集合。逐人复核继续使用同一 Agent，通过 `revise_timetable` 增量纠正、`confirm_timetable_check` 记录来源回看与方案签名。
 
 `verify` 仅开放当前原件读取、课表查询/修订、核对确认及必要历史读取，不混入全局笔记、通用 CRUD 或新材料发现工具。
+
+导入代理新增日历证据保存/读取工具；verify/checkpoint 均开放，生成学期与全批确认只在 work 开放。Google 图像请求默认 HIGH 媒体分辨率（供应商 mediaResolution 可覆盖）。apply 可携带最大 2 MB 结构化 review，和业务修改原子存入 audit_event，纳入幂等摘要。新增已提交批次列表与 report 读取端点，均限制批次归属；不保存原件或模型对话。无新增依赖、环境变量或迁移。
+
+模型超时、输出截断或原生工具选择失败均记录明确错误类别；浏览器持久保存小批输出/工具格式纠正指令后最多重试一次。配置错误、额度耗尽及内容过滤不套用该恢复策略。私有 live 测试可用 `ROTA_CAPTURE_PROVIDER_RESPONSES=1` 保存 Vertex 候选响应到测试输出目录，用后按个人资料处理；生产不保存这些响应。

@@ -43,6 +43,21 @@ export function ProposalEntryEditor({
             required
           />
         </Field>
+        <label className="text-sm">
+          <input
+            type="checkbox"
+            checked={value.no_fixed_time ?? false}
+            onChange={(e) =>
+              patch({
+                no_fixed_time: e.target.checked,
+                ...(e.target.checked
+                  ? { weekday: null, period_from: null, period_to: null }
+                  : {}),
+              })
+            }
+          />{" "}
+          原件明确无固定时段（不适用于截图缺失）
+        </label>
         <Field label="星期">
           <Select
             value={value.weekday ?? ""}

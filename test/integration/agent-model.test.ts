@@ -335,9 +335,11 @@ describe("native provider tool protocols", () => {
   ])("adapts $kind native tool calls", async ({ kind, url, response }) => {
     const env = await setup(kind, url);
     const fetched: string[] = [];
+    let requestBody: any;
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input) => {
+      vi.fn(async (input, options) => {
+        requestBody = JSON.parse(options.body);
         fetched.push(String(input));
         return Response.json(response);
       }),
@@ -347,6 +349,10 @@ describe("native provider tool protocols", () => {
       { messages: [{ role: "user", content: "检查材料" }], context: "{}" },
       "native",
     );
+    if (kind === "google")
+      expect(requestBody.generationConfig.mediaResolution).toBe(
+        "MEDIA_RESOLUTION_HIGH",
+      );
     expect(result.calls[0].name).toBe("tree");
     expect(JSON.stringify(result)).not.toContain("never-send-to-browser");
     expect(fetched[0]).toContain(kind === "google" ? "/v1beta/" : "/v1/");
@@ -662,4 +668,32 @@ it("reports exhausted quota without exposing provider error bodies", async () =>
   });
   expect(error.message).toContain("额度已用尽");
   expect(error.message).not.toContain("private-workspace");
+});
+
+it("classifies a malformed native function response as recoverable model output, not configuration", async () => {
+  const env = await setup("google", "https://google.example");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      Response.json({
+        candidates: [
+          {
+            content: { role: "model", parts: [] },
+            finishReason: "MALFORMED_FUNCTION_CALL",
+          },
+        ],
+        usageMetadata: {
+          promptTokenCount: 1,
+          candidatesTokenCount: 1,
+          totalTokenCount: 2,
+        },
+      }),
+    ),
+  );
+  const error = await agentTurn(
+    env,
+    { messages: [{ role: "user", content: "读取文件" }], context: "{}" },
+    "batch",
+  ).catch((e) => e);
+  expect(error.metrics.attempts[0].code).toBe("invalid_tool_call");
 });

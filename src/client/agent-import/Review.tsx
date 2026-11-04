@@ -1,9 +1,15 @@
+import { CalendarReview } from "./CalendarReview";
 import { needsVerification } from "./verification";
 import { useMemo, useState } from "react";
 import { timetableWarnings } from "../../shared/agent-import/timetable";
 import { WeeksField, PeriodsField } from "./ScheduleFields";
 import type { Job } from "./store";
-import { changesFor, editRecord, editProposalEntry } from "./runtime";
+import {
+  changesFor,
+  editRecord,
+  editProposalEntry,
+  setPersonIncluded,
+} from "./runtime";
 import {
   relations,
   diff,
@@ -219,13 +225,10 @@ export function Review({
               disabled={["running", "applied", "cancelled"].includes(
                 job.status,
               )}
-              onChange={(e) => {
-                job.excluded = e.target.checked
-                  ? job.excluded.filter((id) => id !== p.id)
-                  : [...job.excluded, p.id];
-                job.revision++;
-                job.validatedRevision = -1;
+              onChange={async (e) => {
+                const saved = setPersonIncluded(job, p.id, e.target.checked);
                 onChange({ ...job });
+                await saved;
               }}
             />{" "}
             包含此人的变更
@@ -239,7 +242,7 @@ export function Review({
               {job.excluded.includes(p.id)
                 ? "本次不导入此人。"
                 : !needsVerification(job, t)
-                  ? "Agent 已回看核对，仍需人工复核。"
+                  ? `Agent 已回看核对。${job.timetableChecks?.[t.id]?.checks?.coverage === "complete" ? "" : "资料覆盖不完整；"}${job.timetableChecks?.[t.id]?.checks?.coverage_reason ?? "完整性尚未确认"} 仍需人工复核。`
                   : "等待 Agent 逐人回看核对。"}
             </p>
           ))}
@@ -261,7 +264,8 @@ export function Review({
             <section key={t.id} className="space-y-3">
               <p className="text-sm font-medium">
                 {t.term_name || "学期待确认"} · 已识别 {t.entries.length}{" "}
-                条课程记录 · 待确认学期与作息
+                条课程记录
+                {t.bound ? " · 含无固定时段课程" : " · 待确认学期与作息"}
               </p>
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-sm">
@@ -307,7 +311,9 @@ export function Review({
                               ["一", "二", "三", "四", "五", "六", "日"][
                                 e.weekday - 1
                               ]
-                            : "待确认"}
+                            : e.no_fixed_time
+                              ? "无固定时段"
+                              : "待确认"}
                         </td>
                         <td>
                           {e.period_from === null
@@ -540,6 +546,7 @@ export function Review({
           </>
         )}
       </div>
+      <CalendarReview job={job} onChange={onChange} onSource={onSource} />
       <details>
         <summary className="cursor-pointer font-medium">学期与作息方案</summary>
         {all.term.map((t) => (

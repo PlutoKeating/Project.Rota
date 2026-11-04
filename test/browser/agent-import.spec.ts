@@ -61,6 +61,14 @@ function calls() {
         unresolved: [],
       },
     },
+    {
+      name: "confirm_import_check",
+      args: {
+        calendar_review: "日期作息均明确且已绑定",
+        identity_review: "身份与部门无冲突",
+        unresolved: [],
+      },
+    },
     { name: "validate_draft", args: {} },
     {
       name: "finish_review",
@@ -100,11 +108,23 @@ test("browser Agent reads files, stages relational preview and applies only afte
             {
               id: "verify-confirm",
               name: "confirm_timetable_check",
-              args: { id: "plan", summary: "已逐项核对合成来源" },
+              args: {
+                id: "plan",
+                summary: "已逐项核对合成来源",
+                checks: {
+                  identity: "一致",
+                  courses_and_times: "一致",
+                  teachers_and_locations: "未提供",
+                  calendar: "日期作息完整",
+                  coverage: "complete",
+                  coverage_reason: "合成材料完整",
+                  checked_entries: [0],
+                },
+              },
             },
           ]
         : turns > 1
-          ? calls().slice(-2)
+          ? calls().slice(-3)
           : calls();
       data = {
         messages: [

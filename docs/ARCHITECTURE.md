@@ -104,3 +104,5 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 ### 导入实际材料回归修正
 
 浏览器新增独立于正式课表表结构的 TimetableProposal：先保存来源中的身份与星期/节次/周次事实，缺少日历或钟点仍可复核；绑定已确认学期和作息后，原子生成正式结构的草稿。格式解码与本地 Tesseract OCR 只提供文本/坐标，业务判断仍由 Agent 完成。兼容模型使用 AI SDK 的 openai-compatible 适配器，保留供应商推理续接字段。实现与验收边界见 [AGENT_IMPORT.md](AGENT_IMPORT.md)。
+
+导入执行器新增持久化日历证据层，将部分 start/end、首周日期、最低周数与总周数分开；同一 Agent 逐人按字段核对，再全批协调日历及身份，最终摘要由草稿统计生成。完整日历才能生成/绑定占用；原件明确无固定时段的课程独立存 course/enrollment。审核通过的结构化证据随业务事务保存在 audit_event，原件与对话仍由浏览器按 8 小时清理。新增流程无需数据库迁移或运行依赖，见 [导入设计](AGENT_IMPORT.md)。

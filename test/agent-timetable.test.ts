@@ -116,3 +116,96 @@ it("warns about explicit overlapping periods without changing source entries", (
   expect(timetableWarnings(entries)[0]).toContain("第8周");
   expect(entries).toEqual(before);
 });
+
+it("preserves an explicitly unscheduled course as an individual enrollment instead of dropping it", () => {
+  const s = base();
+  mutate(
+    s,
+    "term",
+    "create",
+    { id: "t", name: "秋季", start_date: "2026-08-31", week_count: 18 },
+    "t",
+  );
+  mutate(
+    s,
+    "timetable_profile",
+    "create",
+    {
+      id: "clock",
+      term_id: "t",
+      name: "作息",
+      periods: '[{"index":1,"start":"08:30","end":"09:15"}]',
+    },
+    "clock",
+  );
+  const x = timetableProposalSchema.parse({
+    ...input(),
+    term_id: "t",
+    profile_id: "clock",
+    entries: [
+      {
+        name: "劳动教育",
+        no_fixed_time: true,
+        teacher: "教师甲",
+        note: "附注列出课程，没有固定上课时段",
+      },
+    ],
+  });
+  const r = stageTimetable(s, {}, x);
+  expect(r.draft.course).toHaveLength(1);
+  expect(r.draft.enrollment[0]).toMatchObject({
+    person_id: x.person.id,
+    course_id: r.draft.course[0].id,
+  });
+  expect(r.draft.course_meeting).toHaveLength(0);
+  expect(r.draft.timetable_entry).toHaveLength(0);
+});
+it("rejects contradictory fixed and explicitly unscheduled input", () => {
+  expect(
+    timetableProposalSchema.safeParse({
+      ...input(),
+      entries: [{ ...input().entries[0], no_fixed_time: true }],
+    }).success,
+  ).toBe(false);
+});
+it("replaces an individual unscheduled course without duplicates and can remove it", () => {
+  const s = base();
+  mutate(
+    s,
+    "term",
+    "create",
+    { id: "t", name: "秋季", start_date: "2026-08-31", week_count: 18 },
+    "t",
+  );
+  mutate(
+    s,
+    "timetable_profile",
+    "create",
+    {
+      id: "clock",
+      term_id: "t",
+      name: "作息",
+      periods: '[{"index":1,"start":"08:30","end":"09:15"}]',
+    },
+    "clock",
+  );
+  const x = timetableProposalSchema.parse({
+    ...input(),
+    term_id: "t",
+    profile_id: "clock",
+    entries: [{ name: "劳动教育", no_fixed_time: true }],
+  });
+  const a = stageTimetable(s, {}, x),
+    b = stageTimetable(a.draft, a.evidence, x, a.proposal);
+  expect(b.changed).toBe(false);
+  expect(b.draft.course).toHaveLength(1);
+  expect(b.draft.enrollment).toHaveLength(1);
+  const removed = stageTimetable(
+    b.draft,
+    b.evidence,
+    { ...x, entries: [] },
+    b.proposal,
+  );
+  expect(removed.draft.course).toHaveLength(0);
+  expect(removed.draft.enrollment).toHaveLength(0);
+});

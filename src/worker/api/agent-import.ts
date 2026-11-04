@@ -1,3 +1,4 @@
+import { reviewArtifactSchema } from "../../shared/agent-import/review-artifact";
 import { Hono } from "hono";
 import type { Env } from "../env";
 import { HttpError } from "../lib/core";
@@ -53,6 +54,7 @@ async function batchOwner(db: D1Database, id: string, actor: string) {
 const requestSchema = z.object({
   changes: z.array(changeSchema).max(10000),
   summary: z.string().max(4000).default(""),
+  review: reviewArtifactSchema.optional(),
 });
 async function readRequest(c: { req: { json: () => Promise<unknown> } }) {
   return requestSchema.parse(await c.req.json());
@@ -178,6 +180,14 @@ function rowWrites(db: D1Database, before: Snapshot, after: Snapshot) {
   return [...deletes, ...writes];
 }
 app.get("/snapshot", async (c) => c.json(await snapshot(c.env.DB)));
+app.get("/", async (c) => {
+  const rows = await c.env.DB.prepare(
+    "SELECT id,summary,applied_at FROM agent_batch WHERE actor_id=? AND status='applied' ORDER BY applied_at DESC LIMIT 20",
+  )
+    .bind(c.get("user").id)
+    .all();
+  return c.json({ items: rows.results });
+});
 app.post("/", async (c) => {
   const id = crypto.randomUUID();
   await c.env.DB.prepare(
@@ -190,6 +200,18 @@ app.post("/", async (c) => {
 app.get("/:id", async (c) =>
   c.json(await batchOwner(c.env.DB, c.req.param("id"), c.get("user").id)),
 );
+app.get("/:id/report", async (c) => {
+  const id = c.req.param("id");
+  await batchOwner(c.env.DB, id, c.get("user").id);
+  const row = await c.env.DB.prepare(
+    "SELECT payload FROM audit_event WHERE action='agent_import.apply' AND target_type='agent_batch' AND target_id=? ORDER BY created_at DESC LIMIT 1",
+  )
+    .bind(id)
+    .first<{ payload: string }>();
+  return c.json({
+    review: row ? (JSON.parse(row.payload).review ?? null) : null,
+  });
+});
 app.post("/:id/turn", async (c) => {
   const row = await batchOwner(c.env.DB, c.req.param("id"), c.get("user").id);
   if (row.status !== "draft") fail("批次已结束", 409);
@@ -257,7 +279,9 @@ app.post("/:id/apply", async (c) => {
     new Uint8Array(
       await crypto.subtle.digest(
         "SHA-256",
-        new TextEncoder().encode(canonical(changes)),
+        new TextEncoder().encode(
+          canonical(body.review ? { changes, review: body.review } : changes),
+        ),
       ),
     ),
   )
@@ -323,7 +347,7 @@ app.post("/:id/apply", async (c) => {
           "agent_import.apply",
           "agent_batch",
           id,
-          JSON.stringify({ count: changes.length }),
+          JSON.stringify({ count: changes.length, review: body.review }),
           new Date().toISOString(),
         ],
       ),

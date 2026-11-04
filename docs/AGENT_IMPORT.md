@@ -139,7 +139,7 @@ pnpm test:agent-live /path/to/archive.zip /private/output-directory /path/to/sna
 node test/live/compare.mjs /private/result.json /private/expected-person.json
 ```
 
-expected JSON 包含 `person`（姓名及可选学号等明确身份字段）、`scheduled`（name、weekday、period_from、period_to、weeks）及可选 `unscheduled` 课程名列表、`organizationIds` 部门归属。无时段课程须实际保存在课程方案中，仅在未决事项里提及不能算通过。标注必须由原件人工核对，不能用被测模型的输出生成。比较器将明确课程展开为课程/星期/教学周/节次多重集合，同时报告身份、名称和占用遗漏、额外占用、重复记录；默认只规范化 Unicode、空格及英文大小写；可选 nameAliases 显式列出经原件核对的同名格式变体（例如课程代码前缀），不将近义课程名视为正确。由开发 Agent 独立转录的标注必须注明来源，不能称为操作员已验收。比较器只用于验收，不参与导入业务处理。人工标注、运行结果及个人材料均留在仓库外。
+expected JSON 包含 `person`（姓名及可选学号等明确身份字段）、`scheduled`（name、weekday、period_from、period_to、weeks）及可选 `unscheduled` 课程名列表、`organizationIds` 部门归属。无时段课程须实际保存在课程方案中，仅在未决事项里提及不能算通过。标注必须由原件人工核对，不能用被测模型的输出生成。比较器将明确课程展开为课程/星期/教学周/节次多重集合，同时报告身份、名称和占用遗漏、额外占用、重复记录；默认只规范化 Unicode、空格及英文大小写；可选 nameAliases 显式列出经原件核对的同名格式变体（例如课程代码前缀），不将近义课程名视为正确。由开发 Agent 独立转录的标注必须注明来源，不能称为操作员已验收。可选 `entryFields:[{where:{name:"课程名"},fields:{teacher:"教师名",location:"教室"}}]` 增加独立字段断言，匹配到的每条课程均须符合字段值；不存在匹配课程也失败。仅课程占用匹配不能代表全部字段准确。比较器只用于验收，不参与导入业务处理。人工标注、运行结果及个人材料均留在仓库外。
 
 达到交接阈值却仍有未保存材料时，执行器阻止打开下一份材料，要求先持久化当前事实；避免某份旧文档长期阻止交接，导致后续每轮上下文不断增长。保存失败仍保留原图和原始响应，不能把“工具被调用”当成“草稿写入成功”。
 
@@ -204,3 +204,21 @@ pnpm test:agent-vertex /private/input.zip /private/vertex-run /private/snapshot.
 ### 模型图片传输预算
 
 `image-payload.ts` 在每次发送前对 data URL 图片分配合计 12,000,000 字符、单图最多 1,500,000 字符的预算，低于网关 20 MiB 请求上限。超预算预览先以 JPEG 质量 0.9 编码，必要时逐级缩小；保留全部图片、来源引用与原件，追加实际预览尺寸和原坐标裁剪提示。旧检查点同样适用。原始 OCR 与材料不受影响，识别不清须裁剪读取，传输压缩不证明识别准确。
+
+## 日历证据、字段核对与正式提交
+
+日历线索以 `CalendarProposal` 独立保存：首周周一、总周数、最低已知周数、每节起止钟点、明确适用的课表 ID、来源与待定项。未知值为 null；不允许以最高课程周次代替学期总周数。跨截图的日期/教学周换算由 Agent 决定并记录依据，工具只校验已经结构化的日期和钟点。
+
+`save_calendar/read_calendars` 可在工作、保存成果和逐人复核阶段使用。`materialize_calendar` 只接受完整日历，生成学期、全局节次与个人作息草稿；`term_id` 可明确引用已有学期，保持该学期已有全局节次。`bind_timetables` 显式绑定适用人员。审核页支持补正日历；补齐后生成并绑定草稿，仍须最终提交。
+
+逐人核对须保存身份、课程与时段、教师与地点、日历、材料完整性及已核对条目索引。核对签名升级为版本 4，旧核对不能自动视为通过。`coverage` 的 complete/partial/missing 指原件覆盖完整课表的程度；工具读完图片不意味着资料完整。疑字保持待定，不允许用近似姓名冒充确定值。
+
+全部人员核对后调用 `confirm_import_check`，核对跨材料日历、身份部门关系及缺项，再 validate/finish。任何相关草稿或材料变更都会使该批确认失效；操作员直接修订已审核数据会保存修订后的状态。交付摘要从实际人数、课程、绑定状态与变更统计生成，不使用模型自由文本作为完成证明。
+
+原件明确没有固定时段的课程可标 `no_fixed_time=true`，保存为该人员独立的 course/enrollment，不生成占用，也不与同名课程自动共享。截图裁剪、遮挡或未看清不能使用该标记，仍须补齐或排除相关人员。课程附注、来源、日历依据与待定项随 apply 事务保存在审计中的结构化审核记录；已提交记录可下载。原件和模型对话继续按完成/取消后 8 小时清理。
+
+Google 原生供应商的导入请求默认显式指定 `MEDIA_RESOLUTION_HIGH`，已有供应商参数 `mediaResolution` 可指定 LOW/MEDIUM/HIGH。参考 [Google 媒体分辨率说明](https://ai.google.dev/gemini-api/docs/media-resolution)。提高输入处理分辨率不等于识别必然正确。
+
+没有新增运行依赖、环境变量或数据库迁移。前端与 Worker 工具协议须同步发布；运行时仍在浏览器，服务端仅代理模型与存储审核通过的业务数据。
+
+模型超时、输出截断或原生工具选择失败均记录明确错误类别；浏览器持久保存小批输出/工具格式纠正指令后最多重试一次。配置错误、额度耗尽及内容过滤不套用该恢复策略。私有 live 测试可用 `ROTA_CAPTURE_PROVIDER_RESPONSES=1` 保存 Vertex 候选响应到测试输出目录，用后按个人资料处理；生产不保存这些响应。

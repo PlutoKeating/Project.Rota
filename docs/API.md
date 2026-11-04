@@ -250,3 +250,13 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 本地 `render_sheet` 工具支持 sheet/page/range 的表格网格图片。文件读取的 coverage 为基础坐标范围，供本地完整性校验；不会作为业务推断。
 
 模型 params.api="responses" 显式选择 OpenAI Responses 协议，默认 Chat Completions 不变；连接测试与导入代理均支持。导入 metrics.attempts 可返回 code=quota_exhausted 与 retryAfterMs，不回传上游错误正文或凭据。
+
+### 导入日历与审核记录补充
+
+浏览器工具新增 `save_calendar/read_calendars/materialize_calendar/confirm_import_check`。日历允许部分日期与钟点，生成正式结构草稿要求日历完整；`term_id` 可复用已有学期。逐人 `confirm_timetable_check` 必须提供 `checks`，包括 identity、courses_and_times、teachers_and_locations、calendar、coverage、coverage_reason、checked_entries。`finish_review` 返回 `readyForReview` 与 `readyToApply`，二者含义不同。
+
+`save_timetable/revise_timetable` 课程条目允许 `no_fixed_time`；true 仅表示原件明确没有固定时段，不能同时提供固定星期/节次。绑定后生成此人独立 course/enrollment，不产生占用；未知时段仍会阻止正式导入。
+
+`POST /api/agent-imports/:id/apply` 可携带 `review`：`{version:1,timetables:[],calendars:[],checks:{},unresolved:[]}`，结构由共享 Zod 契约校验，JSON 最大 2 MB。审核记录与业务数据原子写入既有 audit_event，纳入幂等摘要；同批同业务变化但审核记录不同的重复提交返回 409。没有原件、模型对话或密钥。
+
+`GET /api/agent-imports` 返回当前操作员最近 20 条已提交批次 `{items:[{id,summary,applied_at}]}`；`GET /api/agent-imports/:id/report` 返回 `{review:...|null}`，旧批次无记录时 null。两接口均沿用批次归属校验。

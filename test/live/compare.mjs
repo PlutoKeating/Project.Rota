@@ -100,6 +100,33 @@ for (const file of expectedPaths) {
   const organizations = (expected.organizationIds ?? []).every((id) =>
     matches.some((p) => p.organization_ids.includes(id)),
   );
+  // Explicit operator-reviewed field assertions, separate from occupied-period coverage.
+  const fieldFailures = (expected.entryFields ?? []).flatMap((check) => {
+    const selected = entries.filter((entry) =>
+      Object.entries(check.where).every(([key, value]) =>
+        key === "name"
+          ? (aliases.get(normalized(entry.name)) ?? normalized(entry.name)) ===
+            normalized(value)
+          : JSON.stringify(entry[key]) === JSON.stringify(value),
+      ),
+    );
+    if (!selected.length)
+      return [{ where: check.where, error: "no matching course" }];
+    return selected.flatMap((entry) =>
+      Object.entries(check.fields).flatMap(([field, value]) =>
+        (entry[field] ?? null) === value
+          ? []
+          : [
+              {
+                where: check.where,
+                field,
+                expected: value,
+                actual: entry[field] ?? null,
+              },
+            ],
+      ),
+    );
+  });
   cases.push({
     person: expected.person.full_name,
     identity,
@@ -107,12 +134,14 @@ for (const file of expectedPaths) {
     named,
     occupied,
     absentUnscheduled,
+    fieldFailures,
     pass:
       identity &&
       organizations &&
       !named.missing.length &&
       (expected.allowAdditionalScheduled || !named.extra.length) &&
-      !absentUnscheduled.length,
+      !absentUnscheduled.length &&
+      !fieldFailures.length,
   });
 }
 console.log(

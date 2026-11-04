@@ -404,3 +404,124 @@ it("atomically reparents existing departments to newly created parents while del
     )?.parent_id,
   ).toBe("new");
 });
+
+it("atomically retains reviewed structured evidence after browser material cleanup and rejects changing it on retry", async () => {
+  const e = env(),
+    base = emptySnapshot(),
+    s = draft(base);
+  const review = {
+    version: 1,
+    timetables: [],
+    calendars: [],
+    checks: {},
+    unresolved: ["测试：附注保留在正式审核记录"],
+  };
+  const payload = { changes: changes(base, s), summary: "审核通过", review };
+  const id = (await request(e, "POST", "/agent-imports")).data.id;
+  expect(
+    (await request(e, "GET", `/agent-imports/${id}/report`)).data.review,
+  ).toBeNull();
+  expect(
+    (await request(e, "POST", `/agent-imports/${id}/lease`, payload)).status,
+  ).toBe(200);
+  expect(
+    (await request(e, "POST", `/agent-imports/${id}/apply`, payload)).status,
+  ).toBe(200);
+  expect(
+    (await request(e, "GET", `/agent-imports/${id}/report`)).data.review,
+  ).toEqual(review);
+  expect((await request(e, "GET", "/agent-imports")).data.items[0].id).toBe(id);
+  expect(
+    (await request(e, "POST", `/agent-imports/${id}/apply`, payload)).status,
+  ).toBe(200);
+  expect(
+    (
+      await request(e, "POST", `/agent-imports/${id}/apply`, {
+        ...payload,
+        review: { ...review, unresolved: [] },
+      })
+    ).status,
+  ).toBe(409);
+});
+
+it("commits reviewed calendar, timed courses and individually unscheduled courses through the real transaction", async () => {
+  const { stageCalendar, calendarSchema } = await import(
+    "../../src/shared/agent-import/calendar"
+  );
+  const { stageTimetable, timetableProposalSchema } = await import(
+    "../../src/shared/agent-import/timetable"
+  );
+  const e = env(),
+    base = emptySnapshot();
+  const sources = [
+    {
+      source: "课程.txt",
+      locator: "全文",
+      explanation: "合成完整材料",
+      inferred: false,
+    },
+  ];
+  const calendar = calendarSchema.parse({
+    id: "c",
+    name: "秋季",
+    start_date: "2026-08-31",
+    week_count: 18,
+    periods: [{ index: 1, start: "08:30", end: "09:15" }],
+    timetable_ids: ["p"],
+    sources,
+  });
+  const c = stageCalendar(base, {}, calendar);
+  const p = stageTimetable(
+    c.draft,
+    c.evidence,
+    timetableProposalSchema.parse({
+      id: "p",
+      person: { id: "person", full_name: "甲" },
+      term_name: "秋季",
+      term_id: c.termId,
+      profile_id: c.profileId,
+      sources,
+      entries: [
+        {
+          name: "数学",
+          weekday: 1,
+          period_from: 1,
+          period_to: 1,
+          weeks: [1, 9],
+          teacher: "教师甲",
+          location: "101",
+        },
+        { name: "劳动教育", no_fixed_time: true, note: "原件明确无固定时间" },
+      ],
+    }),
+  );
+  const id = (await request(e, "POST", "/agent-imports")).data.id;
+  const payload = {
+    changes: diff(base, p.draft, p.evidence),
+    review: {
+      version: 1,
+      timetables: [p.proposal],
+      calendars: [calendar],
+      checks: {},
+      unresolved: [],
+    },
+  };
+  expect(
+    (await request(e, "POST", `/agent-imports/${id}/lease`, payload)).status,
+  ).toBe(200);
+  expect(
+    (await request(e, "POST", `/agent-imports/${id}/apply`, payload)).status,
+  ).toBe(200);
+  const db = (await request(e, "GET", "/agent-imports/snapshot")).data.data;
+  expect(db.timetable_event).toHaveLength(2);
+  expect(db.timetable_entry[0]).toMatchObject({
+    teacher: "教师甲",
+    location: "101",
+  });
+  expect(db.course[0].name).toBe("劳动教育");
+  expect(db.enrollment[0].person_id).toBe("person");
+  expect(db.course_occurrence).toHaveLength(0);
+  const report = (await request(e, "GET", `/agent-imports/${id}/report`)).data
+    .review;
+  expect(report.timetables[0].entries[1].note).toBe("原件明确无固定时间");
+});

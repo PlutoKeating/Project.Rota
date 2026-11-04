@@ -1,3 +1,7 @@
+import type {
+  CalendarProposal,
+  FieldChecks,
+} from "../../shared/agent-import/calendar";
 import type { CoverageState } from "../../shared/agent-import/coverage";
 import type { TimetableProposal } from "../../shared/agent-import/timetable";
 import { openDB } from "idb";
@@ -54,9 +58,17 @@ export interface Job {
   observations?: Record<string, Observation>;
   observationRevision?: number;
   timetables?: Record<string, TimetableProposal>;
+  calendars?: Record<string, CalendarProposal>;
+  importCheck?: {
+    signature: string;
+    calendar_review: string;
+    identity_review: string;
+    unresolved: string[];
+  };
+  agentSummary?: string;
   timetableChecks?: Record<
     string,
-    { signature: string; summary: string; at: number }
+    { signature: string; summary: string; at: number; checks?: FieldChecks }
   >;
   verification?: {
     id: string;
@@ -193,6 +205,7 @@ export async function addFiles(job: Job, files: File[]) {
     added.push(material);
   }
   job.revision++;
+  job.importCheck = undefined;
   job.validatedRevision = -1;
   job.status = "paused";
   job.expiresAt = null;

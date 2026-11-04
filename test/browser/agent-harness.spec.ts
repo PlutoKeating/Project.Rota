@@ -1,6 +1,16 @@
 import { test, expect, type Page } from "@playwright/test";
 import { emptySnapshot } from "../../src/shared/agent-import/model";
 const base = emptySnapshot();
+const checks = (indexes: number[]) => ({
+  identity: "身份逐字一致",
+  courses_and_times: "逐条对照名称星期节次周次",
+  teachers_and_locations: "原件未提供教师地点，不填造值",
+  calendar: "日历未提供",
+  coverage: "complete",
+  coverage_reason: "合成材料完整",
+  checked_entries: indexes,
+});
+
 function reply(calls: any[]) {
   return {
     calls,
@@ -761,7 +771,11 @@ test("focused source verification requires fresh reads, repairs omissions, and s
               {
                 id: "premature",
                 name: "confirm_timetable_check",
-                args: { id: "p-plan", summary: "还没重新读取，不应被接受" },
+                args: {
+                  id: "p-plan",
+                  summary: "还没重新读取，不应被接受",
+                  checks: checks([0]),
+                },
               },
               {
                 id: "read-again",
@@ -794,6 +808,7 @@ test("focused source verification requires fresh reads, repairs omissions, and s
                 name: "confirm_timetable_check",
                 args: {
                   id: "p-plan",
+                  checks: checks([0, 1]),
                   summary:
                     "重新读取原件，已补齐漏掉的物理课，日期作息继续待确认",
                 },
@@ -833,6 +848,29 @@ test("focused source verification requires fresh reads, repairs omissions, and s
             },
           ]
         : [
+            {
+              id: "calendar",
+              name: "save_calendar",
+              args: {
+                id: "c",
+                name: "待定学期",
+                start_date: null,
+                week_count: null,
+                periods: [],
+                timetable_ids: ["p-plan"],
+                sources,
+                unresolved: ["材料未提供"],
+              },
+            },
+            {
+              id: "global",
+              name: "confirm_import_check",
+              args: {
+                calendar_review: "已保存未知日历字段",
+                identity_review: "单人无冲突",
+                unresolved: ["日期作息待定"],
+              },
+            },
             { id: "validate", name: "validate_draft", args: {} },
             {
               id: "finish",
@@ -1216,40 +1254,71 @@ test("exhausted provider quota pauses with saved progress instead of immediate r
   expect(result.metrics?.[0].attempts[0].code).toBe("quota_exhausted");
 });
 
-test("timed out model responses retry with smaller output and persist recovery across reload", async ({ page }) => {
-  const requests: any[] = [];
-  await routes(page, () => reply([]));
-  await page.route("**/api/agent-imports/*/turn", (route) => {
-    requests.push(route.request().postDataJSON());
-    return route.fulfill({ status: 502, json: {
-      error: "模型请求超时", code: "llm_error",
-      metrics: { requestId: "timeout-" + requests.length, durationMs: 1, purpose: "work",
-        attempts: [{ providerId: "test", model: "test", durationMs: 1, status: "error", code: "timeout" }] },
-    } });
+for (const failureCode of ["timeout", "output_truncated", "invalid_tool_call"])
+  test(`${failureCode} model responses retry with smaller output and persist recovery across reload`, async ({
+    page,
+  }) => {
+    const requests: any[] = [];
+    await routes(page, () => reply([]));
+    await page.route("**/api/agent-imports/*/turn", (route) => {
+      requests.push(route.request().postDataJSON());
+      return route.fulfill({
+        status: 502,
+        json: {
+          error: "模型请求超时",
+          code: "llm_error",
+          metrics: {
+            requestId: "timeout-" + requests.length,
+            durationMs: 1,
+            purpose: "work",
+            attempts: [
+              {
+                providerId: "test",
+                model: "test",
+                durationMs: 1,
+                status: "error",
+                code: failureCode,
+              },
+            ],
+          },
+        },
+      });
+    });
+    await page.evaluate(async () => {
+      const r = await import("/src/client/agent-import/runtime.ts");
+      const job = await r.createJob("owner", [new File(["课程"], "资料.txt")]);
+      await new r.ImportRunner(job, () => {}).run();
+    });
+    expect(requests).toHaveLength(2);
+    expect(JSON.stringify(requests[0].messages)).not.toContain("最多保存 8 条");
+    expect(JSON.stringify(requests[1].messages)).toContain("最多保存 8 条");
+    await page.reload();
+    const saved = await page.evaluate(async () => {
+      const s = await import("/src/client/agent-import/store.ts");
+      const job = (await s.listJobs("owner"))[0];
+      return {
+        status: job.status,
+        messages: job.messages,
+        people: job.draft.person.length,
+      };
+    });
+    expect(saved.status).toBe("paused");
+    expect(saved.people).toBe(0);
+    expect(
+      saved.messages.filter((m: any) =>
+        String(m.content).includes("最多保存 8 条"),
+      ),
+    ).toHaveLength(1);
   });
-  await page.evaluate(async () => {
-    const r = await import("/src/client/agent-import/runtime.ts");
-    const job = await r.createJob("owner", [new File(["课程"], "资料.txt")]);
-    await new r.ImportRunner(job, () => {}).run();
-  });
-  expect(requests).toHaveLength(2);
-  expect(JSON.stringify(requests[0].messages)).not.toContain("最多保存 8 条");
-  expect(JSON.stringify(requests[1].messages)).toContain("最多保存 8 条");
-  await page.reload();
-  const saved = await page.evaluate(async () => {
-    const s = await import("/src/client/agent-import/store.ts");
-    const job = (await s.listJobs("owner"))[0];
-    return { status: job.status, messages: job.messages, people: job.draft.person.length };
-  });
-  expect(saved.status).toBe("paused");
-  expect(saved.people).toBe(0);
-  expect(saved.messages.filter((m: any) => String(m.content).includes("最多保存 8 条"))).toHaveLength(1);
-});
 
-test("large restored image context fits the transport budget without dropping evidence", async ({ page }) => {
+test("large restored image context fits the transport budget without dropping evidence", async ({
+  page,
+}) => {
   await routes(page, () => reply([]));
   const result = await page.evaluate(async () => {
-    const { fitImagePayload } = await import("/src/client/agent-import/image-payload.ts");
+    const { fitImagePayload } = await import(
+      "/src/client/agent-import/image-payload.ts"
+    );
     const canvas = document.createElement("canvas");
     canvas.width = canvas.height = 2048;
     const ctx = canvas.getContext("2d")!;
@@ -1264,17 +1333,31 @@ test("large restored image context fits the transport budget without dropping ev
     }
     ctx.putImageData(pixels, 0, 0);
     const image = canvas.toDataURL("image/png");
-    const messages = Array.from({ length: 3 }, (_, i) => ({ role: "user" as const, content: [
-      { type: "text" as const, text: "source:" + i }, { type: "image" as const, image },
-    ] }));
+    const messages = Array.from({ length: 3 }, (_, i) => ({
+      role: "user" as const,
+      content: [
+        { type: "text" as const, text: "source:" + i },
+        { type: "image" as const, image },
+      ],
+    }));
     const fitted = await fitImagePayload(messages);
-    const parts = fitted.flatMap((m) => Array.isArray(m.content) ? m.content : []);
+    const parts = fitted.flatMap((m) =>
+      Array.isArray(m.content) ? m.content : [],
+    );
     const images = parts.filter((p) => p.type === "image");
-    return { before: JSON.stringify(messages).length, after: JSON.stringify(fitted).length,
-      images: images.length, maxImage: Math.max(...images.map((p) => String(p.image).length)),
-      sources: parts.filter((p) => p.type === "text" && p.text.startsWith("source:")).length,
+    return {
+      before: JSON.stringify(messages).length,
+      after: JSON.stringify(fitted).length,
+      images: images.length,
+      maxImage: Math.max(...images.map((p) => String(p.image).length)),
+      sources: parts.filter(
+        (p) => p.type === "text" && p.text.startsWith("source:"),
+      ).length,
       originalUnchanged: messages.every((m) => m.content[1].image === image),
-      warns: parts.filter((p) => p.type === "text" && p.text.includes("按原图坐标裁剪")).length };
+      warns: parts.filter(
+        (p) => p.type === "text" && p.text.includes("按原图坐标裁剪"),
+      ).length,
+    };
   });
   expect(result.before).toBeGreaterThan(20 * 1024 * 1024);
   expect(result.after).toBeLessThan(12 * 1024 * 1024);
@@ -1283,4 +1366,174 @@ test("large restored image context fits the transport budget without dropping ev
   expect(result.sources).toBe(3);
   expect(result.warns).toBe(3);
   expect(result.originalUnchanged).toBe(true);
+});
+
+test("partial calendar survives reload and operator completion binds actual occupied events", async ({
+  page,
+}) => {
+  const sources = [
+    {
+      source: "calendar.txt",
+      locator: "全文",
+      explanation: "第9周日期可推首周，只有上课钟点",
+      inferred: true,
+    },
+  ];
+  let count = 0;
+  await routes(page, () => {
+    count++;
+    return reply(
+      count === 1
+        ? [
+            {
+              id: "read",
+              name: "read_document",
+              args: { path: "calendar.txt" },
+            },
+            {
+              id: "save",
+              name: "save_timetable",
+              args: {
+                id: "p",
+                person: { id: "person", full_name: "甲" },
+                term_name: "秋季",
+                entries: [
+                  {
+                    name: "数学",
+                    weekday: 1,
+                    period_from: 1,
+                    period_to: 1,
+                    weeks: [9],
+                    teacher: "教师甲",
+                  },
+                ],
+                sources,
+              },
+            },
+            {
+              id: "calendar",
+              name: "save_calendar",
+              args: {
+                id: "c",
+                name: "秋季",
+                start_date: "2026-08-31",
+                week_count: null,
+                minimum_weeks: 18,
+                periods: [{ index: 1, start: "08:30", end: null }],
+                timetable_ids: ["p"],
+                sources,
+                unresolved: ["下课钟点和总周数待确认"],
+              },
+            },
+          ]
+        : [],
+    );
+  });
+  await page.evaluate(async () => {
+    const r = await import("/src/client/agent-import/runtime.ts");
+    const job = await r.createJob("owner", [
+      new File(["第9周周一2026-10-26；第1节08:30"], "calendar.txt"),
+    ]);
+    const runner = new r.ImportRunner(job, (j) => {
+      if (j.turns === 1 && !j.pending.length) runner.stop();
+    });
+    await runner.run();
+  });
+  await page.reload();
+  const result = await page.evaluate(async () => {
+    const s = await import("/src/client/agent-import/store.ts");
+    const r = await import("/src/client/agent-import/runtime.ts");
+    const m = await import("/src/shared/agent-import/model.ts");
+    const j = (await s.listJobs("owner"))[0];
+    const before = structuredClone(j.calendars!.c);
+    const termsBefore = j.draft.term.length;
+    await r.editCalendar(j, {
+      ...before,
+      week_count: 18,
+      periods: [{ index: 1, start: "08:30", end: "09:15" }],
+      unresolved: [],
+    });
+    const after = m.materialize(j.draft, j.base);
+    return {
+      before,
+      termsBefore,
+      plan: j.timetables!.p,
+      terms: after.term,
+      events: after.timetable_event,
+      issues: m.validateTransition(j.base, after),
+    };
+  });
+  expect(result.before.start_date).toBe("2026-08-31");
+  expect(result.before.week_count).toBeNull();
+  expect(result.before.periods[0].end).toBeNull();
+  expect(result.termsBefore).toBe(0);
+  expect(result.plan.bound).toBe(true);
+  expect(result.terms).toHaveLength(1);
+  expect(result.events).toHaveLength(1);
+  expect(result.events[0].starts_at).toContain("2026-10-26");
+  expect(result.issues).toEqual([]);
+});
+
+test("operator scope changes preserve a completed batch check but cannot bless unrelated unreviewed changes", async ({
+  page,
+}) => {
+  await routes(page, () => reply([]));
+  const result = await page.evaluate(async () => {
+    const r = await import("/src/client/agent-import/runtime.ts");
+    const q = await import("/src/client/agent-import/readiness.ts");
+    const t = await import("/src/shared/agent-import/timetable.ts");
+    const job = await r.createJob("owner", []);
+    const staged = t.stageTimetable(
+      job.draft,
+      {},
+      t.timetableProposalSchema.parse({
+        id: "p",
+        person: { id: "person", full_name: "甲" },
+        term_name: "未知",
+        entries: [],
+        sources: [
+          {
+            source: "操作员意见",
+            locator: "复核",
+            explanation: "无课表",
+            inferred: false,
+          },
+        ],
+      }),
+    );
+    job.draft = staged.draft;
+    job.timetables = { p: staged.proposal };
+    job.importCheck = {
+      signature: q.importSignature(job),
+      calendar_review: "已审",
+      identity_review: "已审",
+      unresolved: [],
+    };
+    await r.setPersonIncluded(job, "person", false);
+    const excludedRequiresCheck = q.needsImportCheck(job),
+      summary = job.summary;
+    job.calendars = {
+      c: {
+        id: "c",
+        name: "新线索",
+        term_id: null,
+        start_date: null,
+        week_count: null,
+        minimum_weeks: null,
+        periods: [],
+        timetable_ids: ["p"],
+        sources: staged.proposal.sources,
+        unresolved: [],
+      },
+    };
+    await r.setPersonIncluded(job, "person", true);
+    return {
+      excludedRequiresCheck,
+      summary,
+      changedRequiresCheck: q.needsImportCheck(job),
+    };
+  });
+  expect(result.excludedRequiresCheck).toBe(false);
+  expect(result.summary).toContain("新增人员 0");
+  expect(result.changedRequiresCheck).toBe(true);
 });

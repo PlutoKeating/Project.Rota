@@ -1,5 +1,10 @@
 import type { TurnMetrics } from "../../shared/agent-import/context";
-import { generateText, tool, type ModelMessage } from "ai";
+import {
+  generateText,
+  tool,
+  ToolChoiceViolationError,
+  type ModelMessage,
+} from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createAnthropic } from "@ai-sdk/anthropic";
@@ -216,15 +221,21 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
                     "revise_timetable",
                     "save_timetable",
                     "read_timetables",
+                    "save_calendar",
+                    "read_calendars",
                     "confirm_timetable_check",
                     "read_history",
                   ].includes(name)
                 : body.mode === "checkpoint"
                   ? [
                       "save_timetable",
+                      "save_calendar",
+                      "read_calendars",
                       "revise_timetable",
                       "observe_material",
                       "read_timetables",
+                      "save_calendar",
+                      "read_calendars",
                       "query_records",
                       "read_observations",
                       "read_history",
@@ -276,18 +287,30 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
               : "required",
           maxOutputTokens: body.mode === "compact" ? 4096 : 16384,
           providerOptions:
-            p.kind === "openai_compatible" && p.params.api === "responses"
+            p.kind === "google"
               ? {
-                  openai: {
-                    store: false,
-                    strictJsonSchema: false,
-                    reasoningEffort: effort ?? "medium",
-                    include: ["reasoning.encrypted_content"],
+                  google: {
+                    mediaResolution: [
+                      "MEDIA_RESOLUTION_LOW",
+                      "MEDIA_RESOLUTION_MEDIUM",
+                      "MEDIA_RESOLUTION_HIGH",
+                    ].includes(String(p.params.mediaResolution))
+                      ? String(p.params.mediaResolution)
+                      : "MEDIA_RESOLUTION_HIGH",
                   },
                 }
-              : effort && p.kind === "openai_compatible"
-                ? { compatible: { reasoningEffort: effort } }
-                : undefined,
+              : p.kind === "openai_compatible" && p.params.api === "responses"
+                ? {
+                    openai: {
+                      store: false,
+                      strictJsonSchema: false,
+                      reasoningEffort: effort ?? "medium",
+                      include: ["reasoning.encrypted_content"],
+                    },
+                  }
+                : effort && p.kind === "openai_compatible"
+                  ? { compatible: { reasoningEffort: effort } }
+                  : undefined,
           maxRetries: 0,
           abortSignal: AbortSignal.timeout(remaining),
         }),
@@ -295,7 +318,7 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
       );
       if (result.finishReason === "length")
         throw Error("model_output_truncated");
-      if (!result.toolCalls.length) throw Error("模型没有返回可执行工具调用");
+      if (!result.toolCalls.length) throw Error("invalid_tool_protocol");
       // AI SDK can return invalid tool calls plus synthetic error results instead of throwing.
       // Malformed JSON is a protocol failure. Valid JSON with bad tool arguments is
       // a recoverable agent mistake: return feedback without executing it.
@@ -382,9 +405,15 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
               ? "upstream_http"
               : (error as Error)?.message === "model_output_truncated"
                 ? "output_truncated"
-                : (error as Error)?.message === "invalid_tool_protocol"
-                  ? "invalid_tool_call"
-                  : "protocol_or_configuration";
+                : ToolChoiceViolationError.isInstance(error)
+                  ? error.finishReason === "content-filter"
+                    ? "content_filtered"
+                    : error.finishReason === "length"
+                      ? "output_truncated"
+                      : "invalid_tool_call"
+                  : (error as Error)?.message === "invalid_tool_protocol"
+                    ? "invalid_tool_call"
+                    : "protocol_or_configuration";
       metrics.attempts.push({
         providerId: row.id,
         model: modelId,
