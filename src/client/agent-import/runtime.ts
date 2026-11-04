@@ -5,6 +5,7 @@ import {
 import {
   courseConflicts,
   consistencySignature,
+  consistencyMatches,
   validateCheckedVariants,
   validateConsistencyReview,
 } from "../../shared/agent-import/consistency";
@@ -461,7 +462,7 @@ async function execute(
       }
       const pending = groups.filter(
         (g) =>
-          job.consistencyChecks?.[g.key]?.signature !== consistencySignature(g),
+          !consistencyMatches(job.consistencyChecks?.[g.key]?.signature, g),
       );
       return {
         result: {
@@ -618,9 +619,8 @@ async function execute(
             args.consistency_review.find(
               (r: { key: string }) => r.key === g.key,
             ) ??
-            (job.consistencyChecks?.[g.key]?.signature ===
-            consistencySignature(g)
-              ? job.consistencyChecks[g.key].review
+            (consistencyMatches(job.consistencyChecks?.[g.key]?.signature, g)
+              ? job.consistencyChecks![g.key].review
               : undefined),
         )
         .filter(Boolean);
@@ -1434,8 +1434,10 @@ export class ImportRunner {
               ),
             ).find(
               (g) =>
-                job.consistencyChecks?.[g.key]?.signature !==
-                consistencySignature(g),
+                !consistencyMatches(
+                  job.consistencyChecks?.[g.key]?.signature,
+                  g,
+                ),
             );
             const task = current?.key ?? "final-calendar-review";
             if (job.reconcileTask !== task) {
@@ -1522,8 +1524,10 @@ export class ImportRunner {
             )
               .filter(
                 (g) =>
-                  job.consistencyChecks?.[g.key]?.signature !==
-                  consistencySignature(g),
+                  !consistencyMatches(
+                    job.consistencyChecks?.[g.key]?.signature,
+                    g,
+                  ),
               )
               .slice(0, 20)
               .map((g) => g.key),

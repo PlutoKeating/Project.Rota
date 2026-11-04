@@ -337,14 +337,16 @@ export function ImportsPage() {
             </p>
           )}
           {!!job.unresolved.length && (
-            <div className="rounded-lg bg-amber-50 p-4 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-200">
-              <p className="font-medium">需要留意</p>
+            <details className="rounded-lg bg-amber-50 p-4 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-200">
+              <summary className="cursor-pointer font-medium">
+                材料缺项与待确认事项 · {new Set(job.unresolved).size} 项
+              </summary>
               <ul className="mt-2 list-disc space-y-1 pl-5">
-                {job.unresolved.map((x, i) => (
+                {[...new Set(job.unresolved)].map((x, i) => (
                   <li key={i}>{x}</li>
                 ))}
               </ul>
-            </div>
+            </details>
           )}
           {job.status !== "running" && (
             <Review

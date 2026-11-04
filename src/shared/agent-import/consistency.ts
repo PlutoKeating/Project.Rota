@@ -73,7 +73,37 @@ export function validateConsistencyReview(
 
 export const consistencySignature = (
   group: ReturnType<typeof courseConflicts>[number],
-) => canonical({ policy: 2, group });
+) =>
+  canonical({
+    policy: 3,
+    key: group.key,
+    variants: group.variants.map((v) => ({
+      teacher: v.teacher,
+      timetable_id: v.timetable_id,
+      person: v.person,
+      term: v.term ?? null,
+      class_name: v.class_name ?? null,
+      entries: v.entries,
+    })),
+  });
+/** Previously checked field values remain checked when unrelated source annotations grow. */
+export function consistencyMatches(
+  signature: string | undefined,
+  group: ReturnType<typeof courseConflicts>[number],
+) {
+  if (!signature) return false;
+  if (signature === consistencySignature(group)) return true;
+  try {
+    const previous = JSON.parse(signature);
+    return (
+      previous.policy === 2 &&
+      previous.group &&
+      consistencySignature(previous.group) === consistencySignature(group)
+    );
+  } catch {
+    return false;
+  }
+}
 export function validateCheckedVariants(
   group: ReturnType<typeof courseConflicts>[number],
   review: ConsistencyReview,

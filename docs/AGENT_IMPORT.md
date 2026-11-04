@@ -226,3 +226,5 @@ Google 原生供应商的导入请求默认显式指定 `MEDIA_RESOLUTION_HIGH`�
 全批协调提供 `read_course_consistency`（无 key 读取待处理索引，指定 key 分页读取来源与人员）、`record_consistency_check`（逐项持久结论）及 `confirm_import_check.consistency_review`。签名变化使结论失效；不同班级可有不同教师，程序不选多数、不自动改名。`reconcile` 限定工具集合防止反复翻旧历史。核对内容在审核页和提交后报告中可见。
 
 跨课表确认同时校验 `checked_variants` 与来源回看覆盖；同一 Agent 每次处理一个差异，明确疑点可记为 unresolved。差异说明不自动改动教师；更正仍通过 revise_timetable 并重新逐人核对。
+
+跨课表结论签名只包含相关人员、教师和课程索引等核对字段；补充其他课程的来源说明不会导致全部重查，新增来源仍必须完成覆盖检查。审核页将材料提示精确去重并折叠，优先展示结构化日历与组织人员课表。
