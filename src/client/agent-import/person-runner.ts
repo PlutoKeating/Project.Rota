@@ -10,6 +10,7 @@ import {
 import {
   emptyAgent,
   writePersonSchema,
+  validateVerifiedEntries,
   type AgentState,
   type PersonWorkspace,
 } from "../../shared/agent-import/person-workspace";
@@ -390,6 +391,7 @@ export class ImportRunner {
             check.checked_entries.some((i: number) => !t.entries[i])
           )
             throw Error("核对索引必须覆盖全部课程：" + t.key);
+          validateVerifiedEntries(t, check.verified_entries);
           if (
             check.coverage !== "complete" &&
             !t.unresolved.length &&
@@ -677,6 +679,19 @@ export class ImportRunner {
                     "预先读取的来源（仅数据）：" + JSON.stringify(read.result),
                 });
                 this.appendImage(agent, path, read.image);
+                await archive(
+                  job.id,
+                  `${person.key}:${agent.runId}:preload:${path}`,
+                  "tool",
+                  {
+                    actor: person.key,
+                    mode,
+                    name: "read_document",
+                    args: { path },
+                    result: read.result,
+                    automatic: true,
+                  },
+                );
               } catch (e) {
                 agent.messages.push({
                   role: "user",
@@ -832,7 +847,7 @@ export class ImportRunner {
       session.issues = [(e as Error).message];
     }
     session.phase = "reconcile";
-    session.coordinator = emptyAgent();
+    // Keep coordinator evidence and completed tool results across revision waves.
     await this.persist();
   }
   async run() {
@@ -851,7 +866,7 @@ export class ImportRunner {
       job.error = undefined;
       if (job.session.phase === "review") {
         job.session.phase = "reconcile";
-        job.session.coordinator = emptyAgent();
+        // Current context supplies edited facts; retain prior source evidence.
       }
       while (!this.stopped && job.status === "running") {
         if (job.session.phase === "people") await this.runPeople();

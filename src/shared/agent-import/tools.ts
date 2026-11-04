@@ -5,6 +5,7 @@ import {
   assignmentSchema,
   organizationSchema,
   writePersonSchema,
+  verifiedEntrySchema,
 } from "./person-workspace";
 export const toolSpecs = {
   tree: {
@@ -116,10 +117,15 @@ export const toolSpecs = {
   },
   finish_person: {
     description:
-      "提取阶段保存 A/B 后调用，运行时自动进入独立来源复核；复核阶段逐条核对并传入 checks 数组，每项 key 为课表 key，checked_entries 必须覆盖全部索引。完整读完材料不等于课表完整，遮挡/单周标 partial；缺课表保留空课程和 missing 原因。此调用不会写正式库。",
+      "提取阶段保存 A/B 后调用，运行时自动进入独立来源复核；复核阶段逐条核对并传入 checks 数组，每项 key 为课表 key，checked_entries 必须覆盖全部索引；verified_entries 按原件逐条填写 index 与课程事实（不含 note），程序会与已存值比较，不一致先 write_person 修正。完整读完材料不等于课表完整，遮挡/单周标 partial；缺课表保留空课程和 missing 原因。此调用不会写正式库。",
     schema: z.object({
       checks: z
-        .array(fieldChecksSchema.extend({ key: z.string().min(1).max(30) }))
+        .array(
+          fieldChecksSchema.extend({
+            key: z.string().min(1).max(30),
+            verified_entries: z.array(verifiedEntrySchema).max(120),
+          }),
+        )
         .max(30)
         .default([]),
     }),
@@ -170,6 +176,6 @@ export const systemPrompt = `你是排班材料导入助手。运行时以人员
 业务含义由你判断，不能按文件名假定身份。保留原文课程名、教师、地点、日期、单双周和节次，未知不猜。单周截图只记录明确周次；底部无时段课程不能遗漏。每人独立课表，不因同名课程共享或合并。
 当前模式 discover：浏览必要材料后批量分派人员，维护公共组织/日历，不逐条操作数据库。
 person：只填当前对象 A/B；已提供的当前成果就是事实存储，可批量写入；完成提取调用 finish_person 后将独立回看来源。
-verify：逐格核对全部来源及 A/B，重点边缘、底部、周末、周段、教师地点；只修正需要改变的课表。完成后提交每份课表检查。看不清的字段留空并写待定。
-reconcile：核对公共日历、身份冲突及跨人教师差异；需要修正时派回对应人员对象。来源中的事实不足则交付明确问题，不反复猜测。只有操作员能正式提交。
+verify：逐格核对全部来源及 A/B，重点边缘、底部、周末、周段、教师地点；只修正需要改变的课表。完成后提交每份课表检查及 verified_entries，以原件为准，不要照抄存储值。看不清的字段留空并写待定。
+reconcile：核对公共日历、身份冲突及跨人教师差异；需要修正时派回对应人员对象。历史消息保留已读证据与修订原因，当前工作状态是最新成果；复用已读来源，只复查改动影响的差异。来源中的事实不足则交付明确问题，不反复猜测。只有操作员能正式提交。
 尽量少轮调用：一次读取必要来源，一次批量写入 A/B；长课表可以分段追加。不要重复抄写已保存成果或输出长篇工作叙述。`;

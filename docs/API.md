@@ -240,3 +240,5 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 人员查询和编辑支持 className、major。apply 可携带 `review: {version:1,timetables,calendars,checks,consistency_review?,unresolved}`，最大2MB，与业务数据同事务保存并纳入幂等摘要。`GET /agent-imports` 返回本人最近20个已提交批次；`GET /agent-imports/:id/report` 返回 review 或 null，仍检查批次归属。审核报告不包含原件、模型对话和凭据。
 
 复核工具 `finish_person.checks` 使用显式数组，每项包含课表 `key` 和字段核对结果；不使用动态键字典，以确保 Google 工具 schema 保留核对字段。对象持久化与正式审核报告仍按课表键保存检查结果，无新增依赖、环境变量或数据库迁移。
+
+复核完成时每份 checks 还须提交 `verified_entries`（逐条 index、名称、星期、节次、周次、教师、地点和无固定时段标记，不含备注）。运行时比较原件复核值与当前保存值，周次按集合比较，其余未知值不补猜；不一致先修正 A/B，不能只提交“已核对”说明。此契约仅影响模型工具，正式 HTTP API 不变。协调器在人员返工及人工复核恢复时保留对话与来源覆盖，最新 context 提供当前成果；自动预读记录 actor、mode、来源及工具结果，纳入本机工作日志。已有完成状态不会自动追溯复核，验证新门槛需重新导入或显式返工。

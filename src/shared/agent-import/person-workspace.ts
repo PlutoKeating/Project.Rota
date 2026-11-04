@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { calendarSchema, type FieldChecks } from "./calendar";
 import { timetableProposalSchema } from "./timetable";
-import { evidenceSchema, type Row } from "./model";
+import { canonical, evidenceSchema, type Row } from "./model";
 import type { CoverageState } from "./coverage";
 import type { ModelMessage } from "ai";
 
@@ -49,6 +49,41 @@ export const writePersonSchema = z.object({
   calendar_evidence: z.array(calendarSchema).max(10).default([]),
   unresolved: z.array(z.string().max(1000)).max(50).optional(),
 });
+// A source reread must agree with persisted facts, not merely claim all indices checked.
+export const verifiedEntrySchema = z
+  .object(timetableProposalSchema.shape.entries.element.shape)
+  .omit({ note: true })
+  .extend({ index: z.number().int().min(0).max(119) });
+export function validateVerifiedEntries(
+  table: PersonTable,
+  verified: z.infer<typeof verifiedEntrySchema>[],
+) {
+  if (
+    verified.length !== table.entries.length ||
+    new Set(verified.map((e) => e.index)).size !== table.entries.length
+  )
+    throw Error("复核值必须逐条覆盖课程：" + table.key);
+  const facts = (entry: PersonTable["entries"][number]) => ({
+    name: entry.name,
+    no_fixed_time: entry.no_fixed_time ?? false,
+    weekday: entry.weekday,
+    period_from: entry.period_from,
+    period_to: entry.period_to,
+    weeks:
+      entry.weeks === null
+        ? null
+        : [...new Set(entry.weeks)].sort((a, b) => a - b),
+    teacher: entry.teacher ?? null,
+    location: entry.location ?? null,
+  });
+  for (const entry of verified) {
+    const saved = table.entries[entry.index];
+    if (!saved || canonical(facts(saved)) !== canonical(facts(entry)))
+      throw Error(
+        `复核值与已存课程不一致：${table.key}[${entry.index}]；请回看来源，用 write_person 修正后再完成`,
+      );
+  }
+}
 export interface AgentState {
   runId: string;
   pendingImages: { path: string; image: string }[];

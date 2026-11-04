@@ -221,3 +221,29 @@ describe("person object projection", () => {
     expect(job.draft.course).toEqual(job.base.course);
   });
 });
+
+import { validateVerifiedEntries, verifiedEntrySchema } from "../src/shared/agent-import/person-workspace";
+describe("source verification facts", () => {
+  const table = () => personTableSchema.parse({
+    key: "fall", term_name: "秋", sources,
+    entries: [{ name: "音乐", weekday: 6, period_from: 11, period_to: 12,
+      weeks: [2, 3, 4, 5, 10, 11], teacher: "甲老师" }],
+  });
+  it("rejects the extra week pattern found in the work log", () => {
+    const t = table();
+    const reread = verifiedEntrySchema.parse({ ...t.entries[0], index: 0, weeks: [2, 4, 5, 10, 11] });
+    expect(() => validateVerifiedEntries(t, [reread])).toThrow("复核值与已存课程不一致");
+    t.entries[0].weeks = reread.weeks;
+    expect(() => validateVerifiedEntries(t, [reread])).not.toThrow();
+  });
+  it("treats weeks as sets but does not collapse unknown values into known facts", () => {
+    const t = table();
+    const reread = verifiedEntrySchema.parse({ ...t.entries[0], index: 0, weeks: [11, 10, 5, 4, 3, 2] });
+    expect(() => validateVerifiedEntries(t, [reread])).not.toThrow();
+    expect(() => validateVerifiedEntries(t, [{ ...reread, teacher: null }])).toThrow("不一致");
+    expect(() => validateVerifiedEntries(t, [{ ...reread, weeks: null }])).toThrow("不一致");
+    expect(() => validateVerifiedEntries(t, [])).toThrow("逐条覆盖");
+    expect(() => validateVerifiedEntries(t, [reread, reread])).toThrow("逐条覆盖");
+    expect(() => validateVerifiedEntries(t, [{ ...reread, index: 1 }])).toThrow("不一致");
+  });
+});

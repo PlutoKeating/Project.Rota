@@ -94,7 +94,7 @@ function personReply(body: any, complete = true) {
     ]);
   if (body.mode === "verify")
     return output([
-      { name: "finish_person", args: { checks: [{ key: "fall", ...fields }] } },
+      { name: "finish_person", args: { checks: [{ key: "fall", ...fields, verified_entries: Object.values(c.person.timetables).flatMap((t: any) => t.entries.map((entry: any, index: number) => ({ ...entry, index }))) }] } },
     ]);
   return output([{ name: "finish_import", args: {} }]);
 }
@@ -170,6 +170,25 @@ test("independent people overlap model requests and commit only after human revi
   ).toBe(true);
   expect(Object.keys(job.timetables)).toHaveLength(2);
   expect(job.draft.person).toHaveLength(2);
+  const preloads = await page.evaluate(async (id) => {
+    const { readHistory } = await import("/src/client/agent-import/store.ts");
+    const rows = [];
+    for (let offset = 0; ; offset += 10) {
+      const page = await readHistory(id, offset);
+      rows.push(...page);
+      if (page.length < 10) break;
+    }
+    return rows.filter((row) => row.data.automatic).map((row) => ({
+      actor: row.data.actor, mode: row.data.mode, path: row.data.args.path,
+    }));
+  }, job.id);
+  expect(preloads).toEqual(expect.arrayContaining([
+    { actor: "a", mode: "person", path: "a.txt" },
+    { actor: "a", mode: "verify", path: "a.txt" },
+    { actor: "b", mode: "person", path: "b.txt" },
+    { actor: "b", mode: "verify", path: "b.txt" },
+  ]));
+
   await page
     .getByRole("button", { name: "审核无误，导入全部选中内容" })
     .click();
@@ -235,7 +254,7 @@ test("invalid field coverage cannot finish verification and model can repair it"
         return output([
           {
             name: "finish_person",
-            args: { checks: [{ key: "fall", ...fields, checked_entries: [] }] },
+            args: { checks: [{ key: "fall", ...fields, verified_entries: [], checked_entries: [] }] },
           },
         ]);
       errorSeen = JSON.stringify(body.messages).includes(
@@ -501,4 +520,41 @@ test("image tool messages follow every tool result in a multi-call turn", async 
   ]);
   await expect.poll(async () => (await saved(page))?.status).toBe("review");
   expect(roles).toEqual(["assistant", "tool", "tool", "user"]);
+});
+
+test("verification rejects source weeks that disagree with the saved entry", async ({ page }) => {
+  let attempted = false, rejected = false;
+  await setup(page, (body) => {
+    if (body.mode === "discover") return discovery(["a"]);
+    if (body.mode === "verify" && !attempted) {
+      attempted = true;
+      return output([{ name: "finish_person", args: { checks: [{ key: "fall", ...fields,
+        verified_entries: [{ index: 0, name: "数学", weekday: 1, period_from: 1, period_to: 1, weeks: [1] }],
+      }] } }]);
+    }
+    if (body.mode === "verify") rejected = JSON.stringify(body.messages).includes("复核值与已存课程不一致");
+    return personReply(body);
+  });
+  await upload(page, ["a"]);
+  await expect.poll(async () => (await saved(page))?.status).toBe("review");
+  expect(rejected).toBe(true);
+});
+
+test("coordinator retains source evidence across person revision waves", async ({ page }) => {
+  let revised = false, retained = false;
+  await setup(page, (body) => {
+    if (body.mode === "discover") return discovery(["a"]);
+    if (body.mode === "reconcile" && !revised) {
+      revised = true;
+      return output([
+        { name: "read_document", args: { path: "a.txt" } },
+        { name: "revise_person", args: { key: "a", instruction: "再次核对数学周次" } },
+      ]);
+    }
+    if (body.mode === "reconcile") retained = JSON.stringify(body.messages).includes("再次核对数学周次");
+    return personReply(body);
+  });
+  await upload(page, ["a"]);
+  await expect.poll(async () => (await saved(page))?.status).toBe("review");
+  expect(retained).toBe(true);
 });

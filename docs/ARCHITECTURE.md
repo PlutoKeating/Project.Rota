@@ -108,3 +108,5 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 旧版全局长对话、compaction、观察笔记及通用 CRUD 工具已删除。原始文档、OCR、图像裁剪及来源覆盖继续复用。对象/待执行调用保存在 IndexedDB，历史按需读取，Web Locks 防止同批重复执行。旧未完成批次保留查看，新协议需重新导入；已提交报告兼容。
 
 无新增运行依赖、Secret 或业务迁移，前后端同步发布。具体工具权限、状态、覆盖与验证见 [AGENT_IMPORT](AGENT_IMPORT.md)。
+
+人员复核现在以结构化 `verified_entries` 与当前课程事实逐项比较，拒绝文字“已核对”但数据不一致的完成请求。协调器在人员修订后保留已读证据；自动预读也进入本机日志。无新增运行依赖或数据库迁移，工具协议仍需前后端同步发布。
