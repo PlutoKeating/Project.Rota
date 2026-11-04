@@ -94,7 +94,7 @@ function personReply(body: any, complete = true) {
     ]);
   if (body.mode === "verify")
     return output([
-      { name: "finish_person", args: { checks: { fall: fields } } },
+      { name: "finish_person", args: { checks: [{ key: "fall", ...fields }] } },
     ]);
   return output([{ name: "finish_import", args: {} }]);
 }
@@ -235,7 +235,7 @@ test("invalid field coverage cannot finish verification and model can repair it"
         return output([
           {
             name: "finish_person",
-            args: { checks: { fall: { ...fields, checked_entries: [] } } },
+            args: { checks: [{ key: "fall", ...fields, checked_entries: [] }] },
           },
         ]);
       errorSeen = JSON.stringify(body.messages).includes(
@@ -347,7 +347,7 @@ test("verification failures resume verification and clear the old error", async 
       return output(
         Array.from({ length: 6 }, () => ({
           name: "finish_person",
-          args: { checks: {} },
+          args: { checks: [] },
         })),
       );
     return personReply(body);

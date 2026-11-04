@@ -33,7 +33,7 @@ it("offers a durable partial calendar without manufacturing missing end clocks o
 it("requires field-specific checks before a timetable can be marked checked", () => {
   expect(
     toolSpecs.finish_person.schema.safeParse({
-      checks: { plan: { identity: "已看过" } },
+      checks: [{ key: "plan", identity: "已看过" }],
     }).success,
   ).toBe(false);
 });

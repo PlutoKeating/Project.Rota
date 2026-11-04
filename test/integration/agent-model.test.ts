@@ -647,3 +647,47 @@ it("classifies a reset connection separately and exposes no transport message", 
   });
   expect(error.message).not.toContain("private connection");
 });
+
+it("preserves explicit per-timetable verification fields in the Google wire schema", async () => {
+  const env = await setup("google", "https://google.example");
+  let sent: any;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_input, options) => {
+      sent = JSON.parse(options.body);
+      return Response.json({
+        candidates: [
+          {
+            content: {
+              role: "model",
+              parts: [
+                {
+                  functionCall: { name: "finish_person", args: { checks: [] } },
+                },
+              ],
+            },
+            finishReason: "STOP",
+          },
+        ],
+      });
+    }),
+  );
+  await agentTurn(
+    env,
+    {
+      messages: [{ role: "user", content: "复核" }],
+      context: "{}",
+      mode: "verify",
+    },
+    "schema-regression",
+  );
+  const tool = sent.tools
+    .flatMap((t: any) => t.functionDeclarations ?? [])
+    .find((t: any) => t.name === "finish_person");
+  const checks = tool.parameters.properties.checks;
+  expect(checks.type).toBe("array");
+  expect(checks.items.required).toEqual(
+    expect.arrayContaining(["key", "identity", "checked_entries", "coverage"]),
+  );
+  expect(checks.items.properties.checked_entries.items.type).toBe("integer");
+});

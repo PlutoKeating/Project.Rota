@@ -238,3 +238,5 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 模型凭据仍仅在 Worker。每候选最多90秒，候选窗口120秒；浏览器截止130秒，SDK隐式重试关闭。metrics 保存 requestId、purpose、durationMs、token用量与逐供应商尝试状态；浏览器另标记 actorId。网络错误独立退避，额度耗尽不立即重试。原始上游错误和密钥不返回。
 
 人员查询和编辑支持 className、major。apply 可携带 `review: {version:1,timetables,calendars,checks,consistency_review?,unresolved}`，最大2MB，与业务数据同事务保存并纳入幂等摘要。`GET /agent-imports` 返回本人最近20个已提交批次；`GET /agent-imports/:id/report` 返回 review 或 null，仍检查批次归属。审核报告不包含原件、模型对话和凭据。
+
+复核工具 `finish_person.checks` 使用显式数组，每项包含课表 `key` 和字段核对结果；不使用动态键字典，以确保 Google 工具 schema 保留核对字段。对象持久化与正式审核报告仍按课表键保存检查结果，无新增依赖、环境变量或数据库迁移。

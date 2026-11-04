@@ -67,3 +67,5 @@ pnpm test:agent-live /private/input.zip /private/output /private/snapshot.json
 输出目录必须在仓库之外，包含个人材料、对象检查点与诊断。默认最长 20 分钟，可用 ROTA_LIVE_MAX_MS 覆盖。使用相同输出目录可恢复已保存的新版进度；恢复计时不作为全新运行成绩。ROTA_VERTEX_PROJECT、ROTA_VERTEX_LOCATION、ROTA_LIVE_MODEL 可覆盖测试参数；本机 gcloud 凭据只在 Node 测试代理使用，不传浏览器、不修改生产供应商顺序。ROTA_DATA_CONFIG 可指定本机服务凭据配置。脚本禁止正式 apply/cancel 和配置写入。
 
 核对同一原包的身份、课程星期/教学周/节次、教师地点、无时段课程及缺失信息。人工标注不注入被测模型。新增架构必须重新运行实际材料验收，不能沿用旧架构的 34 分钟参考值宣称已经提速。
+
+复核工具 `finish_person.checks` 使用显式数组，每项包含课表 `key` 和字段核对结果；不使用动态键字典，以确保 Google 工具 schema 保留核对字段。对象持久化与正式审核报告仍按课表键保存检查结果，无新增依赖、环境变量或数据库迁移。

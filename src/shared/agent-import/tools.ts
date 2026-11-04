@@ -116,9 +116,12 @@ export const toolSpecs = {
   },
   finish_person: {
     description:
-      "提取阶段保存 A/B 后调用，运行时自动进入独立来源复核；复核阶段逐条核对并传入每份课表的 checks，checked_entries 必须覆盖全部索引。完整读完材料不等于课表完整，遮挡/单周标 partial；缺课表保留空课程和 missing 原因。此调用不会写正式库。",
+      "提取阶段保存 A/B 后调用，运行时自动进入独立来源复核；复核阶段逐条核对并传入 checks 数组，每项 key 为课表 key，checked_entries 必须覆盖全部索引。完整读完材料不等于课表完整，遮挡/单周标 partial；缺课表保留空课程和 missing 原因。此调用不会写正式库。",
     schema: z.object({
-      checks: z.record(z.string(), fieldChecksSchema).default({}),
+      checks: z
+        .array(fieldChecksSchema.extend({ key: z.string().min(1).max(30) }))
+        .max(30)
+        .default([]),
     }),
   },
   revise_person: {

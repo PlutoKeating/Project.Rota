@@ -375,12 +375,15 @@ export class ImportRunner {
           return { result: { next: "独立回看原件，核对已存 A/B" } };
         }
         if (
-          Object.keys(args.checks).length !==
-          Object.keys(person.timetables).length
+          args.checks.length !== Object.keys(person.timetables).length ||
+          new Set(args.checks.map((c: { key: string }) => c.key)).size !==
+            args.checks.length
         )
           throw Error("须为每份课表填写 checks");
         for (const t of Object.values(person.timetables)) {
-          const check = args.checks[t.key];
+          const check = args.checks.find(
+            (c: { key: string }) => c.key === t.key,
+          );
           if (
             !check ||
             new Set(check.checked_entries).size !== t.entries.length ||
@@ -402,7 +405,19 @@ export class ImportRunner {
           if (!t.entries.length && check.coverage !== "missing")
             throw Error("零课程方案须明确标记 missing，不能据此清空旧课表");
         }
-        person.checks = args.checks;
+        person.checks = Object.fromEntries(
+          args.checks.map(
+            ({
+              key,
+              ...check
+            }: {
+              key: string;
+            } & import("../../shared/agent-import/calendar").FieldChecks) => [
+              key,
+              check,
+            ],
+          ),
+        );
         person.status = "done";
         return { result: { complete: true } };
       }

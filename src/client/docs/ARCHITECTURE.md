@@ -21,3 +21,5 @@
 Worker `llm/agent.ts` 保留已有 AI SDK 与供应商适配，只开放 discover/person/verify/reconcile 对应的工具。人员不能写公共日历或他人对象。前后端需同步发布，无新增依赖、环境变量或业务迁移。旧版未完成批次原件保留，重新导入后使用新执行器。
 
 验证：`pnpm check`、`pnpm test:agent-browser`、`pnpm build`；人员专项 `pnpm test:agent-person`。浏览器测试拦截模型，不代表真实识别或耗时已验收。完整契约、恢复与覆盖边界见根目录 `docs/AGENT_IMPORT.md`。
+
+复核工具 `finish_person.checks` 使用显式数组，每项包含课表 `key` 和字段核对结果；不使用动态键字典，以确保 Google 工具 schema 保留核对字段。对象持久化与正式审核报告仍按课表键保存检查结果，无新增依赖、环境变量或数据库迁移。
