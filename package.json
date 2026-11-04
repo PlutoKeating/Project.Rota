@@ -17,7 +17,8 @@
     "test:browser": "playwright test",
     "test:agent-browser": "pnpm assets:ocr && playwright test --config test/browser/agent.config.ts",
     "test:agent-live": "pnpm assets:ocr && node --env-file=.env.production test/live/agent-import.mjs",
-    "assets:ocr": "node scripts/prepare-ocr.mjs"
+    "assets:ocr": "node scripts/prepare-ocr.mjs",
+    "test:agent-vertex": "node test/live/agent-import.mjs --vertex"
   },
   "dependencies": {
     "7z-wasm": "^1.2.0",
@@ -52,6 +53,7 @@
     "@tailwindcss/vite": "^4.1.0",
     "@tesseract.js-data/chi_sim": "1.0.0",
     "@tesseract.js-data/eng": "1.0.0",
+    "@types/node": "^24.19.2",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^5.0.0",

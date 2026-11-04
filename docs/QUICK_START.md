@@ -83,3 +83,5 @@ LINKML_BIN=.venv/bin/linkml bash scripts/gen.sh
 本地专项浏览器验证：`pnpm test:agent-browser` 自动启动独立的 5178 静态服务，拦截全部 API，仅使用合成测试资料，不连接生产数据。普通业务浏览器测试仍按原流程启动隔离数据服务。
 
 `pnpm gen` 输出当前领域参考 DDL 至 `schema/rota.current.sql`，不会覆盖 `migrations/0001_init.sql`；增量迁移需单独维护。运行时批次/锁表由增量 SQL 维护，与既有认证表策略一致。
+
+本机已登录 gcloud 时，可使用 `pnpm test:agent-vertex /private/input.zip /private/output /private/snapshot.json` 做隔离的 Vertex 真实模型验收；无需生产环境变量。可选项目/位置配置与凭据边界见 [Agent 导入说明](AGENT_IMPORT.md#本机-vertex-真实模型验收)。

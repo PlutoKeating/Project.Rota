@@ -188,3 +188,15 @@ expected JSON 包含 `person`（姓名及可选学号等明确身份字段）、
 已知 GoUsageLimitError 分类为 quota_exhausted，只显示脱敏的额度提示，整轮仅因额度耗尽失败时不立即重复请求。普通 429 的 Retry-After（数字秒）记录为 retryAfterMs；30 秒内遵循等待，较长等待保存进度并暂停，不假装是数据库迁移问题。可用备用供应商仍由单轮代理按全局顺序尝试。
 
 诊断捕获也可将失败响应写入私有 provider-error 文件，包含状态、Retry-After 和脱敏错误正文；可能含其他供应商工作区信息，不得提交。最终验收状态与边界见 [实际材料验收记录](./AGENT_IMPORT_ACCEPTANCE.md)。
+
+## 本机 Vertex 真实模型验收
+
+本机已经 gcloud auth login 且项目可调用 Vertex 时，可运行：
+
+```sh
+pnpm test:agent-vertex /private/input.zip /private/vertex-run /private/snapshot.json
+```
+
+默认读取 gcloud 当前项目，位置 global，型号 gemini-4-argon；可用 ROTA_VERTEX_PROJECT、ROTA_VERTEX_LOCATION、ROTA_LIVE_MODEL 覆盖。令牌通过本机 gcloud auth print-access-token 获取，在 Node 测试进程内缓存并每 40 分钟刷新，不写磁盘、不传浏览器。此模式不加载生产环境文件或读取生产模型配置，快照来自显式给定的私有 JSON（省略则为空库）。使用同一个浏览器执行器、工具和单轮代理，仅把既有 Google SDK 的 GenerateContent 请求改为固定 Vertex 主机的 OAuth 请求，禁止重定向。协议依据 [Google 官方 Vertex 示例](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon)。
+
+没有新增运行依赖；本机 Node 辅助代码使用 @types/node 开发类型。Vertex 可用性与额度以实际响应为准。此测试入口不会修改生产供应商顺序或正式业务库；输出目录必须在仓库外。沿用同一输出目录会恢复检查点，新目录才是全新计时。

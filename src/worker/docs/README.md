@@ -44,3 +44,5 @@ Agent 单轮代理新增 `work/compact/checkpoint/verify` 模式、批次内成�
 无进展冷却优先选择其他可用模型；只有一个候选或所有候选都在此类冷却中时保留纠错尝试，浏览器仍限制连续失败与空转次数。不是取消供应商的限流或超时处理。
 
 params.api="responses" 可为 openai_compatible 选择原生 Responses（含管理页连接测试），默认保持 Chat Completions。额度耗尽单独脱敏分类；Retry-After 秒数进入诊断，浏览器不对已知额度耗尽立即重试。未新增依赖、环境变量或数据库迁移。
+
+本地 Vertex 验收复用 agentTurn 与 Google SDK，OAuth 路由适配仅位于 test/live/vertex.ts，不进入生产 Worker。此模式不读取生产模型配置，亦不更改既有密钥/排序。

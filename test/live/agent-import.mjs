@@ -7,7 +7,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { createHash } from "node:crypto";
-const [archivePath, outputPath, snapshotPath] = process.argv.slice(2);
+const arguments_ = process.argv.slice(2);
+const vertexFlag = arguments_[0] === "--vertex";
+if (vertexFlag) arguments_.shift();
+const [archivePath, outputPath, snapshotPath] = arguments_;
 if (!archivePath || !outputPath)
   throw Error(
     "Usage: node --env-file=.env.production test/live/agent-import.mjs ARCHIVE PRIVATE_OUTPUT [SNAPSHOT_JSON]",
@@ -69,13 +72,16 @@ if (process.env.ROTA_CAPTURE_PROVIDER_RESPONSES === "1") {
     return response;
   };
 }
-const privateConfig = JSON.parse(
-  await fs.readFile(
-    process.env.ROTA_DATA_CONFIG ??
-      path.join(os.homedir(), ".config/rota/storage.json"),
-    "utf8",
-  ),
-);
+const useVertex = vertexFlag || process.env.ROTA_LIVE_VERTEX === "1";
+const privateConfig = useVertex
+  ? null
+  : JSON.parse(
+      await fs.readFile(
+        process.env.ROTA_DATA_CONFIG ??
+          path.join(os.homedir(), ".config/rota/storage.json"),
+        "utf8",
+      ),
+    );
 const vite = await createServer({
   configFile: "test/browser/vite.config.ts",
   cacheDir: path.join(out, "vite-cache"),
@@ -102,36 +108,49 @@ const vite = await createServer({
 });
 await vite.listen();
 let browser;
+let restoreVertex = () => {};
 try {
   const { remoteData } = await vite.ssrLoadModule("/src/worker/remote-data.ts");
   const { agentTurn } = await vite.ssrLoadModule("/src/worker/llm/agent.ts");
   const { emptySnapshot } = await vite.ssrLoadModule(
     "/src/shared/agent-import/model.ts",
   );
-  const env = {
-    ...process.env,
-    DATA_SERVICE_URL: privateConfig.STORAGE_URL,
-    DATA_SERVICE_AUTHORIZATION: privateConfig.STORAGE_AUTHORIZATION,
-  };
-  Object.assign(env, remoteData(env));
-  // Only model configuration reads are permitted by this test's server-side adapter.
-  const remote = env.DB;
-  env.DB = {
-    prepare(sql) {
-      if (!/^\s*select\b/i.test(sql))
-        throw Error("Live verification forbids database mutations");
-      return remote.prepare(sql);
-    },
-  };
-  const config = env.CONFIG;
-  env.CONFIG = {
-    get: (key) => config.get(key),
-    put: () => {
-      throw Error("Live verification forbids configuration writes");
-    },
-  };
+  let env;
+  let config;
+  if (useVertex) {
+    const { vertexTestEnvironment } = await vite.ssrLoadModule(
+      "/test/live/vertex.ts",
+    );
+    const vertex = await vertexTestEnvironment();
+    env = vertex.env;
+    restoreVertex = vertex.restore;
+    console.log(JSON.stringify({ localVertexModel: vertex.model }));
+  } else {
+    env = {
+      ...process.env,
+      DATA_SERVICE_URL: privateConfig.STORAGE_URL,
+      DATA_SERVICE_AUTHORIZATION: privateConfig.STORAGE_AUTHORIZATION,
+    };
+    Object.assign(env, remoteData(env));
+    // Only model configuration reads are permitted by this test's server-side adapter.
+    const remote = env.DB;
+    env.DB = {
+      prepare(sql) {
+        if (!/^\s*select\b/i.test(sql))
+          throw Error("Live verification forbids database mutations");
+        return remote.prepare(sql);
+      },
+    };
+    config = env.CONFIG;
+    env.CONFIG = {
+      get: (key) => config.get(key),
+      put: () => {
+        throw Error("Live verification forbids configuration writes");
+      },
+    };
+  }
   // Optional isolated provider comparison; never changes stored provider configuration.
-  if (process.env.ROTA_LIVE_MODEL) {
+  if (!useVertex && process.env.ROTA_LIVE_MODEL) {
     const source = await env.DB.prepare(
       "SELECT * FROM llm_provider WHERE id = ?",
     )
@@ -329,6 +348,7 @@ try {
   )
     process.exitCode = 1;
 } finally {
+  restoreVertex();
   await browser?.close();
   await vite.close();
 }
