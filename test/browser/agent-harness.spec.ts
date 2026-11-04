@@ -912,7 +912,14 @@ test("focused source verification requires fresh reads, repairs omissions, and s
       s = await import("/src/client/agent-import/store.ts");
     const job = (await s.listJobs("owner"))[0];
     await new r.ImportRunner(job, () => {}).run();
+    const history = [];
+    for (let offset = 0; ; offset += 10) {
+      const rows = await s.readHistory(job.id, offset);
+      history.push(...rows);
+      if (rows.length < 10) break;
+    }
     return {
+      history,
       status: job.status,
       verification: job.verification,
       plan: job.timetables?.["p-plan"],
@@ -926,7 +933,8 @@ test("focused source verification requires fresh reads, repairs omissions, and s
   expect(done.verification).toBeUndefined();
   expect(done.plan?.entries.map((e: any) => e.name)).toEqual(["数学", "物理"]);
   expect(done.check?.summary).toContain("补齐");
-  expect(JSON.stringify(done.messages)).toContain("已完成课表");
+  expect(JSON.stringify(done.history)).toContain("已完成课表");
+  expect(JSON.stringify(done.messages)).toContain("跨课表差异逐项核对已完成");
 });
 
 test("proxy validation feedback cannot execute a rejected tool", async ({
@@ -1645,6 +1653,28 @@ test("global review requires durable explanations for cross-person teacher diffe
                 key: "teacher:数学",
                 resolution: "different_context",
                 explanation: "合成原件明确为不同班级各自任课教师",
+                checked_variants: [
+                  { timetable_id: "a", teacher: "a" },
+                  { timetable_id: "b", teacher: "b" },
+                ],
+              },
+            },
+            {
+              id: "read-proof",
+              name: "read_document",
+              args: { path: "依据.txt" },
+            },
+            {
+              id: "record-after-read",
+              name: "record_consistency_check",
+              args: {
+                key: "teacher:数学",
+                resolution: "different_context",
+                explanation: "两班教师不同",
+                checked_variants: [
+                  { timetable_id: "a", teacher: "a" },
+                  { timetable_id: "b", teacher: "b" },
+                ],
               },
             },
             { id: "index2", name: "read_course_consistency", args: {} },
@@ -1663,7 +1693,11 @@ test("global review requires durable explanations for cross-person teacher diffe
     const r = await import("/src/client/agent-import/runtime.ts");
     const s = await import("/src/client/agent-import/store.ts");
     const v = await import("/src/client/agent-import/verification.ts");
-    const job = await r.createJob("owner", []);
+    const job = await r.createJob("owner", [
+      new File(["甲班数学教师a；乙班数学教师b"], "依据.txt"),
+    ]);
+    for (const file of await s.materials(job.id))
+      await s.putMaterial(job.id, { ...file, status: "done" });
     job.timetables = {};
     job.timetableChecks = {};
     for (const id of ["a", "b"]) {
@@ -1682,7 +1716,14 @@ test("global review requires durable explanations for cross-person teacher diffe
             weeks: [1],
           },
         ],
-        sources: [],
+        sources: [
+          {
+            source: "依据.txt",
+            locator: "全文",
+            explanation: "合成来源",
+            inferred: false,
+          },
+        ],
         unresolved: [],
         bound: false,
       };
@@ -1709,7 +1750,10 @@ test("global review requires durable explanations for cross-person teacher diffe
     };
     const runner = new r.ImportRunner(job, () => {});
     await runner.run();
-    const rows = await s.readHistory(job.id, 0);
+    const rows = [
+      ...(await s.readHistory(job.id, 0)),
+      ...(await s.readHistory(job.id, 10)),
+    ];
     return {
       status: job.status,
       reviews: job.importCheck?.consistency_review,
@@ -1724,8 +1768,48 @@ test("global review requires durable explanations for cross-person teacher diffe
         x.name === "confirm_import_check" && x.result.error?.includes("跨课表"),
     ),
   ).toBe(true);
+  expect(
+    result.tools.some(
+      (x: any) =>
+        x.name === "record_consistency_check" &&
+        x.result.error?.includes("须在本轮"),
+    ),
+  ).toBe(true);
   const indexes = result.tools.filter(
     (x: any) => x.name === "read_course_consistency" && !x.args.key,
   ) as any[];
   expect(indexes.map((x) => x.result.total)).toEqual([1, 0]);
+});
+
+test("a large invalid tool batch gets a model repair turn before pausing", async ({
+  page,
+}) => {
+  let turns = 0;
+  await routes(page, () =>
+    reply(
+      ++turns === 1
+        ? Array.from({ length: 9 }, (_, i) => ({
+            id: `bad-${i}`,
+            name: "query_records",
+            args: { entity: "not-an-entity" },
+          }))
+        : [
+            { id: "validate", name: "validate_draft", args: {} },
+            {
+              id: "finish",
+              name: "finish_review",
+              args: { summary: "空批次", unresolved: [] },
+            },
+          ],
+    ),
+  );
+  await page.goto("/#/imports");
+  const result = await page.evaluate(async () => {
+    const r = await import("/src/client/agent-import/runtime.ts");
+    const job = await r.createJob("owner", []);
+    await new r.ImportRunner(job, () => {}).run();
+    return { status: job.status, pending: job.pending.length };
+  });
+  expect(result).toEqual({ status: "review", pending: 0 });
+  expect(turns).toBe(2);
 });

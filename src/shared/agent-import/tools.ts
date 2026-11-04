@@ -49,7 +49,11 @@ export const toolSpecs = {
   record_consistency_check: {
     description:
       "逐项保存跨课表教师差异的核对结论。先 read_course_consistency 指定 key 读明细并回看原图；错误先 revise_timetable 改正。确属不同班级/学期任课或仍无法确定，记录原因。已记录项目从待核对索引消失，后续字段变化会使对应结论失效。",
-    schema: consistencyReviewSchema,
+    schema: consistencyReviewSchema.extend({
+      checked_variants: consistencyReviewSchema.shape.checked_variants
+        .removeDefault()
+        .min(1),
+    }),
   },
   confirm_import_check: {
     description:

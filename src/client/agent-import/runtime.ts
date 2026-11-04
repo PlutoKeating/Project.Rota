@@ -1,5 +1,11 @@
 import {
+  recordCoverage,
+  completePages,
+} from "../../shared/agent-import/coverage";
+import {
   courseConflicts,
+  consistencySignature,
+  validateCheckedVariants,
   validateConsistencyReview,
 } from "../../shared/agent-import/consistency";
 import { reviewArtifactSchema } from "../../shared/agent-import/review-artifact";
@@ -17,6 +23,7 @@ import {
 import { fitImagePayload } from "./image-payload";
 import {
   startVerification,
+  sourceFiles,
   confirmVerification,
   recordVerificationRead,
   needsVerification,
@@ -372,6 +379,32 @@ function canReconcile(job: Job, files: Awaited<ReturnType<typeof materials>>) {
     files.every((f) => Boolean(f.status))
   );
 }
+function missingConsistencySources(
+  job: Job,
+  group: ReturnType<typeof courseConflicts>[number],
+  files: Awaited<ReturnType<typeof materials>>,
+) {
+  const required = new Map<string, number>();
+  for (const variant of group.variants)
+    for (const file of sourceFiles(
+      job.timetables![variant.timetable_id],
+      files,
+    ))
+      required.set(file.path, file.totalPages ?? 1);
+  return [...required]
+    .filter(([path, pages]) =>
+      Array.from({ length: pages }, (_, i) => i + 1).some(
+        (page) =>
+          !completePages(job.consistencyCoverage?.[path] ?? {}).includes(page),
+      ),
+    )
+    .map(([path]) => path);
+}
+function recordConsistencyRead(job: Job, path: string, result: any) {
+  const info = result?.content ?? result;
+  const coverage = ((job.consistencyCoverage ??= {})[path] ??= {});
+  recordCoverage(coverage, info?.coverage ?? []);
+}
 async function execute(
   job: Job,
   call: PendingCall,
@@ -412,30 +445,32 @@ async function execute(
           result: {
             key: group.key,
             course: group.course,
+            missing_sources: missingConsistencySources(
+              job,
+              group,
+              await materials(job.id),
+            ),
             total: group.variants.length,
-            items: group.variants
-              .slice(offset, offset + 5)
-              .map((v) => ({
-                ...v,
-                sources: [...new Set(v.sources.map((s) => s.source))],
-              })),
+            items: group.variants.slice(offset, offset + 5).map((v) => ({
+              ...v,
+              sources: [...new Set(v.sources.map((s) => s.source))],
+            })),
             nextOffset: offset + 5 < group.variants.length ? offset + 5 : null,
           },
         };
       }
       const pending = groups.filter(
-        (g) => job.consistencyChecks?.[g.key]?.signature !== canonical(g),
+        (g) =>
+          job.consistencyChecks?.[g.key]?.signature !== consistencySignature(g),
       );
       return {
         result: {
           total: pending.length,
-          items: pending
-            .slice(offset, offset + 10)
-            .map((g) => ({
-              key: g.key,
-              teachers: [...new Set(g.variants.map((v) => v.teacher))],
-              people: g.variants.length,
-            })),
+          items: pending.slice(offset, offset + 10).map((g) => ({
+            key: g.key,
+            teachers: [...new Set(g.variants.map((v) => v.teacher))],
+            people: g.variants.length,
+          })),
           nextOffset: offset + 10 < pending.length ? offset + 10 : null,
           instruction:
             "逐项指定 key 读取详情；核对后 record_consistency_check 保存结论。处理后从 offset=0 获取剩余项目。",
@@ -449,12 +484,24 @@ async function execute(
         ),
       ).find((g) => g.key === args.key);
       if (!group) throw Error("该差异已不存在，请重新读取待核对索引");
+      validateCheckedVariants(group, args as any);
+      const missing = missingConsistencySources(
+        job,
+        group,
+        await materials(job.id),
+      );
+      if (args.resolution === "different_context" && missing.length)
+        throw Error(
+          "断言任课差异成立前须在本轮全批复核回看来源，尚缺：" +
+            missing.join("、"),
+        );
       (job.consistencyChecks ??= {})[group.key] = {
-        signature: canonical(group),
+        signature: consistencySignature(group),
         review: {
           key: args.key,
           resolution: args.resolution,
           explanation: args.explanation,
+          checked_variants: args.checked_variants,
         },
       };
       job.importCheck = undefined;
@@ -571,12 +618,24 @@ async function execute(
             args.consistency_review.find(
               (r: { key: string }) => r.key === g.key,
             ) ??
-            (job.consistencyChecks?.[g.key]?.signature === canonical(g)
+            (job.consistencyChecks?.[g.key]?.signature ===
+            consistencySignature(g)
               ? job.consistencyChecks[g.key].review
               : undefined),
         )
         .filter(Boolean);
       validateConsistencyReview(conflicts, reviews);
+      for (const group of conflicts) {
+        const review = reviews.find(
+          (r: { key: string }) => r.key === group.key,
+        )!;
+        validateCheckedVariants(group, review);
+        if (
+          review.resolution === "different_context" &&
+          missingConsistencySources(job, group, await materials(job.id)).length
+        )
+          throw Error("跨课表结论缺少本轮原件回看：" + group.key);
+      }
       const pendingConsistency = reviews
         .filter((r: { resolution: string }) => r.resolution === "unresolved")
         .map(
@@ -861,7 +920,13 @@ async function execute(
     case "ocr_image":
     case "render_sheet": {
       if (canReconcile(job, await materials(job.id))) {
-        return documentTool(job, name, args as { path: string });
+        const response = await documentTool(
+          job,
+          name,
+          args as { path: string },
+        );
+        recordConsistencyRead(job, args.path, response.result);
+        return response;
       }
       const unread = (job.unrecordedReads ??= []);
       if (
@@ -892,6 +957,8 @@ async function execute(
         );
       const response = await documentTool(job, name, args as { path: string });
       recordVerificationRead(job, args.path, response.result);
+      if (job.consistencyCoverage)
+        recordConsistencyRead(job, args.path, response.result);
       if (response.image)
         (job.unrecordedImageViews ??= {})[args.path] =
           (job.unrecordedImageViews?.[args.path] ?? 0) + 1;
@@ -1145,6 +1212,7 @@ export class ImportRunner {
       await saveJob(job);
       this.update({ ...job });
       let failedSteps = 0;
+      let failedRounds = 0;
       try {
         if ((job.harnessVersion ?? 0) < 3) {
           await archive(job.id, "legacy", "legacy", {
@@ -1198,6 +1266,7 @@ export class ImportRunner {
             try {
               response = await execute(job, call);
               failedSteps = 0;
+              failedRounds = 0;
             } catch (e) {
               failedSteps++;
               if (failedSteps === 3 && job.preferredProvider) {
@@ -1306,12 +1375,19 @@ export class ImportRunner {
             );
             await saveJob(job);
             this.update({ ...job });
-            if (failedSteps >= 8)
-              throw Error(
-                "连续 8 次工具调用未成功，进度已保存；请检查处理记录后继续。",
-              );
+
             if (job.pending.length === 0) await renewLease(job);
             continue;
+          }
+          if (failedSteps >= 8) {
+            failedSteps = 0;
+            if (++failedRounds >= 2)
+              throw Error("连续两轮工具批次未能修复错误，进度已保存。");
+            job.messages.push({
+              role: "user",
+              content:
+                "上一批工具参数失败；这些调用均未执行。先读当前状态，修正错误参数，下一次仅调用一个工具，不要重复整批失败参数。",
+            });
           }
           if (job.verification?.complete) {
             const v = job.verification;
@@ -1351,6 +1427,38 @@ export class ImportRunner {
             await saveJob(job);
             this.update({ ...job });
           }
+          if (canReconcile(job, await materials(job.id))) {
+            const current = courseConflicts(
+              Object.values(job.timetables ?? {}).filter(
+                (p) => !job.excluded.includes(p.person.id),
+              ),
+            ).find(
+              (g) =>
+                job.consistencyChecks?.[g.key]?.signature !==
+                consistencySignature(g),
+            );
+            const task = current?.key ?? "final-calendar-review";
+            if (job.reconcileTask !== task) {
+              await archive(
+                job.id,
+                "reconcile:" + crypto.randomUUID(),
+                "context",
+                { messages: archiveMessages(job.messages) },
+              );
+              job.reconcileTask = task;
+              job.messages = [
+                {
+                  role: "user",
+                  content: current
+                    ? "同一 Agent 继续全批复核，所有人员成果已保存。只处理当前教师差异：" +
+                      current.key +
+                      "。先 read_course_consistency 指定该 key 获取真实人员、教师、来源及 missing_sources；回看缺少的来源，修正错字，或记录有依据的不同任课情境/待定。checked_variants 必须逐项引用实际返回，不要编造班级教师。完成这一项后系统会继续下一项。"
+                    : "跨课表差异逐项核对已完成。读取日历方案，汇总已知事实与待定项，然后 confirm_import_check、validate_draft、finish_review。",
+                },
+              ];
+              await saveJob(job);
+            }
+          }
           const signature = canonical({
             verification: job.verification
               ? { id: job.verification.id, coverage: job.verification.coverage }
@@ -1358,6 +1466,7 @@ export class ImportRunner {
             revision: job.revision,
             consistencyChecks: job.consistencyChecks,
             consistencyReads: job.consistencyReads,
+            consistencyCoverage: job.consistencyCoverage,
             observationRevision: job.observationRevision ?? 0,
             files: (await materials(job.id)).map((f) => [
               f.path,
@@ -1413,7 +1522,8 @@ export class ImportRunner {
             )
               .filter(
                 (g) =>
-                  job.consistencyChecks?.[g.key]?.signature !== canonical(g),
+                  job.consistencyChecks?.[g.key]?.signature !==
+                  consistencySignature(g),
               )
               .slice(0, 20)
               .map((g) => g.key),

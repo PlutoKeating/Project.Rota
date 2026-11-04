@@ -224,3 +224,5 @@ Google 原生供应商的导入请求默认显式指定 `MEDIA_RESOLUTION_HIGH`�
 模型超时、输出截断或原生工具选择失败均记录明确错误类别；浏览器持久保存小批输出/工具格式纠正指令后最多重试一次。配置错误、额度耗尽及内容过滤不套用该恢复策略。私有 live 测试可用 `ROTA_CAPTURE_PROVIDER_RESPONSES=1` 保存 Vertex 候选响应到测试输出目录，用后按个人资料处理；生产不保存这些响应。
 
 全批协调提供 `read_course_consistency`（无 key 读取待处理索引，指定 key 分页读取来源与人员）、`record_consistency_check`（逐项持久结论）及 `confirm_import_check.consistency_review`。签名变化使结论失效；不同班级可有不同教师，程序不选多数、不自动改名。`reconcile` 限定工具集合防止反复翻旧历史。核对内容在审核页和提交后报告中可见。
+
+跨课表确认同时校验 `checked_variants` 与来源回看覆盖；同一 Agent 每次处理一个差异，明确疑点可记为 unresolved。差异说明不自动改动教师；更正仍通过 revise_timetable 并重新逐人核对。

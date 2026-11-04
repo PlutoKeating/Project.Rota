@@ -558,6 +558,16 @@ export function Review({
                 {item.resolution === "unresolved" ? "待确认" : "不同任课情境"}
               </p>
               <p className="text-muted">{item.explanation}</p>
+              {!!item.checked_variants?.length && (
+                <p className="mt-1 text-muted">
+                  {item.checked_variants
+                    .map(
+                      (v) =>
+                        `${job.timetables?.[v.timetable_id]?.person.full_name ?? v.timetable_id}：${v.teacher}`,
+                    )
+                    .join("；")}
+                </p>
+              )}
             </div>
           ))}
         </details>

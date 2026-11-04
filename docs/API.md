@@ -241,7 +241,7 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 
 浏览器工具协议新增 `save_timetable`（replace/append）、`read_timetables`、`bind_timetables` 和 `ocr_image`；这些工具仅操作本地材料与隔离草稿。`observe_material` 需要明确 `kind`，课表观察不能代替结构化保存。正式 apply 的事务语义不变。单轮响应在返回前验证完整工具名称、参数和调用 ID，拒绝损坏 JSON、未知工具、重复调用 ID 及截断输出并尝试后续供应商；可修正的参数错误以 validationError 反馈，不执行调用。metrics 额外提供可用的 `reasoningTokens` 与 `finishReason`。无数据库迁移，前端与 Worker 须同步发布。
 
-导入单轮代理支持 `work`、`compact`、`checkpoint`、`verify`：保存成果阶段仅提供持久化与查询工具，暂不提供新文件读取工具，返回调用须属于当轮开放工具集合。逐人复核继续使用同一 Agent，通过 `revise_timetable` 增量纠正、`confirm_timetable_check` 记录来源回看与方案签名。
+导入单轮代理支持 `work`、`compact`、`checkpoint`、`verify`、`reconcile`：保存成果阶段仅提供持久化与查询工具，暂不提供新文件读取工具，返回调用须属于当轮开放工具集合。逐人复核继续使用同一 Agent，通过 `revise_timetable` 增量纠正、`confirm_timetable_check` 记录来源回看与方案签名。
 
 `verify` 仅开放当前原件读取、课表查询/修订、核对确认及必要历史读取，不混入全局笔记、通用 CRUD 或新材料发现工具。
 
@@ -262,3 +262,5 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 `GET /api/agent-imports` 返回当前操作员最近 20 条已提交批次 `{items:[{id,summary,applied_at}]}`；`GET /api/agent-imports/:id/report` 返回 `{review:...|null}`，旧批次无记录时 null。两接口均沿用批次归属校验。
 
 `POST /agent-imports/:id/turn` 的 `mode` 新增 `reconcile`：开放跨课表差异读取/结论、原件回看、方案修订、日历和最终审核工具，关闭目录/历史遍历。`review` 审核报告新增可选 `consistency_review`（默认空数组）：每项 `key`、`resolution`（`different_context` / `unresolved`）、`explanation`。模型请求诊断增加脱敏 `errorType` / `causeCode`；明确临时连接错误分类 `network_error`，客户端最多自动重试一次。
+
+`record_consistency_check` 必须提供 `checked_variants: [{timetable_id, teacher}]`，与当前差异逐项匹配。确认 `different_context` 还要求本轮全批复核已回看相关来源；`unresolved` 明确保留待人工确认。旧审核报告缺省此字段为空数组，不表示已经执行新版核对。

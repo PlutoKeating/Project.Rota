@@ -1,9 +1,14 @@
+import { canonical } from "./model";
 import { z } from "zod";
 import type { TimetableProposal } from "./timetable";
 export const consistencyReviewSchema = z.object({
   key: z.string().max(1000),
   resolution: z.enum(["different_context", "unresolved"]),
   explanation: z.string().min(1).max(2000),
+  checked_variants: z
+    .array(z.object({ timetable_id: z.string(), teacher: z.string() }))
+    .max(200)
+    .default([]),
 });
 export type ConsistencyReview = z.infer<typeof consistencyReviewSchema>;
 /** Compare only explicit LLM-produced fields; never interpret or merge source material. */
@@ -18,6 +23,7 @@ export function courseConflicts(plans: TimetableProposal[]) {
         timetable_id: string;
         person: string;
         term: string | null;
+        class_name?: string | null;
         entries: number[];
         sources: TimetableProposal["sources"];
       }[];
@@ -41,6 +47,7 @@ export function courseConflicts(plans: TimetableProposal[]) {
           timetable_id: plan.id,
           person: plan.person.full_name,
           term: plan.term_name,
+          class_name: plan.person.class_name,
           entries: [index],
           sources: plan.sources,
         });
@@ -61,5 +68,22 @@ export function validateConsistencyReview(
   )
     throw Error(
       "跨课表教师差异尚未逐项核对。read_course_consistency 查看当前差异，回看来源修正；确属不同任课情境或仍无法确定时逐项说明。",
+    );
+}
+
+export const consistencySignature = (
+  group: ReturnType<typeof courseConflicts>[number],
+) => canonical({ policy: 2, group });
+export function validateCheckedVariants(
+  group: ReturnType<typeof courseConflicts>[number],
+  review: ConsistencyReview,
+) {
+  const key = (v: { timetable_id: string; teacher: string }) =>
+    JSON.stringify([v.timetable_id, v.teacher]);
+  const expected = group.variants.map(key).sort();
+  const actual = review.checked_variants.map(key).sort();
+  if (canonical(expected) !== canonical(actual))
+    throw Error(
+      "核对结论须逐项引用当前真实的 timetable_id 与 teacher，不能编造或遗漏；请读取当前差异详情。",
     );
 }

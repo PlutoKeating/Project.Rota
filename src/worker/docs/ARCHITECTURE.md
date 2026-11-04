@@ -41,7 +41,7 @@ Agent 代理在 `compact` 模式仅开放 `save_handoff`；普通模式不开放
 
 单轮代理兼容适配器使用供应商命名空间 `compatible`，保留推理续接字段。校验发生在返回浏览器前，不能仅依赖 generateText 抛异常：AI SDK 可能把无效调用包装为结果。原生 Anthropic/Google 和 Workers AI 仍使用既有适配器。代理没有正式业务写权限；新增 save/read/bind_timetables 和 OCR 工具由浏览器执行。协议变更要求前后端同步发布。
 
-导入单轮代理支持 `work`、`compact`、`checkpoint`、`verify`：保存成果阶段仅提供持久化与查询工具，暂不提供新文件读取工具，返回调用须属于当轮开放工具集合。逐人复核继续使用同一 Agent，通过 `revise_timetable` 增量纠正、`confirm_timetable_check` 记录来源回看与方案签名。
+导入单轮代理支持 `work`、`compact`、`checkpoint`、`verify`、`reconcile`：保存成果阶段仅提供持久化与查询工具，暂不提供新文件读取工具，返回调用须属于当轮开放工具集合。逐人复核继续使用同一 Agent，通过 `revise_timetable` 增量纠正、`confirm_timetable_check` 记录来源回看与方案签名。
 
 `verify` 仅开放当前原件读取、课表查询/修订、核对确认及必要历史读取，不混入全局笔记、通用 CRUD 或新材料发现工具。
 

@@ -59,6 +59,8 @@ export interface Job {
   observationRevision?: number;
   timetables?: Record<string, TimetableProposal>;
   calendars?: Record<string, CalendarProposal>;
+  reconcileTask?: string;
+  consistencyCoverage?: Record<string, CoverageState>;
   consistencyReads?: Record<string, string>;
   consistencyChecks?: Record<
     string,
