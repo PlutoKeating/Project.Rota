@@ -1527,13 +1527,90 @@ test("operator scope changes preserve a completed batch check but cannot bless u
       },
     };
     await r.setPersonIncluded(job, "person", true);
+    const changedRequiresCheck = q.needsImportCheck(job);
+    await r.editRecord(job, "person", "person", {
+      full_name: "操作员修订姓名",
+    });
     return {
       excludedRequiresCheck,
       summary,
-      changedRequiresCheck: q.needsImportCheck(job),
+      changedRequiresCheck,
+      editRequiresCheck: q.needsImportCheck(job),
     };
   });
   expect(result.excludedRequiresCheck).toBe(false);
   expect(result.summary).toContain("新增人员 0");
   expect(result.changedRequiresCheck).toBe(true);
+  expect(result.editRequiresCheck).toBe(true);
+});
+
+test("editing a generated profile synchronizes its calendar evidence before rebuilding occupancy", async ({
+  page,
+}) => {
+  await routes(page, () => reply([]));
+  const result = await page.evaluate(async () => {
+    const r = await import("/src/client/agent-import/runtime.ts");
+    const t = await import("/src/shared/agent-import/timetable.ts");
+    const c = await import("/src/shared/agent-import/calendar.ts");
+    const m = await import("/src/shared/agent-import/model.ts");
+    const job = await r.createJob("owner", []);
+    const sources = [
+      {
+        source: "操作员意见",
+        locator: "测试",
+        explanation: "完整来源",
+        inferred: false,
+      },
+    ];
+    const proposal = c.calendarSchema.parse({
+      id: "c",
+      name: "秋季",
+      start_date: "2026-08-31",
+      week_count: 18,
+      periods: [{ index: 1, start: "08:30", end: "09:15" }],
+      timetable_ids: ["p"],
+      sources,
+    });
+    const generated = c.stageCalendar(job.draft, {}, proposal);
+    const plan = t.stageTimetable(
+      generated.draft,
+      generated.evidence,
+      t.timetableProposalSchema.parse({
+        id: "p",
+        person: { id: "person", full_name: "甲" },
+        term_name: "秋季",
+        term_id: generated.termId,
+        profile_id: generated.profileId,
+        entries: [
+          {
+            name: "数学",
+            weekday: 1,
+            period_from: 1,
+            period_to: 1,
+            weeks: [1],
+          },
+        ],
+        sources,
+      }),
+    );
+    job.draft = plan.draft;
+    job.evidence = plan.evidence;
+    job.calendars = { c: proposal };
+    job.timetables = { p: plan.proposal };
+    await r.editRecord(job, "timetable_profile", generated.profileId, {
+      periods: JSON.stringify([{ index: 1, start: "09:00", end: "09:45" }]),
+    });
+    return {
+      calendar: job.calendars.c,
+      issues: c.calendarBindingIssues(job),
+      event: m.materialize(job.draft, job.base).timetable_event[0],
+    };
+  });
+  expect(result.calendar.periods).toEqual([
+    { index: 1, start: "09:00", end: "09:45" },
+  ]);
+  expect(result.issues).toEqual([]);
+  expect(new Date(String(result.event.starts_at)).toISOString()).toBe(
+    "2026-08-31T01:00:00.000Z",
+  );
 });

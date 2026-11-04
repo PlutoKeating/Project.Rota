@@ -383,18 +383,16 @@ async function execute(
       return {
         result: {
           total: rows.length,
-          items: rows
-            .slice(args.offset, args.offset + 20)
-            .map((c) => ({
-              id: c.id,
-              name: c.name,
-              start_date: c.start_date,
-              week_count: c.week_count,
-              minimum_weeks: c.minimum_weeks,
-              periods: c.periods.length,
-              applicable: c.timetable_ids.length,
-              missing: calendarMissing(c),
-            })),
+          items: rows.slice(args.offset, args.offset + 20).map((c) => ({
+            id: c.id,
+            name: c.name,
+            start_date: c.start_date,
+            week_count: c.week_count,
+            minimum_weeks: c.minimum_weeks,
+            periods: c.periods.length,
+            applicable: c.timetable_ids.length,
+            missing: calendarMissing(c),
+          })),
           nextOffset: args.offset + 20 < rows.length ? args.offset + 20 : null,
         },
       };
@@ -1505,6 +1503,7 @@ export async function editProposalEntry(
 ) {
   if (["running", "applied", "cancelled"].includes(job.status))
     throw Error("当前状态不能编辑课表");
+  const batchChecked = !needsImportCheck(job);
   const previous = job.timetables?.[id];
   if (!previous || !previous.entries[index]) throw Error("课表条目不存在");
   const person = job.draft.person.find((p) => p.id === previous.person.id);
@@ -1543,7 +1542,7 @@ export async function editProposalEntry(
     role: "user",
     content: `操作员已直接修正课表方案 ${id} 的第 ${index + 1} 项，请用 read_timetables 读取当前版本，不得用旧笔记覆盖这些修改。`,
   });
-  if (checked && job.importCheck)
+  if (checked && batchChecked && job.importCheck)
     job.importCheck.signature = importSignature(job);
   await saveJob(job);
 }
@@ -1553,7 +1552,42 @@ export async function editRecord(
   id: string,
   data: Record<string, unknown>,
 ) {
+  if (["running", "applied", "cancelled"].includes(job.status))
+    throw Error("当前状态不能编辑记录");
+  const batchChecked = !needsImportCheck(job);
   mutate(job.draft, entity, "update", data, id);
+  for (const c of Object.values(job.calendars ?? {})) {
+    let changed = false;
+    if (entity === "term" && id === (c.term_id ?? c.id + ":term")) {
+      const term = job.draft.term.find((t) => t.id === id)!;
+      c.start_date = String(term.start_date);
+      c.week_count = Number(term.week_count);
+      changed = true;
+    }
+    if (entity === "timetable_profile" && id === c.id + ":profile") {
+      const profile = job.draft.timetable_profile.find((p) => p.id === id)!;
+      c.periods = JSON.parse(String(profile.periods));
+      if (profile.term_id !== (c.term_id ?? c.id + ":term")) {
+        c.term_id = String(profile.term_id);
+        const term = job.draft.term.find((t) => t.id === c.term_id);
+        if (term) {
+          c.start_date = String(term.start_date);
+          c.week_count = Number(term.week_count);
+        }
+      }
+      changed = true;
+    }
+    if (changed)
+      c.sources = [
+        ...c.sources.filter((s) => s.source !== "操作员意见").slice(0, 29),
+        {
+          source: "操作员意见",
+          locator: "关联学期/作息编辑",
+          explanation: "同步操作员明确修订的字段",
+          inferred: false,
+        },
+      ];
+  }
   if (entity === "person") {
     const person = job.draft.person.find((p) => p.id === id)!;
     for (const proposal of Object.values(job.timetables ?? {}))
@@ -1582,7 +1616,8 @@ export async function editRecord(
   ];
   job.revision++;
   job.validatedRevision = -1;
-  if (job.importCheck) job.importCheck.signature = importSignature(job);
+  if (batchChecked && job.importCheck)
+    job.importCheck.signature = importSignature(job);
   await saveJob(job);
 }
 export async function applyJob(job: Job) {
@@ -1624,6 +1659,7 @@ export async function applyJob(job: Job) {
 export async function editCalendar(job: Job, value: unknown) {
   if (["running", "applied", "cancelled"].includes(job.status))
     throw Error("当前状态不能编辑日历");
+  const batchChecked = !needsImportCheck(job);
   const calendar = calendarSchema.parse(value);
   calendar.sources = [
     ...calendar.sources.filter((s) => s.source !== "操作员意见").slice(0, 29),
@@ -1666,7 +1702,8 @@ export async function editCalendar(job: Job, value: unknown) {
     }
   }
   // Human edits update an already reviewed batch, without claiming a new model check.
-  if (job.importCheck) job.importCheck.signature = importSignature(job);
+  if (batchChecked && job.importCheck)
+    job.importCheck.signature = importSignature(job);
   job.summary = reviewSummary(job);
   await saveJob(job);
 }

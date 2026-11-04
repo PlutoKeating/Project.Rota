@@ -468,3 +468,111 @@ test("personal course editor exposes validation failures inside its dialog", asy
   });
   await page.getByLabel("开始节次", { exact: true }).fill("1");
 });
+
+test("calendar review shows known clocks, accepts missing fields, and creates a bound draft on mobile", async ({
+  page,
+}) => {
+  await page.route("**/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const data = path.endsWith("/auth/me")
+      ? {
+          authenticated: true,
+          user: { id: "owner", role: "owner", name: "测试" },
+        }
+      : path.endsWith("/snapshot")
+        ? { data: base }
+        : path === "/api/agent-imports"
+          ? { id: "calendar-ui" }
+          : { status: "draft" };
+    if (path.endsWith("/apply"))
+      throw Error("This review must not submit data");
+    await route.fulfill({ json: data });
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/#/imports");
+  await page.evaluate(async () => {
+    const r = await import("/src/client/agent-import/runtime.ts");
+    const s = await import("/src/client/agent-import/store.ts");
+    const t = await import("/src/shared/agent-import/timetable.ts");
+    const job = await r.createJob("owner", []);
+    const sources = [
+      {
+        source: "操作员意见",
+        locator: "测试数据",
+        explanation: "日历 UI 测试",
+        inferred: false,
+      },
+    ];
+    const staged = t.stageTimetable(
+      job.draft,
+      {},
+      t.timetableProposalSchema.parse({
+        id: "p",
+        person: { id: "person", full_name: "甲" },
+        term_name: "测试秋季",
+        entries: [
+          {
+            name: "数学",
+            weekday: 1,
+            period_from: 1,
+            period_to: 1,
+            weeks: [1],
+          },
+        ],
+        sources,
+      }),
+    );
+    job.draft = staged.draft;
+    job.evidence = staged.evidence;
+    job.timetables = { p: staged.proposal };
+    job.title = "日历界面测试";
+    job.status = "review";
+    job.calendars = {
+      c: {
+        id: "c",
+        name: "测试秋季",
+        term_id: null,
+        start_date: "2026-08-31",
+        week_count: null,
+        minimum_weeks: 18,
+        periods: [{ index: 1, start: "08:30", end: null }],
+        timetable_ids: ["p"],
+        sources,
+        unresolved: ["总周数与下课时间待确认"],
+      },
+    };
+    await s.saveJob(job);
+  });
+  await page.reload();
+  await page.getByText("本机最近导入", { exact: false }).click();
+  await page.getByRole("button", { name: /日历界面测试/ }).click();
+  await expect(
+    page.getByText("第1节 08:30–下课待定", { exact: false }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "复核日期与作息", exact: true })
+    .click();
+  await expect(page.getByLabel("第一教学周周一", { exact: true })).toHaveValue(
+    "2026-08-31",
+  );
+  await page.getByLabel("总教学周数（未知留空）", { exact: true }).fill("18");
+  await page.getByLabel("第1节下课", { exact: true }).fill("09:15");
+  await page.getByLabel("仍待确认的事项（每行一项）", { exact: true }).fill("");
+  await expect(page.locator("body")).toHaveJSProperty("scrollWidth", 390);
+  await page.getByRole("button", { name: "保存复核结果", exact: true }).click();
+  await expect(page.getByRole("dialog")).not.toBeVisible();
+  const result = await page.evaluate(async () => {
+    const s = await import("/src/client/agent-import/store.ts");
+    const j = (await s.listJobs("owner"))[0];
+    return {
+      bound: j.timetables?.p.bound,
+      period: j.draft.class_period[0],
+      courses: j.draft.timetable_entry.length,
+    };
+  });
+  expect(result).toMatchObject({
+    bound: true,
+    period: { start_time: "08:30", end_time: "09:15" },
+    courses: 1,
+  });
+});
