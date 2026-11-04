@@ -200,3 +200,7 @@ pnpm test:agent-vertex /private/input.zip /private/vertex-run /private/snapshot.
 默认读取 gcloud 当前项目，位置 global，型号 gemini-4-argon；可用 ROTA_VERTEX_PROJECT、ROTA_VERTEX_LOCATION、ROTA_LIVE_MODEL 覆盖。令牌通过本机 gcloud auth print-access-token 获取，在 Node 测试进程内缓存并每 40 分钟刷新，不写磁盘、不传浏览器。此模式不加载生产环境文件或读取生产模型配置，快照来自显式给定的私有 JSON（省略则为空库）。使用同一个浏览器执行器、工具和单轮代理，仅把既有 Google SDK 的 GenerateContent 请求改为固定 Vertex 主机的 OAuth 请求，禁止重定向。协议依据 [Google 官方 Vertex 示例](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon)。
 
 没有新增运行依赖；本机 Node 辅助代码使用 @types/node 开发类型。Vertex 可用性与额度以实际响应为准。此测试入口不会修改生产供应商顺序或正式业务库；输出目录必须在仓库外。沿用同一输出目录会恢复检查点，新目录才是全新计时。
+
+### 模型图片传输预算
+
+`image-payload.ts` 在每次发送前对 data URL 图片分配合计 12,000,000 字符、单图最多 1,500,000 字符的预算，低于网关 20 MiB 请求上限。超预算预览先以 JPEG 质量 0.9 编码，必要时逐级缩小；保留全部图片、来源引用与原件，追加实际预览尺寸和原坐标裁剪提示。旧检查点同样适用。原始 OCR 与材料不受影响，识别不清须裁剪读取，传输压缩不证明识别准确。

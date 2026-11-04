@@ -1245,3 +1245,42 @@ test("timed out model responses retry with smaller output and persist recovery a
   expect(saved.people).toBe(0);
   expect(saved.messages.filter((m: any) => String(m.content).includes("最多保存 8 条"))).toHaveLength(1);
 });
+
+test("large restored image context fits the transport budget without dropping evidence", async ({ page }) => {
+  await routes(page, () => reply([]));
+  const result = await page.evaluate(async () => {
+    const { fitImagePayload } = await import("/src/client/agent-import/image-payload.ts");
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 2048;
+    const ctx = canvas.getContext("2d")!;
+    const pixels = ctx.createImageData(2048, 2048);
+    let seed = 123456;
+    for (let i = 0; i < pixels.data.length; i += 4) {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      pixels.data[i] = seed & 255;
+      pixels.data[i + 1] = (seed >>> 8) & 255;
+      pixels.data[i + 2] = (seed >>> 16) & 255;
+      pixels.data[i + 3] = 255;
+    }
+    ctx.putImageData(pixels, 0, 0);
+    const image = canvas.toDataURL("image/png");
+    const messages = Array.from({ length: 3 }, (_, i) => ({ role: "user" as const, content: [
+      { type: "text" as const, text: "source:" + i }, { type: "image" as const, image },
+    ] }));
+    const fitted = await fitImagePayload(messages);
+    const parts = fitted.flatMap((m) => Array.isArray(m.content) ? m.content : []);
+    const images = parts.filter((p) => p.type === "image");
+    return { before: JSON.stringify(messages).length, after: JSON.stringify(fitted).length,
+      images: images.length, maxImage: Math.max(...images.map((p) => String(p.image).length)),
+      sources: parts.filter((p) => p.type === "text" && p.text.startsWith("source:")).length,
+      originalUnchanged: messages.every((m) => m.content[1].image === image),
+      warns: parts.filter((p) => p.type === "text" && p.text.includes("按原图坐标裁剪")).length };
+  });
+  expect(result.before).toBeGreaterThan(20 * 1024 * 1024);
+  expect(result.after).toBeLessThan(12 * 1024 * 1024);
+  expect(result.maxImage).toBeLessThanOrEqual(1500000);
+  expect(result.images).toBe(3);
+  expect(result.sources).toBe(3);
+  expect(result.warns).toBe(3);
+  expect(result.originalUnchanged).toBe(true);
+});

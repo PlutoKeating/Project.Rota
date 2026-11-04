@@ -1,3 +1,4 @@
+import { fitImagePayload } from "./image-payload";
 import {
   startVerification,
   confirmVerification,
@@ -141,7 +142,8 @@ async function requestTurn<T>(
   for (let retry = 0; ; retry++) {
     const start = Date.now();
     try {
-      return await api.post<T>(`/agent-imports/${job.id}/turn`, body, {
+      const transport = { ...(body as object), messages: await fitImagePayload(job.messages) };
+      return await api.post<T>(`/agent-imports/${job.id}/turn`, transport, {
         timeoutMs: 130000,
       });
     } catch (e) {
