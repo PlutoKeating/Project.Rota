@@ -1215,3 +1215,33 @@ test("exhausted provider quota pauses with saved progress instead of immediate r
   expect(result.status).toBe("paused");
   expect(result.metrics?.[0].attempts[0].code).toBe("quota_exhausted");
 });
+
+test("timed out model responses retry with smaller output and persist recovery across reload", async ({ page }) => {
+  const requests: any[] = [];
+  await routes(page, () => reply([]));
+  await page.route("**/api/agent-imports/*/turn", (route) => {
+    requests.push(route.request().postDataJSON());
+    return route.fulfill({ status: 502, json: {
+      error: "模型请求超时", code: "llm_error",
+      metrics: { requestId: "timeout-" + requests.length, durationMs: 1, purpose: "work",
+        attempts: [{ providerId: "test", model: "test", durationMs: 1, status: "error", code: "timeout" }] },
+    } });
+  });
+  await page.evaluate(async () => {
+    const r = await import("/src/client/agent-import/runtime.ts");
+    const job = await r.createJob("owner", [new File(["课程"], "资料.txt")]);
+    await new r.ImportRunner(job, () => {}).run();
+  });
+  expect(requests).toHaveLength(2);
+  expect(JSON.stringify(requests[0].messages)).not.toContain("最多保存 8 条");
+  expect(JSON.stringify(requests[1].messages)).toContain("最多保存 8 条");
+  await page.reload();
+  const saved = await page.evaluate(async () => {
+    const s = await import("/src/client/agent-import/store.ts");
+    const job = (await s.listJobs("owner"))[0];
+    return { status: job.status, messages: job.messages, people: job.draft.person.length };
+  });
+  expect(saved.status).toBe("paused");
+  expect(saved.people).toBe(0);
+  expect(saved.messages.filter((m: any) => String(m.content).includes("最多保存 8 条"))).toHaveLength(1);
+});

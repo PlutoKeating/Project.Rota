@@ -128,6 +128,16 @@ async function requestTurn<T>(
   body: unknown,
   update: () => void,
 ): Promise<T> {
+  const reduceTimedOutResponse = () => {
+    if (!job.metrics?.at(-1)?.attempts.some((a) => a.code === "timeout"))
+      return;
+    const guidance =
+      "上次模型响应超时，未返回的工具调用没有执行。请缩小本次响应：只处理一个人的一小部分，每次 save_timetable 最多保存 8 条 entries，后续用 mode=append 继续；不要丢弃其余课程或提前标记材料完成。note 仅保留必要原文周次、定位和疑点，不重复已有字段。复核每次只修正少量差异；交接摘要只写下一步和未决事项，不复述已保存的全部课表。";
+    if (job.messages.at(-1)?.content !== guidance)
+      job.messages.push({ role: "user", content: guidance });
+    body = { ...(body as object), messages: job.messages };
+  };
+  reduceTimedOutResponse();
   for (let retry = 0; ; retry++) {
     const start = Date.now();
     try {
@@ -157,6 +167,7 @@ async function requestTurn<T>(
         ],
       };
       recordMetrics(job, metrics);
+      reduceTimedOutResponse();
       job.checkpoint = {
         key: "request:" + metrics.requestId,
         kind: "request",
