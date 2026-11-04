@@ -1,7 +1,7 @@
 import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: ".",
-  testMatch: ["agent-import.spec.ts", "agent-harness.spec.ts"],
+  testMatch: ["agent-import.spec.ts", "agent-person.spec.ts"],
   workers: 1,
   reporter: "list",
   use: { baseURL: "http://127.0.0.1:5178" },

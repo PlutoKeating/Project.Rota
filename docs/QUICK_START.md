@@ -84,4 +84,8 @@ LINKML_BIN=.venv/bin/linkml bash scripts/gen.sh
 
 `pnpm gen` 输出当前领域参考 DDL 至 `schema/rota.current.sql`，不会覆盖 `migrations/0001_init.sql`；增量迁移需单独维护。运行时批次/锁表由增量 SQL 维护，与既有认证表策略一致。
 
-本机已登录 gcloud 时，可使用 `pnpm test:agent-vertex /private/input.zip /private/output /private/snapshot.json` 做隔离的 Vertex 真实模型验收；无需生产环境变量。可选项目/位置配置与凭据边界见 [Agent 导入说明](AGENT_IMPORT.md#本机-vertex-真实模型验收)。
+本机已登录 gcloud 时，可使用 `pnpm test:agent-vertex /private/input.zip /private/output /private/snapshot.json` 做隔离的 Vertex 真实模型验收；无需生产环境变量。可选项目/位置配置与凭据边界见 [Agent 导入说明](AGENT_IMPORT.md#真实模型隔离验收)。
+
+## 人员对象执行器升级
+
+新版将导入工具协议改为 discover/person/verify/reconcile，前端与 Worker 必须同步发布；既有0005数据库迁移继续适用，无新增Secret或运行依赖。旧版草稿和原件保留查看，重新选择原材料创建新版批次，不运行旧 pending 工具。发布前执行 `pnpm check && pnpm test:agent-browser && pnpm build`。`pnpm test:agent-person` 可单独检查对象并行、隔离与恢复。

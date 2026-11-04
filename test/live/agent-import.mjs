@@ -277,17 +277,25 @@ try {
   await page.goto(`http://127.0.0.1:${port}/#/imports`);
   let progressWrites = Promise.resolve();
   await page.exposeFunction("saveLiveProgress", (job) => {
-    job.images = job.images?.map(({ data, ...image }) => image);
-    job.messages = job.messages.map((m) => ({
-      ...m,
-      content: Array.isArray(m.content)
-        ? m.content.map((p) =>
-            p.type === "image"
-              ? { type: "text", text: "[图像保留在浏览器检查点]" }
-              : p,
-          )
-        : m.content,
-    }));
+    for (const agent of [
+      job.session?.coordinator,
+      ...Object.values(job.session?.people ?? {}).map((p) => p.agent),
+    ].filter(Boolean)) {
+      agent.pendingImages = (agent.pendingImages ?? []).map((p) => ({
+        path: p.path,
+        image: "[图像保留在浏览器检查点]",
+      }));
+      agent.messages = agent.messages.map((m) => ({
+        ...m,
+        content: Array.isArray(m.content)
+          ? m.content.map((p) =>
+              p.type === "image"
+                ? { type: "text", text: "[图像保留在浏览器检查点]" }
+                : p,
+            )
+          : m.content,
+      }));
+    }
     const json = JSON.stringify(job);
     progressWrites = progressWrites.then(() =>
       fs.writeFile(path.join(out, "progress.json"), json),
@@ -347,7 +355,7 @@ try {
       status: result.job.status,
       error: result.job.error,
       turns: result.job.turns,
-      observations: Object.keys(result.job.observations ?? {}).length,
+      personObjects: Object.keys(result.job.session?.people ?? {}).length,
       people: result.job.draft.person.length,
       courses: result.job.draft.timetable_entry.length,
       preparedEntries: Object.values(result.job.timetables ?? {}).reduce(

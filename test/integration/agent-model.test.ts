@@ -28,80 +28,52 @@ async function setup(kind: string, url: string) {
   } as unknown as Env;
 }
 describe("single-turn credential proxy", () => {
-  it.each(["checkpoint", "verify", "reconcile"])(
-    "offers scoped tools in %s mode",
+  it.each(["discover", "person", "verify", "reconcile"])(
+    "scopes the new object tools in %s mode",
     async (mode) => {
-      const env = await setup(
-        "openai_compatible",
-        "https://opencode.ai/zen/v1",
-      );
+      const env = await setup("openai_compatible", "https://model.example/v1");
       let sent: any;
       vi.stubGlobal(
         "fetch",
         vi.fn(async (_url, options) => {
           sent = JSON.parse(options.body);
-          return new Response(
-            JSON.stringify({
-              id: "r",
-              object: "chat.completion",
-              created: 1,
-              model: "test-model",
-              choices: [
-                {
-                  index: 0,
-                  message: {
-                    role: "assistant",
-                    content: null,
-                    tool_calls: [
-                      {
-                        id: "c",
-                        type: "function",
-                        function: { name: "read_timetables", arguments: "{}" },
+          return Response.json({
+            choices: [
+              {
+                index: 0,
+                message: {
+                  role: "assistant",
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: "c",
+                      type: "function",
+                      function: {
+                        name: "read_document",
+                        arguments: '{"path":"a.txt"}',
                       },
-                    ],
-                  },
-                  finish_reason: "tool_calls",
+                    },
+                  ],
                 },
-              ],
-              usage: {
-                prompt_tokens: 1,
-                completion_tokens: 1,
-                total_tokens: 2,
+                finish_reason: "tool_calls",
               },
-            }),
-            { headers: { "content-type": "application/json" } },
-          );
+            ],
+          });
         }),
       );
-      const result = await agentTurn(
+      await agentTurn(
         env,
-        {
-          messages: [{ role: "user", content: "保存成果" }],
-          context: "{}",
-          mode,
-        },
+        { messages: [{ role: "user", content: "整理" }], context: "{}", mode },
         "batch",
       );
       const names = sent.tools.map((t: any) => t.function.name);
-      if (mode !== "reconcile") expect(names).toContain("save_timetable");
-      if (mode === "checkpoint") {
-        expect(names).toContain("observe_material");
-        expect(names).not.toContain("view_image");
-        expect(names).not.toContain("ocr_image");
-        expect(names).not.toContain("read_document");
-      } else if (mode === "reconcile") {
-        expect(names).toContain("record_consistency_check");
-        expect(names).toContain("read_course_consistency");
-        expect(names).toContain("view_image");
-        expect(names).not.toContain("read_history");
-        expect(names).not.toContain("tree");
-      } else {
-        expect(names).toContain("view_image");
-        expect(names).toContain("confirm_timetable_check");
-        expect(names).not.toContain("read_notes");
-        expect(names).not.toContain("query_records");
-      }
-      expect(result.calls[0].name).toBe("read_timetables");
+      expect(names).not.toContain("change_record");
+      expect(names).not.toContain("save_handoff");
+      if (mode === "person" || mode === "verify") {
+        expect(names).toContain("write_person");
+        expect(names).not.toContain("dispatch_people");
+        expect(names).not.toContain("save_calendars");
+      } else expect(names).toContain("dispatch_people");
     },
   );
   it("returns genuine OpenAI tool calls, sends credentials only upstream, and replays tool results", async () => {
@@ -180,17 +152,17 @@ describe("single-turn credential proxy", () => {
     const body = JSON.parse(sent.body);
     expect(body.reasoning_effort).toBe("medium");
     expect(
-      body.tools.some((t: any) => t.function.name === "save_timetable"),
+      body.tools.some((t: any) => t.function.name === "dispatch_people"),
     ).toBe(true);
     expect(
       body.tools.some((t: any) => t.function.name === "change_record"),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       body.tools.some(
         (t: any) => t.function.name === "confirm_timetable_check",
       ),
     ).toBe(false);
-    expect(body.messages[0].content).toContain("没有固定的解析流程");
+    expect(body.messages[0].content).toContain("运行时以人员对象组织工作");
     await agentTurn(
       env,
       {
@@ -383,57 +355,7 @@ describe("native provider tool protocols", () => {
   });
 });
 
-describe("handoff and diagnostic boundaries", () => {
-  it("offers only the handoff tool during compaction", async () => {
-    const env = await setup("openai_compatible", "https://model.example/v1");
-    let sent: any;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (_url, options) => {
-        sent = JSON.parse(options.body);
-        return Response.json({
-          choices: [
-            {
-              index: 0,
-              message: {
-                role: "assistant",
-                content: null,
-                tool_calls: [
-                  {
-                    id: "h",
-                    type: "function",
-                    function: {
-                      name: "save_handoff",
-                      arguments: JSON.stringify({
-                        summary: "已保存明确事实与来源，尚未确定学期首周日期。",
-                        nextSteps: ["读取下一个人的材料"],
-                      }),
-                    },
-                  },
-                ],
-              },
-              finish_reason: "tool_calls",
-            },
-          ],
-        });
-      }),
-    );
-    const result = await agentTurn(
-      env,
-      {
-        messages: [{ role: "user", content: "需要交接" }],
-        context: "{}",
-        mode: "compact",
-      },
-      "batch",
-    );
-    expect(sent.tools.map((t: any) => t.function.name)).toEqual([
-      "save_handoff",
-    ]);
-    expect(result.calls[0].name).toBe("save_handoff");
-    expect(result.metrics.purpose).toBe("compact");
-    expect(result.metrics.requestId).toBeTruthy();
-  });
+describe("diagnostic boundaries", () => {
   it("reports upstream status without leaking upstream body or retrying the same provider", async () => {
     const env = await setup("openai_compatible", "https://model.example/v1");
     const network = vi.fn(
@@ -497,7 +419,7 @@ it("rejects malformed provider tool calls before persisting them or reporting mo
                 id: "call",
                 type: "function",
                 function: String(url).includes("broken.example")
-                  ? { name: "observe_material", arguments: malformed }
+                  ? { name: "write_person", arguments: malformed }
                   : { name: "tree", arguments: "{}" },
               },
             ],
@@ -522,11 +444,11 @@ it("rejects malformed provider tool calls before persisting them or reporting mo
 });
 
 it.each([
-  { mode: "work", name: "query_records", args: { entity: "departments" } },
+  { mode: "discover", name: "dispatch_people", args: { people: "invalid" } },
   {
     mode: "verify",
-    name: "note",
-    args: { key: "x", text: "must not execute" },
+    name: "tree",
+    args: { prefix: "", offset: 0 },
   },
 ])(
   "returns actionable feedback for JSON-valid $name mistakes instead of discarding the model turn",

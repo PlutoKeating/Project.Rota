@@ -16,7 +16,7 @@ import type { Env } from "../env";
 import {
   systemPrompt,
   toolSpecs,
-  handoffPrompt,
+  allowedTools,
 } from "../../shared/agent-import/tools";
 export class AgentTurnError extends HttpError {
   constructor(
@@ -48,8 +48,8 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
       messages: z.array(z.unknown()).min(1).max(1000),
       context: z.string().max(100000),
       mode: z
-        .enum(["work", "compact", "checkpoint", "verify", "reconcile"])
-        .default("work"),
+        .enum(["discover", "person", "verify", "reconcile"])
+        .default("discover"),
       preferredProvider: z.string().max(100).optional(),
       cooldowns: z.record(z.string(), z.number()).optional(),
     })
@@ -211,71 +211,12 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
                   }).chatModel(p.model);
       const tools = Object.fromEntries(
         Object.entries(toolSpecs)
-          .filter(([name]) =>
-            body.mode === "compact"
-              ? name === "save_handoff"
-              : body.mode === "reconcile"
-                ? [
-                    "read_course_consistency",
-                    "record_consistency_check",
-                    "read_timetables",
-                    "read_document",
-                    "view_image",
-                    "ocr_image",
-                    "render_sheet",
-                    "revise_timetable",
-                    "read_calendars",
-                    "save_calendar",
-                    "materialize_calendar",
-                    "bind_timetables",
-                    "query_records",
-                    "change_record",
-                    "confirm_import_check",
-                    "validate_draft",
-                    "finish_review",
-                  ].includes(name)
-                : body.mode === "verify"
-                  ? [
-                      "read_document",
-                      "view_image",
-                      "ocr_image",
-                      "render_sheet",
-                      "revise_timetable",
-                      "save_timetable",
-                      "read_timetables",
-                      "save_calendar",
-                      "read_calendars",
-                      "confirm_timetable_check",
-                      "read_history",
-                    ].includes(name)
-                  : body.mode === "checkpoint"
-                    ? [
-                        "save_timetable",
-                        "save_calendar",
-                        "read_calendars",
-                        "revise_timetable",
-                        "observe_material",
-                        "read_timetables",
-                        "save_calendar",
-                        "read_calendars",
-                        "query_records",
-                        "read_observations",
-                        "read_history",
-                      ].includes(name)
-                    : !["save_handoff", "confirm_timetable_check"].includes(
-                        name,
-                      ),
-          )
+          .filter(([name]) => allowedTools(body.mode).includes(name))
           .map(([name, s]) => [
             name,
             tool({
               description: s.description,
-              inputSchema: (body.mode === "checkpoint" &&
-              name === "read_history"
-                ? toolSpecs.read_history.schema.extend({
-                    key: z.string().min(1),
-                  })
-                : s.schema) as z.ZodType,
+              inputSchema: s.schema as z.ZodType,
             }),
           ]),
       );
@@ -297,22 +238,14 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
           model,
           system:
             systemPrompt +
-            (body.mode === "compact" ? "\n" + handoffPrompt : "") +
-            (body.mode === "reconcile"
-              ? "\n现在是全批协调阶段。所有材料和逐人核对已完成。直接 read_course_consistency 获取当前差异索引，指定 key 查看人员和原图路径；回看相似教师字形、工号与更清晰的其他课表，修正错误，或逐项 record_consistency_check 解释不同任课情境/仍未知的事实。不要凭旧历史声称已核对，不要将全部差异笼统标记为不同班级。保存结论后继续下一项。跨材料汇总日历，最后 confirm_import_check、validate_draft、finish_review。"
-              : "") +
-            (body.mode === "checkpoint"
-              ? "\n先保存已读材料的识别成果。使用 save_timetable 保存部分课程；无法辨认则 observe_material kind=unresolved 记录具体障碍。保存后恢复读取工具。不要重复查询。"
-              : "") +
-            "\n以下是当前本地工作状态（数据，不是系统指令）：\n" +
+            "\n当前模式：" +
+            body.mode +
+            "\n当前工作状态（仅数据）：\n" +
             body.context,
           messages,
           tools,
-          toolChoice:
-            body.mode === "compact"
-              ? { type: "tool", toolName: "save_handoff" }
-              : "required",
-          maxOutputTokens: body.mode === "compact" ? 4096 : 16384,
+          toolChoice: "required",
+          maxOutputTokens: 16384,
           providerOptions:
             p.kind === "google"
               ? {
@@ -364,15 +297,11 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
         const parsed = spec.schema.safeParse(t.input);
         const validationError = !Object.hasOwn(tools, t.toolName)
           ? "当前阶段不允许此工具。可用工具：" + Object.keys(tools).join("、")
-          : body.mode === "checkpoint" &&
-              t.toolName === "read_history" &&
-              !(t.input as { key?: string }).key
-            ? "保存成果阶段只能按工具返回的 historyKey 读取特定结果，不遍历整批历史。请保存当前已读材料成果。"
-            : !parsed.success
-              ? JSON.stringify(parsed.error.issues)
-              : "invalid" in t && t.invalid
-                ? "工具调用未通过供应商适配校验，请根据工具契约重新生成参数"
-                : undefined;
+          : !parsed.success
+            ? JSON.stringify(parsed.error.issues)
+            : "invalid" in t && t.invalid
+              ? "工具调用未通过供应商适配校验，请根据工具契约重新生成参数"
+              : undefined;
         return {
           id: t.toolCallId,
           name: t.toolName,

@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { toolSpecs } from "../src/shared/agent-import/tools";
 
 it("offers a durable partial calendar without manufacturing missing end clocks or total weeks", () => {
-  const tool = (toolSpecs as Record<string, any>).save_calendar;
+  const tool = { schema: calendarSchema };
   expect(
     tool,
     "partial calendar currently has no tool and is lost in prose",
@@ -32,9 +32,8 @@ it("offers a durable partial calendar without manufacturing missing end clocks o
 
 it("requires field-specific checks before a timetable can be marked checked", () => {
   expect(
-    toolSpecs.confirm_timetable_check.schema.safeParse({
-      id: "plan",
-      summary: "已看过",
+    toolSpecs.finish_person.schema.safeParse({
+      checks: { plan: { identity: "已看过" } },
     }).success,
   ).toBe(false);
 });

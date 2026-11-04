@@ -18,23 +18,6 @@ export function HistoryPanel({ job }: { job: Job }) {
   }
   return (
     <div className="space-y-4 text-xs text-slate-600 dark:text-slate-400">
-      {!!Object.keys(job.observations ?? {}).length && (
-        <details>
-          <summary className="cursor-pointer">
-            已保存的材料识别成果 · {Object.keys(job.observations ?? {}).length}{" "}
-            份
-          </summary>
-          {Object.entries(job.observations ?? {}).map(([path, o]) => (
-            <details className="mt-3" key={path}>
-              <summary className="cursor-pointer break-all">{path}</summary>
-              <p className="mt-2 whitespace-pre-wrap">{o.content}</p>
-              {o.unresolved.length > 0 && (
-                <p className="mt-2">待核对：{o.unresolved.join("；")}</p>
-              )}
-            </details>
-          ))}
-        </details>
-      )}
       {!!job.metrics?.length && (
         <details>
           <summary className="cursor-pointer">
@@ -44,14 +27,8 @@ export function HistoryPanel({ job }: { job: Job }) {
             {job.metrics.map((m) => (
               <li key={m.requestId}>
                 <p>
-                  {m.purpose === "compact"
-                    ? "交接"
-                    : m.purpose === "checkpoint"
-                      ? "保存成果"
-                      : m.purpose === "verify"
-                        ? "逐人核对"
-                        : "整理"}{" "}
-                  · {(m.durationMs / 1000).toFixed(1)} 秒 · 输入{" "}
+                  {m.actorId ?? "协调器"} · {m.purpose} ·{" "}
+                  {(m.durationMs / 1000).toFixed(1)} 秒 · 输入{" "}
                   {m.inputTokens ?? "未知"} / 输出 {m.outputTokens ?? "未知"}{" "}
                   tokens
                 </p>
@@ -74,7 +51,7 @@ export function HistoryPanel({ job }: { job: Job }) {
           if (e.currentTarget.open) void load(0);
         }}
       >
-        <summary className="cursor-pointer">完整工具与交接记录</summary>
+        <summary className="cursor-pointer">完整工具记录</summary>
         {rows.map((r) => (
           <details className="mt-3" key={r.key}>
             <summary className="cursor-pointer break-all">

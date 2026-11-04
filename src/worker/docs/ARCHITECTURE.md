@@ -29,24 +29,14 @@
 
 OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/go/v1/models` 的交集。官方目录不可达时保留上次验证过的型号；首次失败暂不提供 Go 新增选项并返回提示，不影响其他供应商或已有配置。目录缓存升级为 `llm:catalog:v2`，避免继续使用未校验的旧列表；无需数据库迁移。官方目录仅证明型号存在，不保证账号、地区和额度权限。
 
-## 浏览器 Agent 导入边界
+## 人员对象导入边界
 
-`api/agent-import.ts` 提供鉴权业务快照、批次、租约、原子提交；`llm/agent.ts` 用 AI SDK 单轮适配模型协议，浏览器决定后续工具调用，服务端不运行 Agent 循环。按全局模型顺序过滤明确不支持视觉/工具的配置并尝试可用项；保留 OpenCode 客户端与会话头，禁止重定向。密钥只用于上游请求。
+`api/agent-import.ts` 负责鉴权快照、批次、租约、原值校验和原子提交；`llm/agent.ts` 是 AI SDK 单轮凭据代理。协调器与 m 个人员子智能体都在浏览器执行，Worker 不解包、不识别文档、不运行 Agent 循环。
 
-正式提交校验完整差异、原值、引用和派班冲突，派生数据及审计同事务写入。普通 CRUD 也受租约触发器保护，租约过期可恢复。独立课表实际时间纳入 availability、人员周课表/可用时长和 scheduler，支持全局节次之外的占用。新增迁移 `0005_browser_agent_import.sql`，无新增环境变量。详见 `docs/AGENT_IMPORT.md` 与 `docs/API.md`。
+协议模式为 discover/person/verify/reconcile。协调器可分派人员和维护公共组织/日历；人员仅获得来源阅读、write_person 和 finish_person。Worker 返回调用及参数校验错误，由浏览器按对象权限执行；新旧协议不可混用，前后端同步发布。详见根目录 `docs/API.md` 与 `docs/AGENT_IMPORT.md`。
 
-Agent 代理在 `compact` 模式仅开放 `save_handoff`；普通模式不开放该工具。候选首轮按全局顺序，之后可复用本批成功配置并暂时跳过失败项。SDK 隐式重试关闭；每候选最多 90 秒、候选执行窗口最多 120 秒。诊断保留具体模型、错误类别与状态码，不返回原始上游错误正文。业务读取/租约/提交边界不变。
+保留 OpenAI Compatible、Responses、Google、Anthropic 与 Workers AI 适配；Responses 由 params.api 显式选择。供应商按能力、全局排序和本批成功模型选择；保留 OpenCode 会话头、禁止重定向、内联图像检查、超时与脱敏诊断。SDK 隐式重试关闭，每候选最多 90 秒、候选窗口最多 120 秒。真实材料只经已配置模型读取，密钥不下发。
 
-### 导入实际材料回归修正
+正式提交继续校验差异、引用、租约和排班冲突，派生数据与审核记录同事务写入。review 最大 2 MB 并纳入幂等摘要；已提交列表与报告检查批次归属，不保存原件或对话。仍要求既有 0005 迁移，本次无新增依赖、Secret 或业务迁移。
 
-单轮代理兼容适配器使用供应商命名空间 `compatible`，保留推理续接字段。校验发生在返回浏览器前，不能仅依赖 generateText 抛异常：AI SDK 可能把无效调用包装为结果。原生 Anthropic/Google 和 Workers AI 仍使用既有适配器。代理没有正式业务写权限；新增 save/read/bind_timetables 和 OCR 工具由浏览器执行。协议变更要求前后端同步发布。
-
-导入单轮代理支持 `work`、`compact`、`checkpoint`、`verify`、`reconcile`：保存成果阶段仅提供持久化与查询工具，暂不提供新文件读取工具，返回调用须属于当轮开放工具集合。逐人复核继续使用同一 Agent，通过 `revise_timetable` 增量纠正、`confirm_timetable_check` 记录来源回看与方案签名。
-
-`verify` 仅开放当前原件读取、课表查询/修订、核对确认及必要历史读取，不混入全局笔记、通用 CRUD 或新材料发现工具。
-
-导入代理新增日历证据保存/读取工具；verify/checkpoint 均开放，生成学期与全批确认只在 work 开放。Google 图像请求默认 HIGH 媒体分辨率（供应商 mediaResolution 可覆盖）。apply 可携带最大 2 MB 结构化 review，和业务修改原子存入 audit_event，纳入幂等摘要。新增已提交批次列表与 report 读取端点，均限制批次归属；不保存原件或模型对话。无新增依赖、环境变量或迁移。
-
-模型超时、输出截断或原生工具选择失败均记录明确错误类别；浏览器持久保存小批输出/工具格式纠正指令后最多重试一次。配置错误、额度耗尽及内容过滤不套用该恢复策略。私有 live 测试可用 `ROTA_CAPTURE_PROVIDER_RESPONSES=1` 保存 Vertex 候选响应到测试输出目录，用后按个人资料处理；生产不保存这些响应。
-
-单轮代理新增 `reconcile` 工具范围和阶段指引，允许同一 Agent 跨文件核对字段，关闭无关历史/目录检索。连接重置等明确临时传输错误分类为 `network_error`，诊断仅输出有限格式的错误类名和原因码，不输出原始错误信息或请求体。
+验证使用 `pnpm check`、`pnpm build`；浏览器对象协议由 `pnpm test:agent-browser` 覆盖。本地真实模型验收脚本隔离业务写入，历史旧架构成绩不代表新版准确率与耗时。

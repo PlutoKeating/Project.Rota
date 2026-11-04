@@ -229,38 +229,12 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 
 人员 GET/PATCH/POST 增加 `className`、`major`；学号继续可空。独立课表通过 `timetable_profile` / `timetable_entry` / 派生的 `timetable_event` 表达，在人员页单独管理，派班按实际时间检查。详细格式、材料读取和清理边界见 [AGENT_IMPORT.md](AGENT_IMPORT.md)。
 
-### Agent 单轮交接与诊断
+### 人员对象单轮协议
 
-`mode` 默认为 `work`，仅开放业务/材料工具；`compact` 只开放 `save_handoff`，由相同模型生成可恢复的交接摘要。服务端仍不执行任何业务工具。`preferredProvider` 仅在已启用且未明确禁用视觉/工具的候选中生效，用于复用本批成功模型；新批次按全局顺序开始。`cooldowns` 是供应商 ID 到到期毫秒时间的映射，只接受未来 5 分钟内的冷却提示，浏览器对失败供应商设置 2 分钟冷却。
+`POST /agent-imports/:id/turn` 接收 `{messages,context,mode?,preferredProvider?,cooldowns?}`。mode 为 discover（默认）、person、verify、reconcile；已删除 work/compact/checkpoint 模式。返回 `{messages,calls,model,providerId,metrics}`，合法 JSON 的工具参数错误返回 validationError，由浏览器反馈修正而不执行。
 
-`metrics` 包含 `requestId`、`purpose`、`durationMs`、可用的 `inputTokens/outputTokens`，以及各候选尝试的 `providerId/model/durationMs/status/code/httpStatus`。模型失败响应为 HTTP 502，除标准 `error` 外附 `metrics`；不回传供应商原始错误正文或密钥。网关未返回结构化诊断时，浏览器记录带 `client-` 前缀的本地编号，不冒充上游请求编号。
+协调器工具负责材料分派、公共组织/日历和最终核对；人员模式仅开放本人来源阅读、write_person 与 finish_person。具体 schema 以 `src/shared/agent-import/tools.ts` 和 `person-workspace.ts` 为准。工具只写本地对象，正式写入继续使用上述 apply 事务接口。新旧前端/Worker 不能混用工具协议，须同步部署。
 
-每供应商尝试最多 90 秒，单次模型请求的候选执行窗口最多 120 秒，SDK 不对同一供应商隐式重试。浏览器请求截止 130 秒，对可重试网络或临时上游故障默认延迟 2 秒重试一次；普通 429 遵循不超过 30 秒的 Retry-After，更长等待及已知额度耗尽保存进度后暂停。模型超时会先持久化小批输出引导：单人每次最多保存 8 条课程，后续追加；刷新恢复沿用该引导，避免原样重复超大响应。业务提交不随模型重试，仍仅由操作员触发。503 的通用提示不推断数据库迁移状态。
+模型凭据仍仅在 Worker。每候选最多90秒，候选窗口120秒；浏览器截止130秒，SDK隐式重试关闭。metrics 保存 requestId、purpose、durationMs、token用量与逐供应商尝试状态；浏览器另标记 actorId。网络错误独立退避，额度耗尽不立即重试。原始上游错误和密钥不返回。
 
-### 导入实际材料回归修正
-
-浏览器工具协议新增 `save_timetable`（replace/append）、`read_timetables`、`bind_timetables` 和 `ocr_image`；这些工具仅操作本地材料与隔离草稿。`observe_material` 需要明确 `kind`，课表观察不能代替结构化保存。正式 apply 的事务语义不变。单轮响应在返回前验证完整工具名称、参数和调用 ID，拒绝损坏 JSON、未知工具、重复调用 ID 及截断输出并尝试后续供应商；可修正的参数错误以 validationError 反馈，不执行调用。metrics 额外提供可用的 `reasoningTokens` 与 `finishReason`。无数据库迁移，前端与 Worker 须同步发布。
-
-导入单轮代理支持 `work`、`compact`、`checkpoint`、`verify`、`reconcile`：保存成果阶段仅提供持久化与查询工具，暂不提供新文件读取工具，返回调用须属于当轮开放工具集合。逐人复核继续使用同一 Agent，通过 `revise_timetable` 增量纠正、`confirm_timetable_check` 记录来源回看与方案签名。
-
-`verify` 仅开放当前原件读取、课表查询/修订、核对确认及必要历史读取，不混入全局笔记、通用 CRUD 或新材料发现工具。
-
-单轮返回的调用可含 `validationError`：表示合法 JSON 参数不符合契约或不属于当轮工具范围。浏览器只保存错误反馈，禁止执行该调用，由 Agent 在下一轮纠正。
-
-本地 `render_sheet` 工具支持 sheet/page/range 的表格网格图片。文件读取的 coverage 为基础坐标范围，供本地完整性校验；不会作为业务推断。
-
-模型 params.api="responses" 显式选择 OpenAI Responses 协议，默认 Chat Completions 不变；连接测试与导入代理均支持。导入 metrics.attempts 可返回 code=quota_exhausted 与 retryAfterMs，不回传上游错误正文或凭据。
-
-### 导入日历与审核记录补充
-
-浏览器工具新增 `save_calendar/read_calendars/materialize_calendar/confirm_import_check`。日历允许部分日期与钟点，生成正式结构草稿要求日历完整；`term_id` 可复用已有学期。逐人 `confirm_timetable_check` 必须提供 `checks`，包括 identity、courses_and_times、teachers_and_locations、calendar、coverage、coverage_reason、checked_entries。`finish_review` 返回 `readyForReview` 与 `readyToApply`，二者含义不同。
-
-`save_timetable/revise_timetable` 课程条目允许 `no_fixed_time`；true 仅表示原件明确没有固定时段，不能同时提供固定星期/节次。绑定后生成此人独立 course/enrollment，不产生占用；未知时段仍会阻止正式导入。
-
-`POST /api/agent-imports/:id/apply` 可携带 `review`：`{version:1,timetables:[],calendars:[],checks:{},unresolved:[]}`，结构由共享 Zod 契约校验，JSON 最大 2 MB。审核记录与业务数据原子写入既有 audit_event，纳入幂等摘要；同批同业务变化但审核记录不同的重复提交返回 409。没有原件、模型对话或密钥。
-
-`GET /api/agent-imports` 返回当前操作员最近 20 条已提交批次 `{items:[{id,summary,applied_at}]}`；`GET /api/agent-imports/:id/report` 返回 `{review:...|null}`，旧批次无记录时 null。两接口均沿用批次归属校验。
-
-`POST /agent-imports/:id/turn` 的 `mode` 新增 `reconcile`：开放跨课表差异读取/结论、原件回看、方案修订、日历和最终审核工具，关闭目录/历史遍历。`review` 审核报告新增可选 `consistency_review`（默认空数组）：每项 `key`、`resolution`（`different_context` / `unresolved`）、`explanation`。模型请求诊断增加脱敏 `errorType` / `causeCode`；明确临时连接错误分类 `network_error`，使用独立的最多三次退避重试预算；模型超时/无效输出及其他短暂代理失败仍最多修正重试一次。
-
-`record_consistency_check` 必须提供 `checked_variants: [{timetable_id, teacher}]`，与当前差异逐项匹配。确认 `different_context` 还要求本轮全批复核已回看相关来源；`unresolved` 明确保留待人工确认。旧审核报告缺省此字段为空数组，不表示已经执行新版核对。
+人员查询和编辑支持 className、major。apply 可携带 `review: {version:1,timetables,calendars,checks,consistency_review?,unresolved}`，最大2MB，与业务数据同事务保存并纳入幂等摘要。`GET /agent-imports` 返回本人最近20个已提交批次；`GET /agent-imports/:id/report` 返回 review 或 null，仍检查批次归属。审核报告不包含原件、模型对话和凭据。

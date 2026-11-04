@@ -70,7 +70,10 @@ export function CalendarReview({
           <Button
             size="sm"
             variant="ghost"
-            disabled={["running", "applied", "cancelled"].includes(job.status)}
+            disabled={
+              !job.session ||
+              ["running", "applied", "cancelled"].includes(job.status)
+            }
             onClick={() => {
               setEditing(structuredClone(c));
               setError("");

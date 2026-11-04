@@ -3,236 +3,6 @@ import JSZip from "jszip";
 import { emptySnapshot, mutate } from "../../src/shared/agent-import/model";
 const origin = "http://127.0.0.1:5178";
 const base = emptySnapshot();
-function calls() {
-  const evidence = [
-    {
-      source: "说明.txt",
-      locator: "全文",
-      explanation: "文件内容明确记录",
-      inferred: false,
-    },
-  ];
-  const change = (entity: string, id: string, data: unknown) => ({
-    name: "change_record",
-    args: { entity, action: "create", id, data, evidence },
-  });
-  return [
-    { name: "tree", args: {} },
-    { name: "read_document", args: { path: "说明.txt" } },
-    change("organization", "org", { name: "新媒体" }),
-    change("person", "p", { full_name: "张同学", class_name: "会计2601" }),
-    change("membership", "m", { person_id: "p", org_id: "org" }),
-    change("term", "term", {
-      name: "2026 秋",
-      start_date: "2026-09-07",
-      week_count: 2,
-    }),
-    change("class_period", "period", {
-      term_id: "term",
-      period_index: 1,
-      start_time: "08:00",
-      end_time: "08:45",
-    }),
-    change("timetable_profile", "profile", {
-      term_id: "term",
-      name: "校内作息",
-      periods: '[{"index":1,"start":"08:00","end":"08:45"}]',
-    }),
-    {
-      name: "save_timetable",
-      args: {
-        id: "plan",
-        person: { id: "p", full_name: "张同学", class_name: "会计2601" },
-        organization_ids: ["org"],
-        term_name: "2026 秋",
-        term_id: "term",
-        profile_id: "profile",
-        entries: [
-          {
-            name: "高等数学",
-            weekday: 1,
-            period_from: 1,
-            period_to: 1,
-            weeks: [1, 2],
-          },
-        ],
-        sources: evidence,
-        completed_sources: ["说明.txt"],
-        unresolved: [],
-      },
-    },
-    {
-      name: "confirm_import_check",
-      args: {
-        calendar_review: "日期作息均明确且已绑定",
-        identity_review: "身份与部门无冲突",
-        unresolved: [],
-      },
-    },
-    { name: "validate_draft", args: {} },
-    {
-      name: "finish_review",
-      args: {
-        summary: "已整理新媒体人员和课表，请核对后导入。",
-        unresolved: [],
-      },
-    },
-  ].map((c, i) => ({ ...c, id: "tool-" + i }));
-}
-test("browser Agent reads files, stages relational preview and applies only after review", async ({
-  page,
-}) => {
-  let applies = 0,
-    turns = 0;
-  await page.route("**/api/**", async (route) => {
-    const path = new URL(route.request().url()).pathname;
-    let data: unknown = { items: [] };
-    if (path === "/api/auth/me")
-      data = {
-        authenticated: true,
-        user: { id: "owner", name: "测试管理员", role: "owner" },
-      };
-    else if (path === "/api/agent-imports/snapshot")
-      data = { data: base, version: 0 };
-    else if (path === "/api/agent-imports") data = { id: "batch-browser" };
-    else if (path.endsWith("/turn")) {
-      turns++;
-      const context = JSON.parse(route.request().postDataJSON().context);
-      const list = context.verification
-        ? [
-            {
-              id: "verify-read",
-              name: "read_document",
-              args: { path: "说明.txt" },
-            },
-            {
-              id: "verify-confirm",
-              name: "confirm_timetable_check",
-              args: {
-                id: "plan",
-                summary: "已逐项核对合成来源",
-                checks: {
-                  identity: "一致",
-                  courses_and_times: "一致",
-                  teachers_and_locations: "未提供",
-                  calendar: "日期作息完整",
-                  coverage: "complete",
-                  coverage_reason: "合成材料完整",
-                  checked_entries: [0],
-                },
-              },
-            },
-          ]
-        : turns > 1
-          ? calls().slice(-3)
-          : calls();
-      data = {
-        messages: [
-          {
-            role: "assistant",
-            content: list.map((c) => ({
-              type: "tool-call",
-              toolCallId: c.id,
-              toolName: c.name,
-              input: c.args,
-            })),
-          },
-        ],
-        calls: list,
-        text: "正在核对材料",
-        model: "测试模型",
-      };
-    } else if (path.endsWith("/apply")) {
-      applies++;
-      data = { ok: true };
-    } else if (path.endsWith("/lease"))
-      data = { expiresAt: Date.now() + 180000 };
-    await route.fulfill({ json: data });
-  });
-  await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.goto(origin + "/#/imports");
-  await expect(
-    page.getByRole("heading", { name: "拖入一个压缩包，或选择文件" }),
-  ).toBeVisible();
-  await page.screenshot({
-    path: ".impeccable/review/import-desktop.png",
-    fullPage: true,
-  });
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.screenshot({
-    path: ".impeccable/review/import-mobile.png",
-    fullPage: true,
-  });
-  await expect(page.locator("body")).toHaveJSProperty("scrollWidth", 390);
-  await page.locator("input[type=file]").setInputFiles({
-    name: "说明.txt",
-    mimeType: "text/plain",
-    buffer: Buffer.from(
-      "新媒体 张同学 会计2601；2026 秋，首周2026-09-07，2周。周一08:00–08:45高等数学。",
-    ),
-  });
-  await expect(
-    page.getByRole("button", { name: "审核无误，导入全部选中内容" }),
-  ).toBeVisible({ timeout: 30000 });
-  expect(applies).toBe(0);
-  expect(turns).toBe(3);
-  await page.getByText("张同学", { exact: false }).first().click();
-  await expect(
-    page.getByText("高等数学", { exact: true }).first(),
-  ).toBeVisible();
-  await page
-    .getByText("高等数学", { exact: true })
-    .first()
-    .locator("..")
-    .getByRole("button", { name: "修改", exact: true })
-    .click();
-  await page.getByLabel("课程名称", { exact: true }).fill("高等数学（复核）");
-  await page.getByRole("button", { name: "保存修改", exact: true }).click();
-  await expect(
-    page.getByText("高等数学（复核）", { exact: true }).first(),
-  ).toBeVisible();
-  const edited = await page.evaluate(async () => {
-    const s = await import("/src/client/agent-import/store.ts");
-    const j = (await s.listJobs("owner"))[0];
-    return {
-      proposal: j.timetables?.plan.entries[0].name,
-      formal: j.draft.timetable_entry[0].name,
-    };
-  });
-  expect(edited).toEqual({
-    proposal: "高等数学（复核）",
-    formal: "高等数学（复核）",
-  });
-  const include = page.getByRole("checkbox", { name: "包含此人的变更" });
-  await include.uncheck();
-  await expect(include).toBeVisible();
-  await expect(include).not.toBeChecked();
-  await include.check();
-  await expect(include).toBeChecked();
-  await page.screenshot({
-    path: ".impeccable/review/import-review-mobile.png",
-    fullPage: true,
-  });
-  await page.reload();
-  await page.getByText("本机最近导入", { exact: false }).click();
-  await page.getByRole("button", { name: /说明.txt/ }).click();
-  await expect(
-    page.getByRole("button", { name: "审核无误，导入全部选中内容" }),
-  ).toBeVisible();
-  expect(turns).toBe(3);
-  await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.screenshot({
-    path: ".impeccable/review/import-review-desktop.png",
-    fullPage: true,
-  });
-  await page
-    .getByRole("button", { name: "审核无误，导入全部选中内容" })
-    .click();
-  await expect(
-    page.getByText("已导入，材料将在完成后 8 小时清理"),
-  ).toBeVisible();
-  expect(applies).toBe(1);
-});
 test("real browser worker unpacks nested archives and reads spreadsheets and documents", async ({
   page,
 }) => {
@@ -410,10 +180,25 @@ test("personal course editor exposes validation failures inside its dialog", asy
   page,
 }) => {
   const snapshot = emptySnapshot();
-  for (const call of calls().filter((c) => c.name === "change_record")) {
-    const args = call.args as any;
-    mutate(snapshot, args.entity, "create", args.data, args.id);
-  }
+  mutate(snapshot, "person", "create", { full_name: "张同学" }, "p");
+  mutate(
+    snapshot,
+    "term",
+    "create",
+    { name: "秋", start_date: "2026-09-07", week_count: 2 },
+    "term",
+  );
+  mutate(
+    snapshot,
+    "timetable_profile",
+    "create",
+    {
+      term_id: "term",
+      name: "作息",
+      periods: '[{"index":1,"start":"08:00","end":"08:45"}]',
+    },
+    "profile",
+  );
   mutate(
     snapshot,
     "timetable_entry",
@@ -576,3 +361,203 @@ test("calendar review shows known clocks, accepts missing fields, and creates a 
     courses: 1,
   });
 });
+
+test("reads GBK HTML exported under an xls extension without corrupting Chinese identities", async ({
+  page,
+}) => {
+  await documentRoutes(page);
+  const result = await page.evaluate(async () => {
+    const s = await import("/src/client/agent-import/store.ts"),
+      d = await import("/src/client/agent-import/documents.ts");
+    const before = new TextEncoder().encode(
+      '<html><head><meta http-equiv="Content-Type" content="text/html; charset=GBK"></head><body><table><tr><td>',
+    );
+    // GBK encoding of 姓名：测试甲, independent of the private real-data fixture.
+    const name = new Uint8Array([
+      0xd0, 0xd5, 0xc3, 0xfb, 0xa3, 0xba, 0xb2, 0xe2, 0xca, 0xd4, 0xbc, 0xd7,
+    ]);
+    const after = new TextEncoder().encode(
+      "</td></tr></table><p>Outside &amp; table note</p><script>DO_NOT_READ</script></body></html>",
+    );
+    await s.putMaterial("gbk-test", {
+      path: "export.xls",
+      blob: new Blob([before, name, after]),
+      origin: "synthetic",
+    });
+    return d.documentTool({ id: "gbk-test" } as any, "read_document", {
+      path: "export.xls",
+    });
+  });
+  expect(JSON.stringify(result)).toContain("姓名：测试甲");
+  expect((result.result as any).content.outsideTables.text).toContain(
+    "Outside & table note",
+  );
+  expect((result.result as any).content.outsideTables.text).not.toContain(
+    "DO_NOT_READ",
+  );
+});
+
+test("OCR reads local pixels without sending materials to an external service", async ({
+  page,
+}) => {
+  await documentRoutes(page);
+  const external: string[] = [];
+  page.on("request", (r) => {
+    const url = new URL(r.url());
+    if (url.protocol.startsWith("http") && url.hostname !== "127.0.0.1")
+      external.push(url.origin);
+  });
+  const result = await page.evaluate(async () => {
+    const { putMaterial } = await import("/src/client/agent-import/store.ts");
+    const { documentTool } = await import(
+      "/src/client/agent-import/documents.ts"
+    );
+    const canvas = document.createElement("canvas");
+    canvas.width = 700;
+    canvas.height = 150;
+    const ctx = canvas.getContext("2d")!;
+    ctx.fillStyle = "white";
+    ctx.fillRect(0, 0, 700, 150);
+    ctx.fillStyle = "black";
+    ctx.font = "48px sans-serif";
+    ctx.fillText("ALPHA 12345", 30, 95);
+    const blob = await new Promise<Blob>((resolve) =>
+      canvas.toBlob((b) => resolve(b!), "image/png"),
+    );
+    await putMaterial("ocr-test", {
+      path: "letters.png",
+      origin: "synthetic",
+      blob,
+    });
+    return (
+      await documentTool({ id: "ocr-test" } as any, "ocr_image", {
+        path: "letters.png",
+      })
+    ).result as any;
+  });
+  expect(result.ocr.text).toContain("12345");
+  expect(result.ocr.lines.length).toBeGreaterThan(0);
+  expect(external).toEqual([]);
+});
+
+test("image crops clip the image edge and explain invalid coordinates", async ({
+  page,
+}) => {
+  await documentRoutes(page);
+  const result = await page.evaluate(async () => {
+    const s = await import("/src/client/agent-import/store.ts"),
+      d = await import("/src/client/agent-import/documents.ts");
+    const canvas = document.createElement("canvas");
+    canvas.width = 20;
+    canvas.height = 10;
+    const blob = await new Promise<Blob>((resolve) =>
+      canvas.toBlob((b) => resolve(b!)),
+    );
+    await s.putMaterial("crop", {
+      path: "edge.png",
+      origin: "synthetic",
+      blob,
+    });
+    const clipped = await d.documentTool({ id: "crop" } as any, "view_image", {
+      path: "edge.png",
+      crop: { x: 18, y: 8, width: 10, height: 10 },
+    });
+    let error = "";
+    try {
+      await d.documentTool({ id: "crop" } as any, "view_image", {
+        path: "edge.png",
+        crop: { x: 21, y: 8, width: 10, height: 10 },
+      });
+    } catch (e) {
+      error = (e as Error).message;
+    }
+    let pageError = "";
+    try {
+      await d.documentTool({ id: "crop" } as any, "view_image", {
+        path: "edge.png",
+        page: 2,
+      });
+    } catch (e) {
+      pageError = (e as Error).message;
+    }
+    return { clipped: clipped.result, error, pageError };
+  });
+  expect(result.clipped).toMatchObject({
+    crop: { x: 18, y: 8, width: 2, height: 2 },
+    clipped: true,
+    renderedWidth: 2,
+    renderedHeight: 2,
+  });
+  expect(result.error).toContain("20 × 10");
+  expect(result.pageError).toContain("单张图片只有 page=1");
+});
+
+test("large restored image context fits the transport budget without dropping evidence", async ({
+  page,
+}) => {
+  await documentRoutes(page);
+  const result = await page.evaluate(async () => {
+    const { fitImagePayload } = await import(
+      "/src/client/agent-import/image-payload.ts"
+    );
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 2048;
+    const ctx = canvas.getContext("2d")!;
+    const pixels = ctx.createImageData(2048, 2048);
+    let seed = 123456;
+    for (let i = 0; i < pixels.data.length; i += 4) {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      pixels.data[i] = seed & 255;
+      pixels.data[i + 1] = (seed >>> 8) & 255;
+      pixels.data[i + 2] = (seed >>> 16) & 255;
+      pixels.data[i + 3] = 255;
+    }
+    ctx.putImageData(pixels, 0, 0);
+    const image = canvas.toDataURL("image/png");
+    const messages = Array.from({ length: 3 }, (_, i) => ({
+      role: "user" as const,
+      content: [
+        { type: "text" as const, text: "source:" + i },
+        { type: "image" as const, image },
+      ],
+    }));
+    const fitted = await fitImagePayload(messages);
+    const parts = fitted.flatMap((m) =>
+      Array.isArray(m.content) ? m.content : [],
+    );
+    const images = parts.filter((p) => p.type === "image");
+    return {
+      before: JSON.stringify(messages).length,
+      after: JSON.stringify(fitted).length,
+      images: images.length,
+      maxImage: Math.max(...images.map((p) => String(p.image).length)),
+      sources: parts.filter(
+        (p) => p.type === "text" && p.text.startsWith("source:"),
+      ).length,
+      originalUnchanged: messages.every((m) => m.content[1].image === image),
+      warns: parts.filter(
+        (p) => p.type === "text" && p.text.includes("按原图坐标裁剪"),
+      ).length,
+    };
+  });
+  expect(result.before).toBeGreaterThan(20 * 1024 * 1024);
+  expect(result.after).toBeLessThan(12 * 1024 * 1024);
+  expect(result.maxImage).toBeLessThanOrEqual(1500000);
+  expect(result.images).toBe(3);
+  expect(result.sources).toBe(3);
+  expect(result.warns).toBe(3);
+  expect(result.originalUnchanged).toBe(true);
+});
+
+async function documentRoutes(page: import("@playwright/test").Page) {
+  await page.route("**/api/**", (route) =>
+    route.fulfill({
+      json: {
+        authenticated: true,
+        user: { id: "owner", role: "owner", name: "测试" },
+        items: [],
+      },
+    }),
+  );
+  await page.goto("/#/imports");
+}

@@ -1,0 +1,223 @@
+import { describe, expect, it } from "vitest";
+import {
+  emptyAgent,
+  emptySession,
+  matchPerson,
+  personTableSchema,
+} from "../src/shared/agent-import/person-workspace";
+import {
+  emptySnapshot,
+  mutate as rawMutate,
+  materialize,
+  validateTransition,
+} from "../src/shared/agent-import/model";
+import { projectPeople } from "../src/client/agent-import/projection";
+import type { Job } from "../src/client/agent-import/state";
+const mutate: typeof rawMutate = (s, e, a, data, id) =>
+  rawMutate(s, e, a, data, id ?? String(data.id));
+const sources = [
+  {
+    source: "a.txt",
+    locator: "全文",
+    explanation: "合成来源",
+    inferred: false,
+  },
+];
+function jobFixture(): Job {
+  const base = emptySnapshot();
+  mutate(base, "person", "create", {
+    id: "existing",
+    full_name: "甲",
+    student_no: "001",
+    class_name: "一班",
+    email: "kept@example.com",
+  });
+  mutate(base, "person", "create", { id: "other", full_name: "乙" });
+  mutate(base, "term", "create", {
+    id: "term",
+    name: "秋",
+    start_date: "2026-08-31",
+    week_count: 3,
+  });
+  mutate(base, "timetable_profile", "create", {
+    id: "old-profile",
+    term_id: "term",
+    name: "旧作息",
+    periods: '[{"index":1,"start":"08:00","end":"08:45"}]',
+  });
+  for (const id of ["existing", "other"])
+    mutate(base, "timetable_entry", "create", {
+      id: "old-" + id,
+      person_id: id,
+      term_id: "term",
+      profile_id: "old-profile",
+      name: "旧课",
+      weekday: 1,
+      period_from: 1,
+      period_to: 1,
+      weeks: "[1,2,3]",
+    });
+  const session = emptySession();
+  const table = personTableSchema.parse({
+    key: "fall",
+    term_name: "秋",
+    calendar_id: "cal",
+    entries: [
+      { name: "新课", weekday: 2, period_from: 1, period_to: 1, weeks: [1] },
+    ],
+    sources,
+  });
+  session.people.a = {
+    key: "a",
+    label: "甲",
+    id: "workspace",
+    personId: "new-id",
+    sources: ["a.txt"],
+    instruction: "",
+    organization_ids: [],
+    information: { full_name: "甲", student_no: "001", class_name: "一班" },
+    timetables: { fall: table },
+    calendarEvidence: [],
+    unresolved: [],
+    status: "done",
+    version: 1,
+    agent: emptyAgent(),
+    checks: {},
+  };
+  return {
+    id: "batch",
+    owner: "owner",
+    title: "测试",
+    createdAt: 1,
+    expiresAt: null,
+    base,
+    draft: structuredClone(base),
+    session,
+    calendars: {
+      cal: {
+        id: "cal",
+        name: "秋",
+        term_id: "term",
+        start_date: "2026-08-31",
+        week_count: 3,
+        minimum_weeks: 1,
+        periods: [{ index: 1, start: "08:00", end: "08:45" }],
+        timetable_ids: [],
+        sources,
+        unresolved: [],
+      },
+    },
+    status: "paused",
+    notes: {},
+    evidence: {},
+    log: [],
+    summary: "",
+    unresolved: [],
+    revision: 0,
+    validatedRevision: -1,
+    turns: 0,
+    model: "",
+    excluded: [],
+  };
+}
+describe("person object projection", () => {
+  it("matches A, preserves existing information, replaces only the person's term B", () => {
+    const job = jobFixture();
+    projectPeople(job);
+    expect(
+      [...job.draft.person].sort((a, b) => a.id.localeCompare(b.id)),
+    ).toEqual([...job.base.person].sort((a, b) => a.id.localeCompare(b.id)));
+    expect(job.draft.timetable_entry.map((e) => e.id)).toEqual([
+      "old-other",
+      "workspace:fall:0",
+    ]);
+    expect(
+      validateTransition(job.base, materialize(job.draft, job.base)),
+    ).toEqual([]);
+  });
+  it("partial-week material preserves all other teaching weeks and people", () => {
+    const job = jobFixture();
+    job.session!.people.a.timetables.fall.replace_weeks = [1];
+    projectPeople(job);
+    expect(
+      job.draft.timetable_entry.find((e) => e.id === "old-existing")?.weeks,
+    ).toBe("[2,3]");
+    expect(
+      job.draft.timetable_entry.find((e) => e.id === "old-other")?.weeks,
+    ).toBe("[1,2,3]");
+  });
+  it("missing timetable never wipes the existing schedule", () => {
+    const job = jobFixture();
+    job.session!.people.a.timetables.fall.entries = [];
+    projectPeople(job);
+    expect(job.draft.timetable_entry).toEqual(job.base.timetable_entry);
+    expect(job.timetables!["workspace:fall"].bound).toBe(false);
+  });
+  it("exclusion preserves the original person's schedule", () => {
+    const job = jobFixture();
+    job.excluded = ["existing"];
+    projectPeople(job);
+    expect(
+      job.draft.timetable_entry.find((e) => e.id === "old-existing"),
+    ).toEqual(job.base.timetable_entry.find((e) => e.id === "old-existing"));
+  });
+  it("rejects out-of-scope weeks atomically", () => {
+    const job = jobFixture();
+    job.session!.people.a.timetables.fall.replace_weeks = [2];
+    expect(() => projectPeople(job)).toThrow("覆盖范围");
+    expect(job.draft).toEqual(job.base);
+  });
+  it("does not silently match a same-name stranger or conflicting student identity", () => {
+    const job = jobFixture();
+    expect(
+      matchPerson({ full_name: "甲" }, job.base.person).id,
+    ).toBeUndefined();
+    expect(
+      matchPerson({ full_name: "另外一人", student_no: "001" }, job.base.person)
+        .reason,
+    ).toContain("冲突");
+    expect(
+      matchPerson({ full_name: "甲", student_no: "002" }, job.base.person)
+        .candidates,
+    ).toEqual([]);
+  });
+  it("stages new A when no existing identity matches", () => {
+    const job = jobFixture();
+    job.session!.people.a.information = { full_name: "丙", student_no: "003" };
+    projectPeople(job);
+    expect(job.draft.person.find((p) => p.id === "new-id")?.full_name).toBe(
+      "丙",
+    );
+    expect(
+      job.draft.timetable_entry.find((e) => e.id === "old-existing"),
+    ).toBeDefined();
+  });
+  it("rejects two workspaces for the same person before publishing any draft", () => {
+    const job = jobFixture();
+    job.session!.people.b = {
+      ...structuredClone(job.session!.people.a),
+      key: "b",
+      id: "second",
+    };
+    expect(() => projectPeople(job)).toThrow("重复人员");
+    expect(job.draft).toEqual(job.base);
+  });
+  it("complete replacement removes only this person's legacy enrollments, not shared courses", () => {
+    const job = jobFixture();
+    mutate(job.base, "course", "create", {
+      id: "shared",
+      term_id: "term",
+      name: "共享课",
+    });
+    for (const p of ["existing", "other"])
+      mutate(job.base, "enrollment", "create", {
+        id: "e-" + p,
+        person_id: p,
+        course_id: "shared",
+        term_id: "term",
+      });
+    projectPeople(job);
+    expect(job.draft.enrollment.map((e) => e.id)).toEqual(["e-other"]);
+    expect(job.draft.course).toEqual(job.base.course);
+  });
+});

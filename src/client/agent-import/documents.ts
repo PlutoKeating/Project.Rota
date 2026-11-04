@@ -55,7 +55,9 @@ async function bitmap(blob: Blob, args: Args) {
       };
     } else {
       if ((args.page ?? 1) !== 1)
-        throw Error("单张图片只有 page=1；图片内的多页排版请用 crop 坐标查看，不存在独立的 page=2");
+        throw Error(
+          "单张图片只有 page=1；图片内的多页排版请用 crop 坐标查看，不存在独立的 page=2",
+        );
       pages = 1;
       const img = await createImageBitmap(blob);
       source = img;
@@ -126,7 +128,7 @@ async function bitmap(blob: Blob, args: Args) {
     cleanup();
   }
 }
-export async function documentTool(
+async function documentToolImpl(
   job: Job,
   action: string,
   args: Args,
@@ -152,7 +154,7 @@ export async function documentTool(
       throw Error(
         "表格请用 render_sheet 的 range 按单元格区域放大，不使用图片像素 crop",
       );
-    const value = await documentTool(job, "read_document", args);
+    const value = await documentToolImpl(job, "read_document", args);
     const content = (value.result as { content?: any }).content;
     if (!content?.cells || !content?.range)
       throw Error("此文档不是可渲染的工作表，请用 read_document 读取");
@@ -299,4 +301,17 @@ export async function documentTool(
       derivedFiles: value.assets.map((a) => file.path + "!/" + a.path),
     },
   };
+}
+
+let documentQueue: Promise<unknown> = Promise.resolve();
+export function documentTool(
+  job: Job,
+  action: string,
+  args: Args,
+): Promise<DocumentResult> {
+  const next = documentQueue
+    .catch(() => {})
+    .then(() => documentToolImpl(job, action, args));
+  documentQueue = next;
+  return next;
 }

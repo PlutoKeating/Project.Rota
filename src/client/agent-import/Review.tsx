@@ -174,34 +174,51 @@ export function Review({
   };
   const evidence = (entity: Entity, id: string) =>
     evidenceList(job.evidence[entity + ":" + id]);
-  const editButton = (entity: Entity, row: Row) => (
-    <Button
-      size="sm"
-      variant="ghost"
-      disabled={["running", "applied", "cancelled"].includes(job.status)}
-      onClick={() => {
-        if (entity === "timetable_entry") {
-          const plan = Object.values(job.timetables ?? {}).find((t) =>
-            t.entryIds.includes(row.id),
-          );
-          const index =
-            plan?.entries.findIndex((_, i) => `${plan.id}:${i}` === row.id) ??
-            -1;
-          if (plan && index >= 0) {
-            setProposalEditor({
-              id: plan.id,
-              index,
-              entry: plan.entries[index],
-            });
-            return;
-          }
+  const editButton = (entity: Entity, row: Row) => {
+    if (entity === "timetable_entry") {
+      if (
+        !Object.values(job.timetables ?? {}).some((t) =>
+          t.entryIds.includes(row.id),
+        )
+      )
+        return null;
+    } else if (
+      !["person", "organization"].includes(entity) ||
+      job.base[entity].some((r) => r.id === row.id)
+    )
+      return null;
+    return (
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled={
+          !job.session ||
+          ["running", "applied", "cancelled"].includes(job.status)
         }
-        open(entity, row);
-      }}
-    >
-      修改
-    </Button>
-  );
+        onClick={() => {
+          if (entity === "timetable_entry") {
+            const plan = Object.values(job.timetables ?? {}).find((t) =>
+              t.entryIds.includes(row.id),
+            );
+            const index =
+              plan?.entries.findIndex((_, i) => `${plan.id}:${i}` === row.id) ??
+              -1;
+            if (plan && index >= 0) {
+              setProposalEditor({
+                id: plan.id,
+                index,
+                entry: plan.entries[index],
+              });
+              return;
+            }
+          }
+          open(entity, row);
+        }}
+      >
+        修改
+      </Button>
+    );
+  };
   const person = (p: Row) => (
     <details
       key={p.id}
@@ -222,13 +239,17 @@ export function Review({
             <input
               type="checkbox"
               checked={!job.excluded.includes(p.id)}
-              disabled={["running", "applied", "cancelled"].includes(
-                job.status,
-              )}
+              disabled={
+                !job.session ||
+                ["running", "applied", "cancelled"].includes(job.status)
+              }
               onChange={async (e) => {
-                const saved = setPersonIncluded(job, p.id, e.target.checked);
-                onChange({ ...job });
-                await saved;
+                try {
+                  await setPersonIncluded(job, p.id, e.target.checked);
+                  onChange({ ...job });
+                } catch (e) {
+                  setError((e as Error).message);
+                }
               }}
             />{" "}
             包含此人的变更
@@ -286,11 +307,12 @@ export function Review({
                           <Button
                             variant="ghost"
                             size="sm"
-                            disabled={[
-                              "running",
-                              "applied",
-                              "cancelled",
-                            ].includes(job.status)}
+                            disabled={
+                              !job.session ||
+                              ["running", "applied", "cancelled"].includes(
+                                job.status,
+                              )
+                            }
                             onClick={() =>
                               setProposalEditor({
                                 id: t.id,

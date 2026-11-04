@@ -1,105 +1,8 @@
-import type {
-  CalendarProposal,
-  FieldChecks,
-} from "../../shared/agent-import/calendar";
-import type { CoverageState } from "../../shared/agent-import/coverage";
-import type { TimetableProposal } from "../../shared/agent-import/timetable";
 import { openDB } from "idb";
-import type {
-  Observation,
-  Handoff,
-  TurnMetrics,
-} from "../../shared/agent-import/context";
-import type { ModelMessage } from "ai";
-import type { Evidence, Snapshot } from "../../shared/agent-import/model";
+import { emptyAgent } from "../../shared/agent-import/person-workspace";
+import type { Job, Material } from "./state";
+export type { Job, Material, PendingCall } from "./state";
 export const RETENTION = 8 * 60 * 60 * 1000;
-export interface Material {
-  path: string;
-  blob: Blob;
-  origin: string;
-  inspected?: boolean;
-  totalPages?: number;
-  pagesRead?: number[];
-  readCoverage?: CoverageState;
-  status?: "done" | "irrelevant" | "blocked";
-  reason?: string;
-}
-export interface PendingCall {
-  id: string;
-  name: string;
-  args: unknown;
-  validationError?: string;
-}
-export interface Job {
-  id: string;
-  owner: string;
-  title: string;
-  status: "paused" | "running" | "review" | "applied" | "cancelled";
-  createdAt: number;
-  expiresAt: number | null;
-  base: Snapshot;
-  draft: Snapshot;
-  evidence: Record<string, Evidence[]>;
-  notes: Record<string, string>;
-  messages: ModelMessage[];
-  pending: PendingCall[];
-  images?: { path: string; data: string; description?: string }[];
-  log: { at: number; text: string }[];
-  summary: string;
-  unresolved: string[];
-  revision: number;
-  validatedRevision: number;
-  checkedRevision?: number;
-  turns: number;
-  model: string;
-  error?: string;
-  excluded: string[];
-  harnessVersion?: number;
-  observations?: Record<string, Observation>;
-  observationRevision?: number;
-  timetables?: Record<string, TimetableProposal>;
-  calendars?: Record<string, CalendarProposal>;
-  reconcileTask?: string;
-  consistencyCoverage?: Record<string, CoverageState>;
-  consistencyReads?: Record<string, string>;
-  consistencyChecks?: Record<
-    string,
-    {
-      signature: string;
-      review: import("../../shared/agent-import/consistency").ConsistencyReview;
-    }
-  >;
-  importCheck?: {
-    consistency_review?: import("../../shared/agent-import/consistency").ConsistencyReview[];
-    signature: string;
-    calendar_review: string;
-    identity_review: string;
-    unresolved: string[];
-  };
-  agentSummary?: string;
-  timetableChecks?: Record<
-    string,
-    { signature: string; summary: string; at: number; checks?: FieldChecks }
-  >;
-  verification?: {
-    id: string;
-    workMessages: ModelMessage[];
-    required: { path: string; pages: number }[];
-    seen: Record<string, number[]>;
-    coverage?: Record<string, CoverageState>;
-    complete?: boolean;
-  };
-  unrecordedReads?: string[];
-  unrecordedImageViews?: Record<string, number>;
-  handoff?: Handoff;
-  preferredProvider?: string;
-  cooldowns?: Record<string, number>;
-  metrics?: TurnMetrics[];
-  progress?: { signature: string; idle: number };
-  phase?: string;
-  requestStartedAt?: number;
-  checkpoint?: { key: string; kind: string; data: unknown };
-}
 const dbPromise = openDB("rota-agent-import", 1, {
   upgrade(db) {
     db.createObjectStore("jobs", { keyPath: "id" });
@@ -150,19 +53,9 @@ export async function readHistory(jobId: string, offset = 0, key?: string) {
   return rows;
 }
 export async function saveJob(job: Job) {
-  // The checkpoint and draft commit atomically in the original store. Archive is idempotent
-  // and replayed before any more model/tool work after an interrupted secondary write.
   await (await dbPromise).put("jobs", structuredClone(job));
-  if (job.checkpoint) {
-    await archive(
-      job.id,
-      job.checkpoint.key,
-      job.checkpoint.kind,
-      job.checkpoint.data,
-    );
-    job.checkpoint = undefined;
-  }
 }
+
 export async function listJobs(owner: string): Promise<Job[]> {
   await cleanup();
   return (await (await dbPromise).getAll("jobs"))
@@ -194,6 +87,9 @@ export async function cleanup() {
     if (job.expiresAt && job.expiresAt <= Date.now()) await deleteJob(job.id);
 }
 export async function addFiles(job: Job, files: File[]) {
+  return withJobLock(job, () => addFilesUnlocked(job, files));
+}
+async function addFilesUnlocked(job: Job, files: File[]) {
   const existing = await materials(job.id);
   let size = existing.reduce((n, f) => n + f.blob.size, 0);
   if (files.reduce((n, f) => n + f.size, 0) > 100 * 1024 * 1024)
@@ -220,11 +116,43 @@ export async function addFiles(job: Job, files: File[]) {
   job.validatedRevision = -1;
   job.status = "paused";
   job.expiresAt = null;
-  job.notes["新材料"] = "有新上传材料，请重新 tree 检查并处理。";
+  if (job.session) {
+    job.session.phase = "discover";
+    job.session.coordinator = emptyAgent();
+  }
+  job.notes["新材料"] = "有新上传材料，重新分派；已经完成的人员对象保留。";
   const db = await dbPromise;
   const tx = db.transaction(["jobs", "files"], "readwrite");
   for (const material of added)
     await tx.objectStore("files").put({ ...material, jobId: job.id });
   await tx.objectStore("jobs").put(structuredClone(job));
   await tx.done;
+}
+
+export async function loadJob(id: string): Promise<Job | undefined> {
+  return (await dbPromise).get("jobs", id);
+}
+/** One writer across tabs for both agents and operator actions. */
+export async function withJobLock<T>(
+  job: Job,
+  action: () => Promise<T>,
+): Promise<T> {
+  if (!job.session) throw Error("旧版批次保留只读，请用原材料创建新版批次");
+  return navigator.locks.request(
+    "rota-import:" + job.id,
+    { ifAvailable: true },
+    async (lock) => {
+      if (!lock)
+        throw Error("该批次正在其他标签页运行，请待处理结束后重新打开");
+      const saved = await loadJob(job.id);
+      if (
+        saved &&
+        (saved.revision !== job.revision ||
+          saved.turns !== job.turns ||
+          ["applied", "cancelled"].includes(saved.status))
+      )
+        throw Error("批次已发生变化，请重新打开后操作");
+      return action();
+    },
+  );
 }

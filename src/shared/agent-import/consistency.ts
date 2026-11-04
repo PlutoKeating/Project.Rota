@@ -67,43 +67,10 @@ export function validateConsistencyReview(
     conflicts.some((c) => !reviews.some((r) => r.key === c.key))
   )
     throw Error(
-      "跨课表教师差异尚未逐项核对。read_course_consistency 查看当前差异，回看来源修正；确属不同任课情境或仍无法确定时逐项说明。",
+      "跨课表教师差异尚未逐项核对。查看工作状态中的 conflicts 当前差异，回看来源修正；确属不同任课情境或仍无法确定时逐项说明。",
     );
 }
 
-export const consistencySignature = (
-  group: ReturnType<typeof courseConflicts>[number],
-) =>
-  canonical({
-    policy: 3,
-    key: group.key,
-    variants: group.variants.map((v) => ({
-      teacher: v.teacher,
-      timetable_id: v.timetable_id,
-      person: v.person,
-      term: v.term ?? null,
-      class_name: v.class_name ?? null,
-      entries: v.entries,
-    })),
-  });
-/** Previously checked field values remain checked when unrelated source annotations grow. */
-export function consistencyMatches(
-  signature: string | undefined,
-  group: ReturnType<typeof courseConflicts>[number],
-) {
-  if (!signature) return false;
-  if (signature === consistencySignature(group)) return true;
-  try {
-    const previous = JSON.parse(signature);
-    return (
-      previous.policy === 2 &&
-      previous.group &&
-      consistencySignature(previous.group) === consistencySignature(group)
-    );
-  } catch {
-    return false;
-  }
-}
 export function validateCheckedVariants(
   group: ReturnType<typeof courseConflicts>[number],
   review: ConsistencyReview,

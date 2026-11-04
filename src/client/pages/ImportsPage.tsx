@@ -21,6 +21,7 @@ import {
   applyJob,
   checkJob,
   renewLease,
+  chooseIdentity,
 } from "../agent-import/runtime";
 import { HistoryPanel } from "../agent-import/HistoryPanel";
 import { Review } from "../agent-import/Review";
@@ -283,8 +284,7 @@ export function ImportsPage() {
                   (sum, t) => sum + t.entries.length,
                   0,
                 )}{" "}
-                条课程记录），{Object.keys(job.observations ?? {}).length}{" "}
-                份材料笔记。关闭页面会暂停，重新打开后可恢复。
+                条课程记录）。关闭页面会暂停，重新打开后可恢复。
                 {job.requestStartedAt && (
                   <RequestClock startedAt={job.requestStartedAt} />
                 )}
@@ -297,6 +297,90 @@ export function ImportsPage() {
                 完成当前步骤后暂停
               </Button>
             </div>
+          )}
+          {job.session && (
+            <div
+              className="grid gap-2 sm:grid-cols-2"
+              aria-label="人员处理进度"
+            >
+              {Object.values(job.session.people).map((p) => (
+                <div
+                  key={p.key}
+                  className="rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-700"
+                >
+                  <p>
+                    {p.information?.full_name ?? p.label} ·{" "}
+                    {
+                      {
+                        queued: "等待处理",
+                        extracting: "填写信息与课表",
+                        verifying: "回看核对",
+                        done: "已完成",
+                        failed: "已暂停",
+                      }[p.status]
+                    }
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    {Object.values(p.timetables).reduce(
+                      (n, t) => n + t.entries.length,
+                      0,
+                    )}{" "}
+                    项课程 · {p.agent.turns} 次调用
+                  </p>
+                  {p.agent.error && (
+                    <p className="text-xs text-rose-600">{p.agent.error}</p>
+                  )}
+                  {p.match && <p className="text-xs">{p.match.reason}</p>}
+                  {p.match &&
+                    !p.match.id &&
+                    p.match.candidates.length > 0 &&
+                    job.status !== "running" && (
+                      <select
+                        aria-label={`确认${p.label}身份`}
+                        className="mt-2 w-full rounded border p-2 dark:bg-slate-900"
+                        value=""
+                        onChange={(e) => {
+                          void chooseIdentity(
+                            job,
+                            p.key,
+                            e.target.value === "new" ? null : e.target.value,
+                          )
+                            .then(() => update(job))
+                            .catch((e) => setError(messageOf(e)));
+                        }}
+                      >
+                        <option value="" disabled>
+                          确认身份…
+                        </option>
+                        {p.match.candidates.map((id) => (
+                          <option key={id} value={id}>
+                            {String(
+                              job.base.person.find((row) => row.id === id)
+                                ?.full_name,
+                            )}{" "}
+                            ·{" "}
+                            {String(
+                              job.base.person.find((row) => row.id === id)
+                                ?.student_no ?? "无学号",
+                            )}{" "}
+                            ·{" "}
+                            {String(
+                              job.base.person.find((row) => row.id === id)
+                                ?.class_name ?? "无班级",
+                            )}
+                          </option>
+                        ))}
+                        <option value="new">确认为另一位新人员</option>
+                      </select>
+                    )}
+                </div>
+              ))}
+            </div>
+          )}
+          {!job.session && (
+            <p role="alert">
+              旧版批次原件与成果保留，只读查看；请返回导入，用原材料新建批次。
+            </p>
           )}
           {job.error && (
             <p
@@ -398,7 +482,7 @@ export function ImportsPage() {
                 {job.status === "review" && (
                   <Button
                     loading={busy}
-                    disabled={!!issues.length}
+                    disabled={!!issues.length || !job.session}
                     onClick={() => void finish()}
                   >
                     审核无误，导入全部选中内容

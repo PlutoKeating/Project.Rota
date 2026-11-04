@@ -1,8 +1,6 @@
 import { expect, it } from "vitest";
 import {
   courseConflicts,
-  consistencySignature,
-  consistencyMatches,
   validateCheckedVariants,
   validateConsistencyReview,
 } from "../src/shared/agent-import/consistency";
@@ -87,24 +85,4 @@ it("rejects explanations that reference invented teachers instead of actual vari
       })),
     }),
   ).not.toThrow();
-});
-
-it("preserves reviewed fields across unrelated evidence annotations and invalidates changed teachers", () => {
-  const group = courseConflicts(plans as any)[0];
-  const changed = structuredClone(group);
-  changed.variants[0].sources.push({
-    source: "another-page.png",
-    locator: "其他课程",
-    explanation: "仅补充其他课程的来源",
-    inferred: false,
-  });
-  expect(consistencyMatches(consistencySignature(group), changed)).toBe(true);
-  expect(
-    consistencyMatches(JSON.stringify({ policy: 2, group }), changed),
-  ).toBe(true);
-  changed.variants[0].teacher = "修正教师";
-  expect(consistencyMatches(consistencySignature(group), changed)).toBe(false);
-  expect(
-    consistencyMatches(JSON.stringify({ policy: 2, group }), changed),
-  ).toBe(false);
 });

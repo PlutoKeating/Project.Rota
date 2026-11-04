@@ -1,0 +1,158 @@
+import { z } from "zod";
+import { calendarSchema, type FieldChecks } from "./calendar";
+import { timetableProposalSchema } from "./timetable";
+import { evidenceSchema, type Row } from "./model";
+import type { CoverageState } from "./coverage";
+import type { ModelMessage } from "ai";
+
+export const personInformationSchema =
+  timetableProposalSchema.shape.person.omit({ id: true });
+export const personTableSchema = timetableProposalSchema
+  .omit({
+    id: true,
+    person: true,
+    organization_ids: true,
+    term_id: true,
+    profile_id: true,
+    completed_sources: true,
+  })
+  .extend({
+    key: z.string().min(1).max(30),
+    calendar_id: z.string().nullable().default(null),
+    // A partial source may replace only its explicit teaching weeks.
+    replace_weeks: z
+      .array(z.number().int().min(1).max(30))
+      .min(1)
+      .max(30)
+      .nullable()
+      .default(null),
+  });
+export type PersonTable = z.infer<typeof personTableSchema>;
+export const assignmentSchema = z.object({
+  key: z.string().min(1).max(60),
+  label: z.string().min(1).max(200),
+  sources: z.array(z.string().min(1)).min(1).max(100),
+  instruction: z.string().max(4000).default(""),
+  organization_ids: z.array(z.string()).max(30).default([]),
+});
+export const organizationSchema = z.object({
+  id: z.string().min(1).max(60),
+  name: z.string().min(1).max(200),
+  parent_id: z.string().nullable().default(null),
+  sources: z.array(evidenceSchema).min(1).max(30),
+});
+export const writePersonSchema = z.object({
+  information: personInformationSchema.optional(),
+  timetables: z.array(personTableSchema).max(30).default([]),
+  mode: z.enum(["replace", "append"]).default("replace"),
+  remove_keys: z.array(z.string()).max(30).default([]),
+  calendar_evidence: z.array(calendarSchema).max(10).default([]),
+  unresolved: z.array(z.string().max(1000)).max(50).optional(),
+});
+export interface AgentState {
+  runId: string;
+  pendingImages: { path: string; image: string }[];
+  messages: ModelMessage[];
+  pending: {
+    id: string;
+    name: string;
+    args: unknown;
+    validationError?: string;
+  }[];
+  coverage: Record<string, CoverageState>;
+  turns: number;
+  failures: number;
+  error?: string;
+}
+export const emptyAgent = (): AgentState => ({
+  runId: crypto.randomUUID(),
+  pendingImages: [],
+  messages: [],
+  pending: [],
+  coverage: {},
+  turns: 0,
+  failures: 0,
+});
+export interface PersonWorkspace extends z.infer<typeof assignmentSchema> {
+  id: string;
+  personId: string;
+  information?: z.infer<typeof personInformationSchema>;
+  timetables: Record<string, PersonTable>;
+  calendarEvidence: z.infer<typeof calendarSchema>[];
+  unresolved: string[];
+  status: "queued" | "extracting" | "verifying" | "done" | "failed";
+  version: number;
+  resumeStatus?: "extracting" | "verifying";
+  agent: AgentState;
+  checks: Record<string, FieldChecks>;
+  identityChoice?: { id: string | null; information: string };
+  match?: { id?: string; candidates: string[]; reason: string };
+}
+export interface ImportSession {
+  version: 1;
+  phase: "discover" | "people" | "reconcile" | "review";
+  coordinator: AgentState;
+  people: Record<string, PersonWorkspace>;
+  organizations: z.infer<typeof organizationSchema>[];
+  concurrency: number;
+  issues: string[];
+}
+export const emptySession = (): ImportSession => ({
+  version: 1,
+  phase: "discover",
+  coordinator: emptyAgent(),
+  people: {},
+  organizations: [],
+  concurrency: 3,
+  issues: [],
+});
+export function matchPerson(
+  info: z.infer<typeof personInformationSchema>,
+  rows: Row[],
+) {
+  const norm = (v: unknown) =>
+    String(v ?? "")
+      .normalize("NFKC")
+      .trim();
+  if (norm(info.student_no)) {
+    const candidates = rows.filter(
+      (p) => norm(p.student_no) === norm(info.student_no),
+    );
+    if (
+      candidates.length === 1 &&
+      norm(candidates[0].full_name) === norm(info.full_name)
+    )
+      return {
+        id: candidates[0].id,
+        candidates: [candidates[0].id],
+        reason: "学号和姓名一致",
+      };
+    if (candidates.length)
+      return {
+        candidates: candidates.map((p) => p.id),
+        reason: "学号对应身份冲突",
+      };
+  }
+  const sameName = rows.filter(
+    (p) => norm(p.full_name) === norm(info.full_name),
+  );
+  const candidates = sameName.filter(
+    (p) =>
+      (!norm(info.student_no) || !norm(p.student_no)) &&
+      (!norm(info.class_name) || norm(p.class_name) === norm(info.class_name)),
+  );
+  if (
+    candidates.length === 1 &&
+    norm(info.class_name) &&
+    norm(candidates[0].class_name) === norm(info.class_name)
+  )
+    return {
+      id: candidates[0].id,
+      candidates: [candidates[0].id],
+      reason: "姓名与班级唯一匹配",
+    };
+  return {
+    candidates: candidates.map((p) => p.id),
+    reason: candidates.length ? "身份信息不足或存在同名，请确认" : "新人员",
+  };
+}

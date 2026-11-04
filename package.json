@@ -16,6 +16,7 @@
     "data:dev": "node --env-file=.env storage/server.mjs",
     "test:browser": "playwright test",
     "test:agent-browser": "pnpm assets:ocr && playwright test --config test/browser/agent.config.ts",
+    "test:agent-person": "pnpm assets:ocr && playwright test --config test/browser/agent.config.ts agent-person.spec.ts",
     "test:agent-live": "pnpm assets:ocr && node --env-file=.env.production test/live/agent-import.mjs",
     "assets:ocr": "node scripts/prepare-ocr.mjs",
     "test:agent-vertex": "node test/live/agent-import.mjs --vertex"

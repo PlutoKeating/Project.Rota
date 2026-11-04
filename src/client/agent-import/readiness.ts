@@ -7,7 +7,13 @@ export function importSignature(job: Job) {
     timetables: job.timetables,
     calendars: job.calendars,
     excluded: job.excluded,
-    observations: job.observations,
+    people: job.session
+      ? Object.values(job.session.people).map((p) => [
+          p.key,
+          p.version,
+          p.status,
+        ])
+      : undefined,
   });
 }
 export function needsImportCheck(job: Job) {
