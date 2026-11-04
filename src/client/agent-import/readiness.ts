@@ -2,7 +2,7 @@ import { canonical, diff } from "../../shared/agent-import/model";
 import type { Job } from "./store";
 export function importSignature(job: Job) {
   return canonical({
-    policy: 1,
+    policy: 2,
     draft: job.draft,
     timetables: job.timetables,
     calendars: job.calendars,

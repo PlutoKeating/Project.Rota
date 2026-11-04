@@ -1614,3 +1614,118 @@ test("editing a generated profile synchronizes its calendar evidence before rebu
     "2026-08-31T01:00:00.000Z",
   );
 });
+
+test("global review requires durable explanations for cross-person teacher differences", async ({
+  page,
+}) => {
+  let turn = 0;
+  await routes(page, () => {
+    turn++;
+    const confirm = {
+      calendar_review: "未知字段已保存",
+      identity_review: "两人独立",
+      unresolved: [],
+    };
+    return reply(
+      turn === 1
+        ? [
+            { id: "index", name: "read_course_consistency", args: {} },
+            { id: "reject", name: "confirm_import_check", args: confirm },
+          ]
+        : [
+            {
+              id: "detail",
+              name: "read_course_consistency",
+              args: { key: "teacher:数学" },
+            },
+            {
+              id: "record",
+              name: "record_consistency_check",
+              args: {
+                key: "teacher:数学",
+                resolution: "different_context",
+                explanation: "合成原件明确为不同班级各自任课教师",
+              },
+            },
+            { id: "index2", name: "read_course_consistency", args: {} },
+            { id: "accept", name: "confirm_import_check", args: confirm },
+            { id: "validate", name: "validate_draft", args: {} },
+            {
+              id: "finish",
+              name: "finish_review",
+              args: { summary: "核对完毕", unresolved: [] },
+            },
+          ],
+    );
+  });
+  await page.goto("/#/imports");
+  const result = await page.evaluate(async () => {
+    const r = await import("/src/client/agent-import/runtime.ts");
+    const s = await import("/src/client/agent-import/store.ts");
+    const v = await import("/src/client/agent-import/verification.ts");
+    const job = await r.createJob("owner", []);
+    job.timetables = {};
+    job.timetableChecks = {};
+    for (const id of ["a", "b"]) {
+      const p: any = {
+        id,
+        person: { id, full_name: id },
+        organization_ids: [],
+        term_name: "秋",
+        entries: [
+          {
+            name: "数学",
+            teacher: id,
+            weekday: 1,
+            period_from: 1,
+            period_to: 2,
+            weeks: [1],
+          },
+        ],
+        sources: [],
+        unresolved: [],
+        bound: false,
+      };
+      job.timetables[id] = p;
+      job.timetableChecks[id] = {
+        signature: v.proposalSignature(p),
+        summary: "合成已核对",
+        at: Date.now(),
+      };
+    }
+    job.calendars = {
+      c: {
+        id: "c",
+        name: "秋",
+        term_id: null,
+        start_date: null,
+        week_count: null,
+        minimum_weeks: null,
+        periods: [],
+        timetable_ids: ["a", "b"],
+        sources: [],
+        unresolved: [],
+      },
+    };
+    const runner = new r.ImportRunner(job, () => {});
+    await runner.run();
+    const rows = await s.readHistory(job.id, 0);
+    return {
+      status: job.status,
+      reviews: job.importCheck?.consistency_review,
+      tools: rows.filter((x) => x.kind === "tool").map((x) => x.data),
+    };
+  });
+  expect(result.status).toBe("review");
+  expect(result.reviews).toHaveLength(1);
+  expect(
+    result.tools.some(
+      (x: any) =>
+        x.name === "confirm_import_check" && x.result.error?.includes("跨课表"),
+    ),
+  ).toBe(true);
+  const indexes = result.tools.filter(
+    (x: any) => x.name === "read_course_consistency" && !x.args.key,
+  ) as any[];
+  expect(indexes.map((x) => x.result.total)).toEqual([1, 0]);
+});

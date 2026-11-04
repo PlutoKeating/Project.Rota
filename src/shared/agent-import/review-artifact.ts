@@ -1,3 +1,4 @@
+import { consistencyReviewSchema } from "./consistency";
 import { z } from "zod";
 import { timetableProposalSchema } from "./timetable";
 import { calendarSchema, fieldChecksSchema } from "./calendar";
@@ -8,6 +9,7 @@ export const reviewArtifactSchema = z
     timetables: z.array(timetableProposalSchema).max(200),
     calendars: z.array(calendarSchema).max(100),
     checks: z.record(z.string(), fieldChecksSchema).default({}),
+    consistency_review: z.array(consistencyReviewSchema).max(300).default([]),
     unresolved: z.array(z.string().max(3000)).max(2000),
   })
   .refine(

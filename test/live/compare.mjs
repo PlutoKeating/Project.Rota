@@ -127,6 +127,22 @@ for (const file of expectedPaths) {
       ),
     );
   });
+  const calendarCandidates = Object.values(job.calendars ?? {}).filter((c) =>
+    matches.some((p) => c.timetable_ids.includes(p.id)),
+  );
+  const calendarMatches = (c) =>
+    Object.entries(expected.calendar ?? {}).every(([field, value]) =>
+      field === "periods"
+        ? value.every((period) =>
+            c.periods.some((actual) =>
+              Object.entries(period).every(([key, v]) => actual[key] === v),
+            ),
+          )
+        : c[field] === value,
+    );
+  const calendar =
+    !expected.calendar ||
+    (calendarCandidates.length > 0 && calendarCandidates.some(calendarMatches));
   cases.push({
     person: expected.person.full_name,
     identity,
@@ -135,8 +151,10 @@ for (const file of expectedPaths) {
     occupied,
     absentUnscheduled,
     fieldFailures,
+    calendar,
     pass:
       identity &&
+      calendar &&
       organizations &&
       !named.missing.length &&
       (expected.allowAdditionalScheduled || !named.extra.length) &&

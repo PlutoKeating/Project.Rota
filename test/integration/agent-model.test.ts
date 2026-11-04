@@ -28,7 +28,7 @@ async function setup(kind: string, url: string) {
   } as unknown as Env;
 }
 describe("single-turn credential proxy", () => {
-  it.each(["checkpoint", "verify"])(
+  it.each(["checkpoint", "verify", "reconcile"])(
     "offers scoped tools in %s mode",
     async (mode) => {
       const env = await setup(
@@ -83,12 +83,18 @@ describe("single-turn credential proxy", () => {
         "batch",
       );
       const names = sent.tools.map((t: any) => t.function.name);
-      expect(names).toContain("save_timetable");
+      if (mode !== "reconcile") expect(names).toContain("save_timetable");
       if (mode === "checkpoint") {
         expect(names).toContain("observe_material");
         expect(names).not.toContain("view_image");
         expect(names).not.toContain("ocr_image");
         expect(names).not.toContain("read_document");
+      } else if (mode === "reconcile") {
+        expect(names).toContain("record_consistency_check");
+        expect(names).toContain("read_course_consistency");
+        expect(names).toContain("view_image");
+        expect(names).not.toContain("read_history");
+        expect(names).not.toContain("tree");
       } else {
         expect(names).toContain("view_image");
         expect(names).toContain("confirm_timetable_check");
@@ -696,4 +702,26 @@ it("classifies a malformed native function response as recoverable model output,
     "batch",
   ).catch((e) => e);
   expect(error.metrics.attempts[0].code).toBe("invalid_tool_call");
+});
+
+it("classifies a reset connection separately and exposes no transport message", async () => {
+  const env = await setup("google", "https://google.example");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => {
+      throw Object.assign(new Error("private connection details"), {
+        code: "ECONNRESET",
+      });
+    }),
+  );
+  const error = await agentTurn(
+    env,
+    { messages: [{ role: "user", content: "读取" }], context: "{}" },
+    "batch",
+  ).catch((e) => e);
+  expect(error.metrics.attempts[0]).toMatchObject({
+    code: "network_error",
+    causeCode: "ECONNRESET",
+  });
+  expect(error.message).not.toContain("private connection");
 });

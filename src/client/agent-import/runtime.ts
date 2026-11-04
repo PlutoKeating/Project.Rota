@@ -1,3 +1,7 @@
+import {
+  courseConflicts,
+  validateConsistencyReview,
+} from "../../shared/agent-import/consistency";
 import { reviewArtifactSchema } from "../../shared/agent-import/review-artifact";
 import {
   calendarSchema,
@@ -152,14 +156,21 @@ async function requestTurn<T>(
       !job.metrics
         ?.at(-1)
         ?.attempts.some((a) =>
-          ["timeout", "output_truncated", "invalid_tool_call"].includes(
-            a.code ?? "",
-          ),
+          [
+            "timeout",
+            "output_truncated",
+            "invalid_tool_call",
+            "network_error",
+          ].includes(a.code ?? ""),
         )
     )
       return;
-    const guidance =
-      (body as { mode?: string }).mode === "compact"
+    const networkFailure = job.metrics
+      ?.at(-1)
+      ?.attempts.some((a) => a.code === "network_error");
+    const guidance = networkFailure
+      ? "上次网络连接中断，未返回的工具调用没有执行。继续当前步骤，已保存成果无需重复创建。"
+      : (body as { mode?: string }).mode === "compact"
         ? "上一响应未成功返回有效工具；没有执行任何业务动作。请仅调用 save_handoff 一次，简短填写下一步和待定事项，参数必须符合工具契约。"
         : "上一响应超时、截断或未返回有效工具，未返回的工具调用没有执行。请缩小本次响应：只处理一个人的一小部分，每次 save_timetable 最多保存 8 条 entries，后续用 mode=append 继续；不要丢弃其余课程或提前标记材料完成。note 仅保留必要原文周次、定位和疑点，不重复已有字段。复核每次只修正少量差异；交接摘要只写下一步和未决事项，不复述已保存的全部课表。";
     if (job.messages.at(-1)?.content !== guidance)
@@ -186,7 +197,9 @@ async function requestTurn<T>(
         requestId: "client-" + crypto.randomUUID(),
         durationMs: Date.now() - start,
         purpose: (
-          body as { mode: "work" | "compact" | "checkpoint" | "verify" }
+          body as {
+            mode: "work" | "compact" | "checkpoint" | "verify" | "reconcile";
+          }
         ).mode,
         attempts: [
           {
@@ -213,9 +226,12 @@ async function requestTurn<T>(
         (!supplied ||
           supplied.attempts.some(
             (a) =>
-              ["timeout", "output_truncated", "invalid_tool_call"].includes(
-                a.code ?? "",
-              ) ||
+              [
+                "timeout",
+                "output_truncated",
+                "invalid_tool_call",
+                "network_error",
+              ].includes(a.code ?? "") ||
               (a.httpStatus === 429 &&
                 a.code !== "quota_exhausted" &&
                 (a.retryAfterMs ?? 0) <= 30000) ||
@@ -347,6 +363,15 @@ export async function checkJob(job: Job) {
     files: files.length,
   };
 }
+function canReconcile(job: Job, files: Awaited<ReturnType<typeof materials>>) {
+  const plans = Object.values(job.timetables ?? {});
+  return (
+    !job.verification &&
+    plans.length > 0 &&
+    plans.every((p) => !needsVerification(job, p)) &&
+    files.every((f) => Boolean(f.status))
+  );
+}
 async function execute(
   job: Job,
   call: PendingCall,
@@ -370,6 +395,71 @@ async function execute(
       "逐人复核期间只用 revise_timetable 修正当前方案；其他业务变化留到回到主任务后处理",
     );
   switch (name) {
+    case "read_course_consistency": {
+      const groups = courseConflicts(
+        Object.values(job.timetables ?? {}).filter(
+          (p) => !job.excluded.includes(p.person.id),
+        ),
+      );
+      const offset = args.offset;
+      if (args.key) {
+        const group = groups.find((g) => g.key === args.key);
+        if (!group) return { result: { resolved: true } };
+        (job.consistencyReads ??= {})[`${group.key}:${offset}`] = canonical(
+          group.variants.slice(offset, offset + 5),
+        );
+        return {
+          result: {
+            key: group.key,
+            course: group.course,
+            total: group.variants.length,
+            items: group.variants
+              .slice(offset, offset + 5)
+              .map((v) => ({
+                ...v,
+                sources: [...new Set(v.sources.map((s) => s.source))],
+              })),
+            nextOffset: offset + 5 < group.variants.length ? offset + 5 : null,
+          },
+        };
+      }
+      const pending = groups.filter(
+        (g) => job.consistencyChecks?.[g.key]?.signature !== canonical(g),
+      );
+      return {
+        result: {
+          total: pending.length,
+          items: pending
+            .slice(offset, offset + 10)
+            .map((g) => ({
+              key: g.key,
+              teachers: [...new Set(g.variants.map((v) => v.teacher))],
+              people: g.variants.length,
+            })),
+          nextOffset: offset + 10 < pending.length ? offset + 10 : null,
+          instruction:
+            "逐项指定 key 读取详情；核对后 record_consistency_check 保存结论。处理后从 offset=0 获取剩余项目。",
+        },
+      };
+    }
+    case "record_consistency_check": {
+      const group = courseConflicts(
+        Object.values(job.timetables ?? {}).filter(
+          (p) => !job.excluded.includes(p.person.id),
+        ),
+      ).find((g) => g.key === args.key);
+      if (!group) throw Error("该差异已不存在，请重新读取待核对索引");
+      (job.consistencyChecks ??= {})[group.key] = {
+        signature: canonical(group),
+        review: {
+          key: args.key,
+          resolution: args.resolution,
+          explanation: args.explanation,
+        },
+      };
+      job.importCheck = undefined;
+      return { result: { saved: true } };
+    }
     case "read_calendars": {
       if (args.id) {
         const calendar = job.calendars?.[args.id];
@@ -474,11 +564,31 @@ async function execute(
           "已有完整日历，请先生成并绑定适用课表：" +
             bindable.map((c) => c.id).join("、"),
         );
+      const conflicts = courseConflicts(plans);
+      const reviews = conflicts
+        .map(
+          (g) =>
+            args.consistency_review.find(
+              (r: { key: string }) => r.key === g.key,
+            ) ??
+            (job.consistencyChecks?.[g.key]?.signature === canonical(g)
+              ? job.consistencyChecks[g.key].review
+              : undefined),
+        )
+        .filter(Boolean);
+      validateConsistencyReview(conflicts, reviews);
+      const pendingConsistency = reviews
+        .filter((r: { resolution: string }) => r.resolution === "unresolved")
+        .map(
+          (r: { key: string; explanation: string }) =>
+            `${r.key}：${r.explanation}`,
+        );
       job.importCheck = {
+        consistency_review: reviews,
         signature: importSignature(job),
         calendar_review: args.calendar_review,
         identity_review: args.identity_review,
-        unresolved: args.unresolved,
+        unresolved: [...args.unresolved, ...pendingConsistency],
       };
       return { result: { checked: true, summary: reviewSummary(job) } };
     }
@@ -750,6 +860,9 @@ async function execute(
     case "view_image":
     case "ocr_image":
     case "render_sheet": {
+      if (canReconcile(job, await materials(job.id))) {
+        return documentTool(job, name, args as { path: string });
+      }
       const unread = (job.unrecordedReads ??= []);
       if (
         !job.verification &&
@@ -1243,6 +1356,8 @@ export class ImportRunner {
               ? { id: job.verification.id, coverage: job.verification.coverage }
               : undefined,
             revision: job.revision,
+            consistencyChecks: job.consistencyChecks,
+            consistencyReads: job.consistencyReads,
             observationRevision: job.observationRevision ?? 0,
             files: (await materials(job.id)).map((f) => [
               f.path,
@@ -1265,7 +1380,7 @@ export class ImportRunner {
             job.messages.push({
               role: "user",
               content:
-                "连续 6 轮没有持久进展。立即用 save_timetable 保存已看清的课程片段（可不绑定学期/作息），或处理明确未完成项；遇到障碍请说明并交付可复核部分，停止重复查询。",
+                "连续 6 轮没有持久进展。识别阶段用 save_timetable 保存已看清片段；全批核对阶段直接 read_course_consistency 读取当前差异、回看原图，逐项 record_consistency_check，停止重复翻历史。遇到障碍记录待定事实。",
             });
           }
           const context = JSON.stringify({
@@ -1291,6 +1406,19 @@ export class ImportRunner {
             calendarInstruction:
               "这里只列最近20份索引。read_calendars 分页浏览，指定 id 查完整字段与来源。",
             importCheckRequired: needsImportCheck(job),
+            consistencyRemaining: courseConflicts(
+              Object.values(job.timetables ?? {}).filter(
+                (p) => !job.excluded.includes(p.person.id),
+              ),
+            )
+              .filter(
+                (g) =>
+                  job.consistencyChecks?.[g.key]?.signature !== canonical(g),
+              )
+              .slice(0, 20)
+              .map((g) => g.key),
+            consistencyInstruction:
+              "此处只列前20项。全批核对直接调用 read_course_consistency 读取当前状态，不要从 read_history 拼接旧返回。逐项回看，修正错误或 record_consistency_check 保存有依据的情境差异/疑点；已保存结论可恢复。旧交接声称已完成不代表当前检查已通过。",
             fieldChecks: Object.entries(job.timetableChecks ?? {})
               .slice(-8)
               .map(([id, c]) => ({
@@ -1329,6 +1457,7 @@ export class ImportRunner {
               .map((text) => text.slice(0, 500)),
             operatorExcludedPersons: job.excluded,
           });
+          const reconciling = canReconcile(job, await materials(job.id));
           const compacting =
             !job.verification &&
             needsHandoff(job.messages) &&
@@ -1347,7 +1476,9 @@ export class ImportRunner {
               ? "正在保存交接摘要"
               : checkpointing
                 ? "正在保存已读材料成果"
-                : "等待模型整理材料";
+                : reconciling
+                  ? "正在跨课表核对与汇总日历"
+                  : "等待模型整理材料";
           job.requestStartedAt = Date.now();
           this.update({ ...job });
           const reply = await requestTurn<{
@@ -1368,7 +1499,9 @@ export class ImportRunner {
                   ? "compact"
                   : checkpointing
                     ? "checkpoint"
-                    : "work",
+                    : reconciling
+                      ? "reconcile"
+                      : "work",
               preferredProvider: job.preferredProvider,
               cooldowns: job.cooldowns,
             },
@@ -1647,6 +1780,7 @@ export async function applyJob(job: Job) {
           )
           .map(([id, c]) => [id, c.checks]),
       ),
+      consistency_review: job.importCheck?.consistency_review ?? [],
       unresolved: job.unresolved,
     }),
   });

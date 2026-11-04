@@ -414,6 +414,7 @@ it("atomically retains reviewed structured evidence after browser material clean
     timetables: [],
     calendars: [],
     checks: {},
+    consistency_review: [],
     unresolved: ["测试：附注保留在正式审核记录"],
   };
   const payload = { changes: changes(base, s), summary: "审核通过", review };

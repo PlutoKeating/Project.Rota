@@ -1,3 +1,4 @@
+import { consistencyReviewSchema } from "./consistency";
 import { calendarSchema, fieldChecksSchema } from "./calendar";
 import { timetableProposalSchema } from "./timetable";
 import { z } from "zod";
@@ -37,10 +38,24 @@ export const toolSpecs = {
       "将完整日历证据方案生成学期、个人作息及全局节次草稿，随后用 bind_timetables 绑定明确适用的人员。缺日期、总周数或钟点时拒绝；不要伪造补齐。已有学期或作息时使用 query_records 和 change_record，避免重复创建。",
     schema: z.object({ id: z.string() }),
   },
+  read_course_consistency: {
+    description:
+      "分页查看尚未核对的同名课程教师差异索引；指定 key 分页看人员及来源明细。差异不等于错误，不同班级/学期可能有不同教师；回看原图工号、上下文和更清晰材料后由你判断。修正错误须 revise_timetable，不能机械合并；剩余差异在 confirm_import_check.consistency_review 逐项解释。",
+    schema: z.object({
+      key: z.string().optional(),
+      offset: z.number().int().min(0).default(0),
+    }),
+  },
+  record_consistency_check: {
+    description:
+      "逐项保存跨课表教师差异的核对结论。先 read_course_consistency 指定 key 读明细并回看原图；错误先 revise_timetable 改正。确属不同班级/学期任课或仍无法确定，记录原因。已记录项目从待核对索引消失，后续字段变化会使对应结论失效。",
+    schema: consistencyReviewSchema,
+  },
   confirm_import_check: {
     description:
-      "所有人员回看及材料处理完成后执行全批协调：读取 read_calendars，汇总不同图中的日期/周次推导首周、钟点和适用人员，保存已知部分；检查身份重复、部门关系、无时段课程、缺图、裁剪和冲突。完整作息须先生成并绑定；缺事实则逐项列出。调用此工具后 validate_draft，再 finish_review。任何资料/草稿变化都会使本确认失效。",
+      "所有人员回看及材料处理完成后执行全批协调：先 read_course_consistency 回看跨图教师差异，不凭单张低清图定字；再读取 read_calendars，汇总不同图中的日期/周次推导首周、钟点和适用人员，保存已知部分；检查身份重复、部门关系、无时段课程、缺图、裁剪和冲突。完整作息须先生成并绑定；缺事实则逐项列出。调用此工具后 validate_draft，再 finish_review。任何资料/草稿变化都会使本确认失效。",
     schema: z.object({
+      consistency_review: z.array(consistencyReviewSchema).max(300).default([]),
       calendar_review: z.string().min(1).max(3000),
       identity_review: z.string().min(1).max(3000),
       unresolved: z.array(z.string().max(1000)).max(100),

@@ -139,7 +139,7 @@ pnpm test:agent-live /path/to/archive.zip /private/output-directory /path/to/sna
 node test/live/compare.mjs /private/result.json /private/expected-person.json
 ```
 
-expected JSON 包含 `person`（姓名及可选学号等明确身份字段）、`scheduled`（name、weekday、period_from、period_to、weeks）及可选 `unscheduled` 课程名列表、`organizationIds` 部门归属。无时段课程须实际保存在课程方案中，仅在未决事项里提及不能算通过。标注必须由原件人工核对，不能用被测模型的输出生成。比较器将明确课程展开为课程/星期/教学周/节次多重集合，同时报告身份、名称和占用遗漏、额外占用、重复记录；默认只规范化 Unicode、空格及英文大小写；可选 nameAliases 显式列出经原件核对的同名格式变体（例如课程代码前缀），不将近义课程名视为正确。由开发 Agent 独立转录的标注必须注明来源，不能称为操作员已验收。可选 `entryFields:[{where:{name:"课程名"},fields:{teacher:"教师名",location:"教室"}}]` 增加独立字段断言，匹配到的每条课程均须符合字段值；不存在匹配课程也失败。仅课程占用匹配不能代表全部字段准确。比较器只用于验收，不参与导入业务处理。人工标注、运行结果及个人材料均留在仓库外。
+expected JSON 包含 `person`（姓名及可选学号等明确身份字段）、`scheduled`（name、weekday、period_from、period_to、weeks）及可选 `unscheduled` 课程名列表、`organizationIds` 部门归属。无时段课程须实际保存在课程方案中，仅在未决事项里提及不能算通过。标注必须由原件人工核对，不能用被测模型的输出生成。比较器将明确课程展开为课程/星期/教学周/节次多重集合，同时报告身份、名称和占用遗漏、额外占用、重复记录；默认只规范化 Unicode、空格及英文大小写；可选 nameAliases 显式列出经原件核对的同名格式变体（例如课程代码前缀），不将近义课程名视为正确。由开发 Agent 独立转录的标注必须注明来源，不能称为操作员已验收。可选 `entryFields:[{where:{name:"课程名"},fields:{teacher:"教师名",location:"教室"}}]` 增加独立字段断言，匹配到的每条课程均须符合字段值；不存在匹配课程也失败。可选 `calendar` 为此人适用日历的明确字段断言，`periods` 可逐项限定已知上课钟点与未知下课钟点；日历必须实际关联到该人的课表方案。仅课程占用匹配不能代表全部字段准确。比较器只用于验收，不参与导入业务处理。人工标注、运行结果及个人材料均留在仓库外。
 
 达到交接阈值却仍有未保存材料时，执行器阻止打开下一份材料，要求先持久化当前事实；避免某份旧文档长期阻止交接，导致后续每轮上下文不断增长。保存失败仍保留原图和原始响应，不能把“工具被调用”当成“草稿写入成功”。
 
@@ -222,3 +222,5 @@ Google 原生供应商的导入请求默认显式指定 `MEDIA_RESOLUTION_HIGH`�
 没有新增运行依赖、环境变量或数据库迁移。前端与 Worker 工具协议须同步发布；运行时仍在浏览器，服务端仅代理模型与存储审核通过的业务数据。
 
 模型超时、输出截断或原生工具选择失败均记录明确错误类别；浏览器持久保存小批输出/工具格式纠正指令后最多重试一次。配置错误、额度耗尽及内容过滤不套用该恢复策略。私有 live 测试可用 `ROTA_CAPTURE_PROVIDER_RESPONSES=1` 保存 Vertex 候选响应到测试输出目录，用后按个人资料处理；生产不保存这些响应。
+
+全批协调提供 `read_course_consistency`（无 key 读取待处理索引，指定 key 分页读取来源与人员）、`record_consistency_check`（逐项持久结论）及 `confirm_import_check.consistency_review`。签名变化使结论失效；不同班级可有不同教师，程序不选多数、不自动改名。`reconcile` 限定工具集合防止反复翻旧历史。核对内容在审核页和提交后报告中可见。

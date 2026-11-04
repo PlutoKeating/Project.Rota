@@ -546,6 +546,22 @@ export function Review({
           </>
         )}
       </div>
+      {!!job.importCheck?.consistency_review?.length && (
+        <details>
+          <summary className="cursor-pointer font-medium">
+            跨课表核对 · {job.importCheck.consistency_review.length} 项
+          </summary>
+          {job.importCheck.consistency_review.map((item) => (
+            <div key={item.key} className="mt-3 text-sm">
+              <p>
+                {item.key.replace(/^teacher:/, "")} ·{" "}
+                {item.resolution === "unresolved" ? "待确认" : "不同任课情境"}
+              </p>
+              <p className="text-muted">{item.explanation}</p>
+            </div>
+          ))}
+        </details>
+      )}
       <CalendarReview job={job} onChange={onChange} onSource={onSource} />
       <details>
         <summary className="cursor-pointer font-medium">学期与作息方案</summary>

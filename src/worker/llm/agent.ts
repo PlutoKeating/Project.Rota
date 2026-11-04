@@ -47,7 +47,9 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
     .object({
       messages: z.array(z.unknown()).min(1).max(1000),
       context: z.string().max(100000),
-      mode: z.enum(["work", "compact", "checkpoint", "verify"]).default("work"),
+      mode: z
+        .enum(["work", "compact", "checkpoint", "verify", "reconcile"])
+        .default("work"),
       preferredProvider: z.string().max(100).optional(),
       cooldowns: z.record(z.string(), z.number()).optional(),
     })
@@ -212,35 +214,57 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
           .filter(([name]) =>
             body.mode === "compact"
               ? name === "save_handoff"
-              : body.mode === "verify"
+              : body.mode === "reconcile"
                 ? [
+                    "read_course_consistency",
+                    "record_consistency_check",
+                    "read_timetables",
                     "read_document",
                     "view_image",
                     "ocr_image",
                     "render_sheet",
                     "revise_timetable",
-                    "save_timetable",
-                    "read_timetables",
-                    "save_calendar",
                     "read_calendars",
-                    "confirm_timetable_check",
-                    "read_history",
+                    "save_calendar",
+                    "materialize_calendar",
+                    "bind_timetables",
+                    "query_records",
+                    "change_record",
+                    "confirm_import_check",
+                    "validate_draft",
+                    "finish_review",
                   ].includes(name)
-                : body.mode === "checkpoint"
+                : body.mode === "verify"
                   ? [
-                      "save_timetable",
-                      "save_calendar",
-                      "read_calendars",
+                      "read_document",
+                      "view_image",
+                      "ocr_image",
+                      "render_sheet",
                       "revise_timetable",
-                      "observe_material",
+                      "save_timetable",
                       "read_timetables",
                       "save_calendar",
                       "read_calendars",
-                      "query_records",
-                      "read_observations",
+                      "confirm_timetable_check",
                       "read_history",
                     ].includes(name)
-                  : !["save_handoff", "confirm_timetable_check"].includes(name),
+                  : body.mode === "checkpoint"
+                    ? [
+                        "save_timetable",
+                        "save_calendar",
+                        "read_calendars",
+                        "revise_timetable",
+                        "observe_material",
+                        "read_timetables",
+                        "save_calendar",
+                        "read_calendars",
+                        "query_records",
+                        "read_observations",
+                        "read_history",
+                      ].includes(name)
+                    : !["save_handoff", "confirm_timetable_check"].includes(
+                        name,
+                      ),
           )
           .map(([name, s]) => [
             name,
@@ -274,6 +298,9 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
           system:
             systemPrompt +
             (body.mode === "compact" ? "\n" + handoffPrompt : "") +
+            (body.mode === "reconcile"
+              ? "\n现在是全批协调阶段。所有材料和逐人核对已完成。直接 read_course_consistency 获取当前差异索引，指定 key 查看人员和原图路径；回看相似教师字形、工号与更清晰的其他课表，修正错误，或逐项 record_consistency_check 解释不同任课情境/仍未知的事实。不要凭旧历史声称已核对，不要将全部差异笼统标记为不同班级。保存结论后继续下一项。跨材料汇总日历，最后 confirm_import_check、validate_draft、finish_review。"
+              : "") +
             (body.mode === "checkpoint"
               ? "\n先保存已读材料的识别成果。使用 save_timetable 保存部分课程；无法辨认则 observe_material kind=unresolved 记录具体障碍。保存后恢复读取工具。不要重复查询。"
               : "") +
@@ -405,15 +432,23 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
               ? "upstream_http"
               : (error as Error)?.message === "model_output_truncated"
                 ? "output_truncated"
-                : ToolChoiceViolationError.isInstance(error)
-                  ? error.finishReason === "content-filter"
-                    ? "content_filtered"
-                    : error.finishReason === "length"
-                      ? "output_truncated"
-                      : "invalid_tool_call"
-                  : (error as Error)?.message === "invalid_tool_protocol"
-                    ? "invalid_tool_call"
-                    : "protocol_or_configuration";
+                : [
+                      "ECONNRESET",
+                      "ETIMEDOUT",
+                      "EAI_AGAIN",
+                      "UND_ERR_SOCKET",
+                      "UND_ERR_CONNECT_TIMEOUT",
+                    ].includes((error as any)?.cause?.code)
+                  ? "network_error"
+                  : ToolChoiceViolationError.isInstance(error)
+                    ? error.finishReason === "content-filter"
+                      ? "content_filtered"
+                      : error.finishReason === "length"
+                        ? "output_truncated"
+                        : "invalid_tool_call"
+                    : (error as Error)?.message === "invalid_tool_protocol"
+                      ? "invalid_tool_call"
+                      : "protocol_or_configuration";
       metrics.attempts.push({
         providerId: row.id,
         model: modelId,
@@ -422,6 +457,12 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
         code,
         httpStatus: status,
         retryAfterMs,
+        errorType: /^[A-Za-z0-9_]{1,80}$/.test((error as Error)?.name ?? "")
+          ? (error as Error).name
+          : undefined,
+        causeCode: /^[A-Z0-9_]{1,80}$/.test((error as any)?.cause?.code ?? "")
+          ? (error as any).cause.code
+          : undefined,
       });
       failures.push(
         `${modelId}：${code === "quota_exhausted" ? "供应商额度已用尽，请恢复额度或选择其他模型" : code}${status ? " (" + status + ")" : ""}`,

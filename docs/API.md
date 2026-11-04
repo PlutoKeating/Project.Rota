@@ -260,3 +260,5 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 `POST /api/agent-imports/:id/apply` 可携带 `review`：`{version:1,timetables:[],calendars:[],checks:{},unresolved:[]}`，结构由共享 Zod 契约校验，JSON 最大 2 MB。审核记录与业务数据原子写入既有 audit_event，纳入幂等摘要；同批同业务变化但审核记录不同的重复提交返回 409。没有原件、模型对话或密钥。
 
 `GET /api/agent-imports` 返回当前操作员最近 20 条已提交批次 `{items:[{id,summary,applied_at}]}`；`GET /api/agent-imports/:id/report` 返回 `{review:...|null}`，旧批次无记录时 null。两接口均沿用批次归属校验。
+
+`POST /agent-imports/:id/turn` 的 `mode` 新增 `reconcile`：开放跨课表差异读取/结论、原件回看、方案修订、日历和最终审核工具，关闭目录/历史遍历。`review` 审核报告新增可选 `consistency_review`（默认空数组）：每项 `key`、`resolution`（`different_context` / `unresolved`）、`explanation`。模型请求诊断增加脱敏 `errorType` / `causeCode`；明确临时连接错误分类 `network_error`，客户端最多自动重试一次。

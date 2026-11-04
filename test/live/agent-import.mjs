@@ -256,6 +256,7 @@ try {
           JSON.stringify({
             request: n,
             error: e.code ?? e.name,
+            attempts: e.metrics?.attempts,
             message: e.message,
             seconds: (Date.now() - start) / 1000,
           }),

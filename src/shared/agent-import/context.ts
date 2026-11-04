@@ -19,6 +19,8 @@ export interface Attempt {
   code?: string;
   httpStatus?: number;
   retryAfterMs?: number;
+  errorType?: string;
+  causeCode?: string;
 }
 export interface TurnMetrics {
   requestId: string;
@@ -28,7 +30,7 @@ export interface TurnMetrics {
   outputTokens?: number;
   reasoningTokens?: number;
   finishReason?: string;
-  purpose: "work" | "compact" | "checkpoint" | "verify";
+  purpose: "work" | "compact" | "checkpoint" | "verify" | "reconcile";
 }
 
 /** Replace image bytes with source references when callers have secured the corresponding facts.

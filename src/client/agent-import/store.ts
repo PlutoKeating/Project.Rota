@@ -59,7 +59,16 @@ export interface Job {
   observationRevision?: number;
   timetables?: Record<string, TimetableProposal>;
   calendars?: Record<string, CalendarProposal>;
+  consistencyReads?: Record<string, string>;
+  consistencyChecks?: Record<
+    string,
+    {
+      signature: string;
+      review: import("../../shared/agent-import/consistency").ConsistencyReview;
+    }
+  >;
   importCheck?: {
+    consistency_review?: import("../../shared/agent-import/consistency").ConsistencyReview[];
     signature: string;
     calendar_review: string;
     identity_review: string;
