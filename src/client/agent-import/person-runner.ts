@@ -778,6 +778,15 @@ export class ImportRunner {
           key: t.key,
           calendar_id: t.calendar_id,
           courses: t.entries.length,
+          source_paths: [...new Set(t.sources.map((source) => source.source))],
+          no_fixed_time_courses: t.entries.filter((entry) => entry.no_fixed_time).map((entry) => entry.name),
+          verification: p.status === "done" && p.checks[t.key] ? {
+            coverage: p.checks[t.key].coverage,
+            checked_entries_count: p.checks[t.key].checked_entries.length,
+            read_source_paths: p.sources,
+            source_person_names: p.checks[t.key].source_person_names ?? [],
+            source_student_numbers: p.checks[t.key].source_student_numbers ?? [],
+          } : undefined,
           unresolved: t.unresolved,
         })),
       })),
@@ -786,6 +795,7 @@ export class ImportRunner {
       })),
       remainingConflictCount: pending.length,
       completedConsistencyKeys: reviewed.map((r) => r.key),
+      completedConsistencyReviews: reviewed.map(({ key, resolution, explanation }) => ({ key, resolution, explanation })),
       issues: job.session!.issues,
       feedback: job.notes["最近操作员意见"],
     });

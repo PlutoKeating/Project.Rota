@@ -1466,3 +1466,48 @@ test("source handoff overlaps an unrelated active person without duplicate targe
   expect(job.session.people.b.checks.fall.coverage).toBe("missing");
   expect(job.validatedRevision).toBe(job.revision);
 });
+
+test("final coordinator sees completed source verification and untimed courses without full entry payloads", async ({ page }) => {
+  let summary: any;
+  const untimed = { name: "公益活动", no_fixed_time: true, weekday: null, period_from: null, period_to: null, weeks: null };
+  await setup(page, (body) => {
+    if (body.mode === "discover") return discovery(["a"]);
+    const reply = personReply(body);
+    if (body.mode === "person") reply.calls[0].args.timetables[0].entries.push(untimed);
+    if (body.mode === "verify") {
+      const check = reply.calls[0].args.checks[0];
+      check.checked_entries = [0, 1];
+      check.verified_entries[1] = { ...untimed, index: 1 };
+      check.source_person_names = ["甲"];
+      check.source_student_numbers = ["a"];
+    }
+    if (body.mode === "reconcile") summary = JSON.parse(body.context).people[0].tables[0];
+    return reply;
+  });
+  await upload(page, ["a"]);
+  await expect.poll(async () => (await saved(page))?.status).toBe("review");
+  expect(summary).toMatchObject({
+    source_paths: ["a.txt"], no_fixed_time_courses: ["公益活动"],
+    verification: { coverage: "complete", checked_entries_count: 2, read_source_paths: ["a.txt"], source_person_names: ["甲"], source_student_numbers: ["a"] },
+  });
+  expect(summary).not.toHaveProperty("entries");
+});
+
+test("final coordinator receives retained consistency conclusions with their explanations", async ({ page }) => {
+  let conclusions: any;
+  await setup(page, (body) => {
+    if (body.mode === "discover") return discovery();
+    const context = JSON.parse(body.context);
+    if (body.mode === "reconcile") {
+      if (context.conflicts.length) return output([{ name: "review_consistency", args: { reviews: context.conflicts.map((g: any) => ({ key: g.key, resolution: "different_context", explanation: "已回看原件，两人分属不同教学组", checked_variant_indices: g.variants.map((v: any) => v.index) })) } }]);
+      conclusions = context.completedConsistencyReviews;
+    }
+    const reply = personReply(body);
+    if (body.mode === "person") reply.calls[0].args.timetables[0].entries[0].teacher = context.person.key === "a" ? "张老师" : "李老师";
+    if (body.mode === "verify") reply.calls[0].args.checks[0].verified_entries[0].teacher = context.person.key === "a" ? "张老师" : "李老师";
+    return reply;
+  });
+  await upload(page);
+  await expect.poll(async () => (await saved(page))?.status).toBe("review");
+  expect(conclusions).toEqual([{ key: "teacher:数学", resolution: "different_context", explanation: "已回看原件，两人分属不同教学组" }]);
+});
