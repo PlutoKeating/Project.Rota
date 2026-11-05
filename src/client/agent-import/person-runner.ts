@@ -378,6 +378,8 @@ export class ImportRunner {
           await this.validateSources(agent, calendar.sources, person);
         if (data.information) person.information = data.information;
         person.timetables = next;
+        for (const key of [...data.timetables.map((t) => t.key), ...data.remove_keys])
+          if (agent.verifiedEntries) delete agent.verifiedEntries[key];
         if (data.unresolved) person.unresolved = data.unresolved;
         for (const c of data.calendar_evidence) {
           const i = person.calendarEvidence.findIndex((v) => v.id === c.id);
@@ -447,6 +449,18 @@ export class ImportRunner {
             if (!check) continue;
           }
           try {
+            if (new Set(check.verified_entries.map((entry: { index: number }) => entry.index)).size !== check.verified_entries.length)
+              throw Error("复核索引重复：" + t.key);
+            const previous = agent.verifiedEntries?.[t.key];
+            if (check.reuse_verified_entries && !previous)
+              throw Error("没有可复用的同轮复核事实：" + t.key);
+            const observations = new Map((check.reuse_verified_entries ? previous! : [])
+              .map((entry) => [entry.index, entry]));
+            for (const entry of check.verified_entries) observations.set(entry.index, entry);
+            check.verified_entries = [...observations.values()];
+            // Store source observations even on mismatch; they are never accepted
+            // as completed checks until the full comparison below succeeds.
+            (agent.verifiedEntries ??= {})[t.key] = structuredClone(check.verified_entries);
             validateVerifiedEntries(t, check.verified_entries);
           } catch (error) {
             verificationErrors.push((error as Error).message);
@@ -489,7 +503,7 @@ export class ImportRunner {
           if (!t.entries.length && check.coverage !== "missing")
             verificationErrors.push("零课程方案须明确标记 missing，不能据此清空旧课表");
         }
-        if (verificationErrors.length) throw Error(verificationErrors.join("\n"));
+        if (verificationErrors.length) throw Error(verificationErrors.join("\n") + "\n同轮复核事实已保留；amend_timetable 修正后可设置 reuse_verified_entries=true，只补交变化的复核值，仍须完整填写身份与覆盖检查。");
         person.checks = Object.fromEntries(
           args.checks.map(
             ({

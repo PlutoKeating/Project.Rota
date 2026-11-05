@@ -144,7 +144,7 @@ export const toolSpecs = {
   },
   finish_person: {
     description:
-      "提取阶段保存 A/B 后调用，运行时自动进入独立来源复核；复核阶段逐条核对并传入 checks 数组，每项 key 为课表 key，checked_entries 必须覆盖全部索引；verified_entries 按原件逐条填写 index 与课程事实（不含 note），程序会与已存值比较，不一致先 amend_timetable 局部修正，避免整表重写。完整读完材料不等于课表完整，遮挡/单周标 partial；缺课表保留空课程和 missing 原因。此调用不会写正式库。",
+      "提取阶段保存 A/B 后调用，运行时自动进入独立来源复核；复核阶段逐条核对并传入 checks 数组，每项 key 为课表 key，checked_entries 必须覆盖全部索引；verified_entries 按原件逐条填写 index 与课程事实（不含 note），程序会与已存值比较，不一致先 amend_timetable 局部修正，再设置 reuse_verified_entries=true 复用同轮已提交的复核事实，只补交变化索引（无需改变复核值时可传空数组），避免重复整表输出。完整读完材料不等于课表完整，遮挡/单周标 partial；缺课表保留空课程和 missing 原因。此调用不会写正式库。",
     schema: z.object({
       checks: z
         .array(
@@ -162,6 +162,7 @@ export const toolSpecs = {
               .describe(
                 "本课表原件明确印出的学号；图片须先 view_image 裁剪放大表头或学号区域，逐位核对重复数字；没有学号时为空数组，不包含他人对照课表的学号。",
               ),
+            reuse_verified_entries: z.boolean().default(false).describe("仅在同轮复核已提交过该课表事实时使用；复用先前独立读取值，verified_entries 只提交需更正的索引。仍校验全部课程；重写课表或重新分派后不可复用。"),
             verified_entries: z.array(verifiedEntrySchema).max(120),
           }),
         )

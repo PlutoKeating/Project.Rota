@@ -428,6 +428,105 @@ test("local corrections preserve untouched course fields and still require verif
   expect(table.entries[0]).toMatchObject({ name: "数学", teacher: "新教师", weekday: 1, period_from: 1, period_to: 1, weeks: [1, 2] });
   expect(table.replace_weeks).toEqual([1, 2]);
 });
+test("verification reuses independent observations after an amendment, without resending the table", async ({ page }) => {
+  let attempt = 0;
+  await setup(page, (body) => {
+    if (body.mode === "discover") return discovery(["a"]);
+    const reply = personReply(body);
+    if (body.mode === "verify") {
+      const checks = reply.calls[0].args.checks;
+      checks[0].verified_entries[0].teacher = "原件教师";
+      if (attempt++ === 0) return reply; // Deliberate disagreement with extraction.
+      checks[0].reuse_verified_entries = true;
+      checks[0].verified_entries = [];
+      return output([
+        { name: "amend_timetable", args: { key: "fall", entries: [{ index: 0, changes: { teacher: "原件教师" } }] } },
+        { name: "finish_person", args: { checks } },
+      ]);
+    }
+    return reply;
+  });
+  await upload(page, ["a"]);
+  await expect.poll(async () => (await saved(page))?.status).toBe("review");
+  const person = (await saved(page)).session.people.a;
+  expect(attempt).toBe(2);
+  expect(person.checks.fall.verified_entries).toHaveLength(1);
+  expect(person.checks.fall.verified_entries[0].teacher).toBe("原件教师");
+});
+
+test("cached verification never accepts a later amendment that disagrees with the source observation", async ({ page }) => {
+  let attempt = 0;
+  let rejected = false;
+  await setup(page, (body) => {
+    if (body.mode === "discover") return discovery(["a"]);
+    const reply = personReply(body);
+    if (body.mode === "verify") {
+      rejected ||= JSON.stringify(body.messages).includes("复核值与已存课程不一致");
+      const checks = reply.calls[0].args.checks;
+      checks[0].verified_entries[0].teacher = "原件教师";
+      if (attempt++ === 0) return reply;
+      checks[0].reuse_verified_entries = true;
+      checks[0].verified_entries = [];
+      return output([
+        { name: "amend_timetable", args: { key: "fall", entries: [{ index: 0, changes: { teacher: "错误教师" } }] } },
+        { name: "finish_person", args: { checks } },
+      ]);
+    }
+    return reply;
+  });
+  await upload(page, ["a"]);
+  await expect.poll(async () => (await saved(page))?.session?.people?.a?.status).toBe("failed");
+  expect(rejected).toBe(true);
+  expect((await saved(page)).session.people.a.checks).toEqual({});
+});
+
+test("verification reuse requires observations from the current verification run", async ({ page }) => {
+  let rejected = false;
+  await setup(page, (body) => {
+    if (body.mode === "discover") return discovery(["a"]);
+    const reply = personReply(body);
+    if (body.mode === "verify") {
+      rejected ||= JSON.stringify(body.messages).includes("没有可复用的同轮复核事实");
+      reply.calls[0].args.checks[0].reuse_verified_entries = true;
+      reply.calls[0].args.checks[0].verified_entries = [];
+    }
+    return reply;
+  });
+  await upload(page, ["a"]);
+  await expect.poll(async () => (await saved(page))?.session?.people?.a?.status).toBe("failed");
+  expect(rejected).toBe(true);
+  expect((await saved(page)).session.people.a.checks).toEqual({});
+});
+
+test("rewriting a timetable invalidates its cached source verification", async ({ page }) => {
+  let first = true;
+  let rejected = false;
+  await setup(page, (body) => {
+    if (body.mode === "discover") return discovery(["a"]);
+    const reply = personReply(body);
+    if (body.mode === "verify") {
+      rejected ||= JSON.stringify(body.messages).includes("没有可复用的同轮复核事实");
+      const checks = reply.calls[0].args.checks;
+      if (first) {
+        first = false;
+        checks[0].verified_entries[0].teacher = "复核教师";
+        return reply;
+      }
+      checks[0].reuse_verified_entries = true;
+      checks[0].verified_entries = [];
+      return output([
+        personReply({ ...body, mode: "person" }).calls[0],
+        { name: "finish_person", args: { checks } },
+      ]);
+    }
+    return reply;
+  });
+  await upload(page, ["a"]);
+  await expect.poll(async () => (await saved(page))?.session?.people?.a?.status).toBe("failed");
+  expect(rejected).toBe(true);
+  expect((await saved(page)).session.people.a.checks).toEqual({});
+});
+
 test("an invalid correction leaves every existing entry unchanged", async ({ page }) => {
   await setup(page, (body) => {
     if (body.mode === "discover") return discovery(["a"]);
