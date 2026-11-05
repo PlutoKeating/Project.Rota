@@ -197,7 +197,7 @@ test("independent people overlap model requests and commit only after human revi
   expect(applied[0].review.timetables).toHaveLength(2);
 });
 test("large batches bound concurrency and retain every person's verified result", async ({ page }) => {
-  const keys = Array.from({ length: 10 }, (_, i) => i === 0 ? "a" : `person${i}`);
+  const keys = Array.from({ length: 18 }, (_, i) => i === 0 ? "a" : `person${i}`);
   let active = 0;
   let peak = 0;
   const verified = new Set<string>();
@@ -208,7 +208,7 @@ test("large batches bound concurrency and retain every person's verified result"
     if (body.mode === "person") {
       active++;
       peak = Math.max(peak, active);
-      if (active === 8) release();
+      if (active === 16) release();
       await firstWave;
       await new Promise((resolve) => setTimeout(resolve, 50));
       active--;
@@ -219,10 +219,10 @@ test("large batches bound concurrency and retain every person's verified result"
   await upload(page, keys);
   await expect.poll(async () => (await saved(page))?.status).toBe("review");
   const job = await saved(page);
-  expect(peak).toBe(8);
-  expect(verified.size).toBe(10);
-  expect(Object.keys(job.timetables)).toHaveLength(10);
-  expect(job.draft.person).toHaveLength(10);
+  expect(peak).toBe(16);
+  expect(verified.size).toBe(18);
+  expect(Object.keys(job.timetables)).toHaveLength(18);
+  expect(job.draft.person).toHaveLength(18);
   expect(Object.values(job.session.people).every((p: any) => p.status === "done")).toBe(true);
 });
 test("missing public calendar yields review with structured courses but prohibits apply", async ({
