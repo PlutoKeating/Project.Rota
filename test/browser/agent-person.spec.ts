@@ -903,7 +903,7 @@ test("coordinator can checkpoint a teacher review before final delivery", async 
         && m.content.startsWith("预先读取的来源") && m.content.includes("b.txt"));
       if (!checkpointed) {
         checkpointed = true;
-        return output([{ name: "review_consistency", args: { reviews: c.conflicts.map((g: any) => ({
+        return output([{ name: "revise_person", args: { key: "a", instruction: "复查姓名，不改变已核对课程事实" } }, { name: "review_consistency", args: { reviews: c.conflicts.map((g: any) => ({
           key: g.key, resolution: "different_context", explanation: "原件已核对，两人分别由不同教师任教",
           checked_variant_indices: g.variants.map((v: any) => v.index),
         })) } }]);
@@ -922,6 +922,7 @@ test("coordinator can checkpoint a teacher review before final delivery", async 
   const review = (await saved(page)).importCheck.consistency_review[0];
   expect(review.checked_variant_indices).toBeUndefined();
   expect(review.checked_variants.map((v: any) => v.teacher).sort()).toEqual(["乙老师", "甲老师"].sort());
+  expect(JSON.stringify((await saved(page)).session.coordinator.messages)).not.toContain("人员对象尚未完成");
   expect(preloaded).toBe(true);
 });
 

@@ -864,7 +864,12 @@ export class ImportRunner {
           if (new Set(reply.calls.map((c) => c.id)).size !== reply.calls.length)
             throw Error("模型返回重复调用编号");
           agent.messages.push(...reply.messages);
-          agent.pending = reply.calls;
+          // These two operations share the current completed snapshot. Checkpoint
+          // before queuing revisions; later fact changes invalidate its signature.
+          agent.pending = mode === "reconcile" && reply.calls.every((call) =>
+            ["review_consistency", "revise_person"].includes(call.name))
+            ? [...reply.calls].sort((a, b) => Number(a.name === "revise_person") - Number(b.name === "revise_person"))
+            : reply.calls;
           await this.persist();
           if (this.stopped) break;
         }
