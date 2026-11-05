@@ -77,13 +77,23 @@ export function validateVerifiedEntries(
     teacher: entry.teacher ?? null,
     location: entry.location ?? null,
   });
+  const mismatches: string[] = [];
   for (const entry of verified) {
     const saved = table.entries[entry.index];
-    if (!saved || canonical(facts(saved)) !== canonical(facts(entry)))
-      throw Error(
-        `复核值与已存课程不一致：${table.key}[${entry.index}]；请回看来源，用 write_person 修正后再完成`,
-      );
+    if (!saved) {
+      mismatches.push(`${table.key}[${entry.index}]（索引不存在）`);
+      continue;
+    }
+    const expected = facts(saved), actual = facts(entry);
+    const fields = (Object.keys(expected) as (keyof typeof expected)[])
+      .filter((key) => canonical(expected[key]) !== canonical(actual[key]));
+    if (fields.length)
+      mismatches.push(`${table.key}[${entry.index}]（${fields.join("、")}）`);
   }
+  if (mismatches.length)
+    throw Error(
+      `复核值与已存课程不一致：${mismatches.join("；")}；请回看来源，一次修正以上全部差异后再完成`,
+    );
 }
 export interface AgentState {
   runId: string;

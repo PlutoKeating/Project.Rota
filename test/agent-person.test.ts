@@ -246,4 +246,21 @@ describe("source verification facts", () => {
     expect(() => validateVerifiedEntries(t, [reread, reread])).toThrow("逐条覆盖");
     expect(() => validateVerifiedEntries(t, [{ ...reread, index: 1 }])).toThrow("不一致");
   });
+  it("reports all differing indices and fields without disclosing saved answers", () => {
+    const t = table();
+    t.entries.push({ ...t.entries[0] }, { ...t.entries[0] });
+    const before = structuredClone(t);
+    const reread = t.entries.map((entry, index) => verifiedEntrySchema.parse({
+      ...entry, index,
+      ...(index === 0 ? { teacher: "乙老师", location: "新地点" } : {}),
+      ...(index === 2 ? { weeks: [2] } : {}),
+    }));
+    let message = "";
+    try { validateVerifiedEntries(t, reread); } catch (error) { message = (error as Error).message; }
+    expect(message).toContain("fall[0]（teacher、location）");
+    expect(message).toContain("fall[2]（weeks）");
+    expect(message).not.toContain("fall[1]");
+    expect(message).not.toContain("甲老师");
+    expect(t).toEqual(before);
+  });
 });
