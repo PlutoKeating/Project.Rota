@@ -695,10 +695,11 @@ it("preserves explicit per-timetable verification fields in the Google wire sche
   const checks = tool.parameters.properties.checks;
   expect(checks.type).toBe("array");
   expect(checks.items.required).toEqual(
-    expect.arrayContaining(["key", "identity", "source_person_names", "checked_entries", "coverage"]),
+    expect.arrayContaining(["key", "identity", "source_person_names", "source_student_numbers", "checked_entries", "coverage"]),
   );
   expect(checks.items.properties.checked_entries.items.type).toBe("integer");
   expect(checks.items.properties.source_person_names.items.type).toBe("string");
+  expect(checks.items.properties.source_student_numbers.items.type).toBe("string");
   expect(checks.items.properties.verified_entries.type).toBe("array");
   expect(checks.items.properties.verified_entries.items.properties.weeks.items.type).toBe("integer");
 });

@@ -461,6 +461,17 @@ export class ImportRunner {
               "原件姓名与目标人员不一致，不能把他人课程写给当前人员；请按原件修正身份，或移除误分派课表并保留缺失说明，由协调器重新分派来源",
             );
           if (
+            t.entries.length &&
+            check.source_student_numbers.some(
+              (number: string) =>
+                normalizeName(number) !==
+                normalizeName(person.information!.student_no ?? ""),
+            )
+          )
+            verificationErrors.push(
+              "原件学号与目标人员不一致，请逐位回看原件，用 write_person 的 information 修正学号后再完成复核；不得从首次提取值补猜",
+            );
+          if (
             check.coverage !== "complete" &&
             !t.unresolved.length &&
             !person.unresolved.length
@@ -596,7 +607,10 @@ export class ImportRunner {
         person: {
           key: person.key,
           label: person.label,
-          information: person.information,
+          information:
+            person.status === "verifying" && person.information
+              ? { ...person.information, student_no: undefined }
+              : person.information,
           timetables:
             person.status === "verifying"
               ? Object.fromEntries(

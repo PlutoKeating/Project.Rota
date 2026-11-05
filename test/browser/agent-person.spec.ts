@@ -10,6 +10,7 @@ const evidence = (path: string) => [
 ];
 const fields = {
   source_person_names: [],
+  source_student_numbers: [],
   identity: "已核对",
   courses_and_times: "已逐项核对",
   teachers_and_locations: "原件未提供，不猜造",
@@ -292,6 +293,40 @@ test("rejects a timetable whose printed owner conflicts with the target person",
   expect((await saved(page)).session.people.a.status).toBe("failed");
   expect(applied).toHaveLength(0);
 });
+test("student number verification is independent and rejects a dropped digit", async ({ page }) => {
+  let attempted = false, rejected = false, hidden = false;
+  await setup(page, (body) => {
+    if (body.mode === "discover") return discovery(["a"]);
+    const reply = personReply(body);
+    if (body.mode === "person") {
+      reply.calls[0].args.information.student_no = "TEST001";
+      return output(reply.calls);
+    }
+    if (body.mode === "verify") {
+      hidden = !Object.hasOwn(JSON.parse(body.context).person.information, "student_no");
+      const checks = reply.calls[0].args.checks;
+      checks[0].source_student_numbers = ["TEST0001"];
+      if (!attempted) {
+        attempted = true;
+        return output([{ name: "finish_person", args: { checks } }]);
+      }
+      rejected = JSON.stringify(body.messages).includes("原件学号与目标人员不一致");
+      return output([
+        { name: "write_person", args: { information: { full_name: "甲", student_no: "TEST0001" }, mode: "append" } },
+        { name: "finish_person", args: { checks } },
+      ]);
+    }
+    return reply;
+  });
+  await upload(page, ["a"]);
+  await expect.poll(async () => (await saved(page))?.status).toBe("review");
+  expect(hidden).toBe(true);
+  expect(rejected).toBe(true);
+  const person = Object.values((await saved(page)).session.people)[0] as any;
+  expect(person.information.student_no).toBe("TEST0001");
+  expect(person.timetables.fall.entries).toHaveLength(1);
+});
+
 test("verification returns field, identity and coverage problems in one response", async ({ page }) => {
   let allProblems = false;
   await setup(page, (body) => {

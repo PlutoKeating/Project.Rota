@@ -38,3 +38,5 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 验证使用 `pnpm check`、`pnpm build`；浏览器对象协议由 `pnpm test:agent-browser` 覆盖。本地真实模型验收脚本隔离业务写入，历史旧架构成绩不代表新版准确率与耗时。
 
 真实 Vertex 验收另支持 `pnpm test:agent-vertex-apply /private/input.zip /private/new-output`：从全新空快照开始，快照/批次/租约/提交/报告调用真实 Worker API，业务写入仅进入本进程隔离 SQLite；模型仍使用本机 Vertex。此模式拒绝快照文件与旧浏览器检查点，不继承远端存储环境变量。材料完整且客户端检查通过后自动提交到测试库，输出 applyMs、回读快照和审核报告，总耗时包含提交。缺少日历等条件时保持未提交并返回失败，不补造事实。默认 test:agent-vertex 仍禁止业务提交。可用 test/fixtures/live-apply.txt 做明确标注为虚构材料的提交链路冒烟测试；它不能证明真实压缩包的速度或准确率。无需新增依赖或迁移。
+
+人员复核新增必填 source_student_numbers，填写本人原件明确印出的学号；未印出时为空数组。他人对照材料的学号不纳入。verify 上下文隐藏首次提取的 student_no，有课程方案的原件学号与保存身份不一致时拒绝完成，须回看原件并通过 write_person 修正 information；不以固定学号位数猜测学校规则。前后端工具协议须同步发布，无新增依赖、配置或迁移。已有完成检查点不追溯验证，须重新导入或显式返工。
