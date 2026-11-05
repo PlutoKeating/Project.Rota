@@ -247,7 +247,7 @@ export const emptySession = (): ImportSession => ({
   coordinator: emptyAgent(),
   people: {},
   organizations: [],
-  concurrency: 8,
+  concurrency: 16,
   issues: [],
 });
 export function matchPerson(
