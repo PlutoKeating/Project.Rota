@@ -1036,9 +1036,10 @@ test("failed automatic unpack cannot establish organization evidence", async ({ 
 
 
 test("parallel consistency readers load only their assigned source images", async ({ page }) => {
-  let batches = 0, firstScoped = false, reloaded = false;
+  let batches = 0, firstScoped = false, reloaded = false, release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
   const courses = (key: string) => (key === "c" ? [5] : key === "b" ? [0, 1, 2, 3, 4] : [0, 1, 2, 3, 4, 5]);
-  await setup(page, (body) => {
+  await setup(page, async (body) => {
     if (body.mode === "discover") return output([
       { name: "dispatch_people", args: { people: ["a", "b", "c"].map((key) => ({ ...assignment(key), sources: [key + ".png"] })) } },
       { name: "save_calendars", args: { calendars: [{ ...calendar, sources: evidence("a.png") }] } },
@@ -1053,6 +1054,7 @@ test("parallel consistency readers load only their assigned source images", asyn
       if (context.conflicts.some((g: any) => g.course === "课程5")) reloaded = hasC;
       if (!context.conflicts.length) return output([{ name: "finish_import", args: {} }]);
       batches++;
+      if (context.conflicts.some((g: any) => g.course === "课程5")) await gate;
       return output([{ name: "review_consistency", args: { reviews: context.conflicts.map((g: any) => ({
         key: g.key, resolution: "different_context", explanation: "合成教师差异已回看",
         checked_variant_indices: g.variants.map((v: any) => v.index),
@@ -1076,6 +1078,12 @@ test("parallel consistency readers load only their assigned source images", asyn
   const { readFile } = await import("node:fs/promises");
   const buffer = await readFile("test/fixtures/import/schedule.png");
   await page.getByLabel("选择导入材料").setInputFiles(["a", "b", "c"].map((key) => ({ name: key + ".png", mimeType: "image/png", buffer })));
+  await expect.poll(async () => (await saved(page))?.session.consistencyWorkers?.some((worker: any) => worker.done)).toBe(true);
+  const workers = (await saved(page)).session.consistencyWorkers;
+  const images = (worker: any) => worker.agent.messages.flatMap((m: any) => Array.isArray(m.content) ? m.content : []).filter((p: any) => p.type === "image").length;
+  expect(images(workers.find((worker: any) => worker.done))).toBe(0);
+  expect(images(workers.find((worker: any) => !worker.done))).toBeGreaterThan(0);
+  release();
   await expect.poll(async () => (await saved(page))?.status).toBe("review");
   expect(batches).toBe(2);
   expect(firstScoped).toBe(true);
@@ -1283,4 +1291,49 @@ test("paused parallel readers persist pending calls and resume them after reload
   await expect.poll(async () => (await saved(page))?.status).toBe("review");
   expect(calls).toBe(2);
   expect((await saved(page)).importCheck.consistency_review).toHaveLength(6);
+});
+
+
+test("completed person releases image payloads and a later revision rereads originals", async ({ page }) => {
+  let revised = false, imagesAtFirstCompletion = -1, reread = false, bridgeStripped = false;
+  const imageCount = (messages: any[]) => messages.flatMap((m: any) => Array.isArray(m.content) ? m.content : []).filter((p: any) => p.type === "image").length;
+  await setup(page, async (body) => {
+    if (body.mode === "discover") return output([
+      { name: "dispatch_people", args: { people: [{ ...assignment("a"), sources: ["a.png"] }] } },
+      { name: "save_calendars", args: { calendars: [{ ...calendar, sources: evidence("a.png") }] } },
+      { name: "finish_discovery", args: {} },
+    ]);
+    if (body.mode === "reconcile" && !revised) {
+      imagesAtFirstCompletion = imageCount((await saved(page)).session.people.a.agent.messages);
+      revised = true;
+      return output([{ name: "revise_person", args: { key: "a", instruction: "重新核对原件", recheck_entries: [{ key: "fall", indices: [0] }] } }]);
+    }
+    if (body.mode === "person") bridgeStripped = await page.evaluate(async () => {
+      const { progressSnapshot } = await import("/test/live/progress.ts");
+      const { listJobs } = await import("/src/client/agent-import/store.ts");
+      const job = (await listJobs("owner"))[0];
+      const observed = progressSnapshot(job);
+      return !JSON.stringify(observed).includes("data:image/") && JSON.stringify(job).includes("data:image/");
+    });
+    if (revised && body.mode === "verify") reread = imageCount(body.messages) > 0;
+    const reply = personReply(body);
+    if (body.mode === "person") reply.calls[0].args.timetables[0].sources = evidence("a.png");
+    return reply;
+  });
+  const { readFile } = await import("node:fs/promises");
+  const buffer = await readFile("test/fixtures/import/schedule.png");
+  await page.getByLabel("选择导入材料").setInputFiles({ name: "a.png", mimeType: "image/png", buffer });
+  await expect.poll(async () => (await saved(page))?.status).toBe("review");
+  const job = await saved(page), agent = job.session.people.a.agent;
+  expect(imagesAtFirstCompletion).toBe(0);
+  expect(imageCount(agent.messages)).toBe(0);
+  expect(agent.verifiedEntries.fall).toHaveLength(1);
+  expect(agent.coverage["a.png"]).toBeDefined();
+  expect(reread).toBe(true);
+  expect(bridgeStripped).toBe(true);
+  const size = await page.evaluate(async (id) => {
+    const s = await import("/src/client/agent-import/store.ts");
+    return (await s.materials(id)).find((file: any) => file.path === "a.png").blob.size;
+  }, job.id);
+  expect(size).toBe(buffer.length);
 });

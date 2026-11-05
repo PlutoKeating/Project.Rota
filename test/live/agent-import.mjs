@@ -313,25 +313,6 @@ try {
   await page.goto(`http://127.0.0.1:${port}/#/imports`);
   let progressWrites = Promise.resolve();
   await page.exposeFunction("saveLiveProgress", (job) => {
-    for (const agent of [
-      job.session?.coordinator,
-      ...Object.values(job.session?.people ?? {}).map((p) => p.agent),
-    ].filter(Boolean)) {
-      agent.pendingImages = (agent.pendingImages ?? []).map((p) => ({
-        path: p.path,
-        image: "[图像保留在浏览器检查点]",
-      }));
-      agent.messages = agent.messages.map((m) => ({
-        ...m,
-        content: Array.isArray(m.content)
-          ? m.content.map((p) =>
-              p.type === "image"
-                ? { type: "text", text: "[图像保留在浏览器检查点]" }
-                : p,
-            )
-          : m.content,
-      }));
-    }
     const json = JSON.stringify(job);
     progressWrites = progressWrites.then(() =>
       fs.writeFile(path.join(out, "progress.json"), json),
@@ -353,6 +334,7 @@ try {
     async ({ bytes, name, supplements, maxMs, feedback, applyLocal }) => {
       const r = await import("/src/client/agent-import/runtime.ts"),
         s = await import("/src/client/agent-import/store.ts");
+      const { progressSnapshot } = await import("/test/live/progress.ts");
       const existing = (await s.listJobs("live-test"))[0];
       if (applyLocal && existing) throw Error("Local apply acceptance requires a fresh output directory");
       const job =
@@ -366,7 +348,7 @@ try {
         await r.feedback(job, feedback);
       }
       const runner = new r.ImportRunner(job, (j) => {
-        void window.saveLiveProgress(j);
+        void window.saveLiveProgress(progressSnapshot(j));
       });
       const timer = setTimeout(() => runner.stop(), maxMs);
       try {

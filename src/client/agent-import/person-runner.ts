@@ -861,6 +861,9 @@ export class ImportRunner {
         if (reviewer && !agent.pending.length && (reviewer.revisions.length ||
             retainedConsistencyReviews(this.reviewGroups(reviewer), session.consistencyCheckpoints).length === reviewer.keys.length)) {
           reviewer.done = true;
+          // Completed readers need conclusions and tool records, not duplicate image bytes.
+          agent.messages = withoutImages(agent.messages);
+          agent.pendingImages = [];
           await this.persist();
           break;
         }
@@ -1002,6 +1005,8 @@ export class ImportRunner {
           this.log(
             `${reviewer?.id ?? person?.label ?? "协调器"} · ${call.name} · ${Date.now() - started} ms`,
           );
+          if (person && ["done"].includes(person.status) && !agent.pending.length)
+            agent.messages = withoutImages(agent.messages);
           // Switching extraction to verification starts a fresh context and fresh coverage.
           if (
             person?.status === "verifying" &&
