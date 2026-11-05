@@ -1084,17 +1084,25 @@ test("coordinator reloads an evicted image when a later review group needs it", 
 
 
 for (const scenario of ["recover", "timeout", "quota_exhausted"]) {
-  test(`bounded second wave handles ${scenario} without repeating successful people`, async ({ page }) => {
+  test(`bounded queue recovery handles ${scenario} without repeating successful people`, async ({ page }) => {
     let aCalls = 0, bRequests = 0;
-    await setup(page, (body) => {
+    let releaseA = () => {};
+    const aWaiting = new Promise<void>((resolve) => { releaseA = resolve; });
+    let freshRecovery = false;
+    await setup(page, async (body) => {
       if (body.mode === "discover") return discovery();
       if (body.mode === "person" && JSON.parse(body.context).person.key === "a") aCalls++;
+      if (scenario === "recover" && body.mode === "verify" && JSON.parse(body.context).person.key === "a") await aWaiting;
       return personReply(body);
     });
     await page.route("**/api/agent-imports/*/turn", async (route) => {
       const body = route.request().postDataJSON();
       if (body.mode === "person" && JSON.parse(body.context).person.key === "b") {
         bRequests++;
+        if (bRequests === 3) {
+          freshRecovery = !JSON.stringify(body.messages).includes("上一请求未返回有效结果");
+          releaseA();
+        }
         if (scenario !== "recover" || bRequests <= 2) {
           const code = scenario === "quota_exhausted" ? scenario : "timeout";
           return route.fulfill({ status: 502, json: { error: { code: "llm_error", message: code },
@@ -1110,6 +1118,7 @@ for (const scenario of ["recover", "timeout", "quota_exhausted"]) {
       return scenario === "recover" ? job?.status : job?.error && job.status;
     }, { timeout: 15000 }).toBe(scenario === "recover" ? "review" : "paused");
     expect(aCalls).toBe(1);
+    if (scenario === "recover") expect(freshRecovery).toBe(true);
     expect(bRequests).toBe(scenario === "recover" ? 3 : scenario === "timeout" ? 4 : 1);
     expect((await saved(page)).session.people.a.status).toBe("done");
   });

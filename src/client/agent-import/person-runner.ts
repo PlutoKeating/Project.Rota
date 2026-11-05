@@ -975,24 +975,28 @@ export class ImportRunner {
     const pending = Object.values(session.people).filter(
       (p) => p.status !== "done",
     );
-    const runQueue = async (queue: PersonWorkspace[]) => {
-      let index = 0;
-      await Promise.all(Array.from(
-        { length: Math.min(session.concurrency, queue.length) },
-        async () => {
-          while (!this.stopped && index < queue.length) await this.actor(queue[index++]);
-        },
-      ));
-    };
-    await runQueue(pending);
-    // One bounded second wave, after other people have drained. Never restart
-    // completed work, retry quota failures, or loop on invalid model output.
-    const transient = pending.filter((p) => p.status === "failed" && p.agent.retryableFailure);
-    if (!this.stopped && transient.length) {
-      this.log(`首轮已结束，补跑 ${transient.length} 个连接/超时失败对象`);
-      await this.persist();
-      await runQueue(transient);
-    }
+    const queue = [...pending], retried = new Set<string>();
+    let index = 0;
+    await Promise.all(Array.from(
+      { length: Math.min(session.concurrency, queue.length) },
+      async () => {
+        while (!this.stopped && index < queue.length) {
+          const person = queue[index++];
+          await this.actor(person);
+          if (!this.stopped && person.status === "failed" && person.agent.retryableFailure && !retried.has(person.id)) {
+            retried.add(person.id);
+            // Keep extracted facts, but do not resubmit a repeatedly timed-out
+            // conversation. Fresh source reads and verification are mandatory.
+            const turns = person.agent.turns;
+            person.agent = emptyAgent();
+            person.agent.turns = turns;
+            queue.push(person);
+            this.log(`${person.label}：连接/超时失败，已加入队尾补跑（仅一次，重新读取来源）`);
+            await this.persist();
+          }
+        }
+      },
+    ));
     if (this.stopped) return;
     if (pending.some((p) => p.status !== "done"))
       throw Error("部分人员处理失败，其他成果已保存；继续时只恢复未完成对象");
