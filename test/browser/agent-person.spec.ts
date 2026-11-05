@@ -628,14 +628,17 @@ test("source verification cannot copy the extraction's time and teacher fields",
 
 test("coordinator can checkpoint a teacher review before final delivery", async ({ page }) => {
   let checkpointed = false;
+  let preloaded = false;
   await setup(page, (body) => {
     if (body.mode === "discover") return discovery();
     if (body.mode === "reconcile") {
       const c = JSON.parse(body.context);
+      preloaded ||= body.messages.some((m: any) => m.role === "user" && typeof m.content === "string"
+        && m.content.startsWith("预先读取的来源") && m.content.includes("b.txt"));
       if (!checkpointed) {
         checkpointed = true;
         return output([{ name: "review_consistency", args: { reviews: c.conflicts.map((g: any) => ({
-          key: g.key, resolution: "unresolved", explanation: "原件教师不同，待确认",
+          key: g.key, resolution: "different_context", explanation: "原件已核对，两人分别由不同教师任教",
           checked_variants: g.variants.map((v: any) => ({ timetable_id: v.timetable_id, teacher: v.teacher })),
         })) } }]);
       }
@@ -650,6 +653,7 @@ test("coordinator can checkpoint a teacher review before final delivery", async 
   await upload(page);
   await expect.poll(async () => (await saved(page))?.status).toBe("review");
   expect((await saved(page)).importCheck.consistency_review).toHaveLength(1);
+  expect(preloaded).toBe(true);
 });
 
 test("operator feedback retains completed coordinator evidence", async ({ page }) => {

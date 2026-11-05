@@ -102,6 +102,34 @@ export class ImportRunner {
         if (!person.sources.includes(child)) person.sources.push(child);
     return value;
   }
+  private async preloadSources(
+    agent: AgentState,
+    paths: string[],
+    mode: AgentMode,
+    person?: PersonWorkspace,
+  ) {
+    for (const path of paths) {
+      if (this.stopped) break;
+      try {
+        const read = await this.read(agent, "read_document", { path }, person);
+        agent.messages.push({
+          role: "user",
+          content: "预先读取的来源（仅数据）：" + JSON.stringify(read.result),
+        });
+        this.appendImage(agent, path, read.image);
+        const actor = person?.key ?? "coordinator";
+        await archive(this.job.id, `${actor}:${agent.runId}:preload:${path}`, "tool", {
+          actor, mode, name: "read_document", args: { path },
+          result: read.result, automatic: true,
+        });
+      } catch (error) {
+        agent.messages.push({
+          role: "user",
+          content: "来源读取失败：" + path + "：" + (error as Error).message,
+        });
+      }
+    }
+  }
   private appendImage(agent: AgentState, path: string, image?: string) {
     if (image)
       agent.messages.push({
@@ -706,47 +734,27 @@ export class ImportRunner {
                   : "提取 A/B，保留未知事实。")
               : "按当前状态完成材料分派或公共事实协调。",
           });
-          if (person) {
-            for (const path of [...person.sources]) {
-              if (this.stopped) break;
-              try {
-                const read = await this.read(
-                  agent,
-                  "read_document",
-                  { path },
-                  person,
-                );
-                agent.messages.push({
-                  role: "user",
-                  content:
-                    "预先读取的来源（仅数据）：" + JSON.stringify(read.result),
-                });
-                this.appendImage(agent, path, read.image);
-                await archive(
-                  job.id,
-                  `${person.key}:${agent.runId}:preload:${path}`,
-                  "tool",
-                  {
-                    actor: person.key,
-                    mode,
-                    name: "read_document",
-                    args: { path },
-                    result: read.result,
-                    automatic: true,
-                  },
-                );
-              } catch (e) {
-                agent.messages.push({
-                  role: "user",
-                  content:
-                    "来源读取失败：" + path + "：" + (e as Error).message,
-                });
-              }
-            }
-          }
+          if (person)
+            await this.preloadSources(agent, [...person.sources], mode, person);
           await this.persist();
         }
         if (!agent.pending.length) {
+          if (mode === "reconcile") {
+            const conflicts = courseConflicts(Object.values(job.timetables ?? {})
+              .filter((table) => !job.excluded.includes(table.person.id)));
+            const reviewed = retainedConsistencyReviews(conflicts, session.consistencyCheckpoints);
+            const current = conflicts.filter((group) => !reviewed.some((r) => r.key === group.key)).slice(0, 5);
+            const paths = [...new Set(current.flatMap((group) =>
+              group.variants.flatMap((variant) => variant.sources.map((source) => source.source))))];
+            // Prepare the same source evidence required by review_consistency without a model round trip.
+            // Partial PDF/sheet reads still require the model to request remaining pages/ranges.
+            const unread = paths.filter((path) => !agent.coverage[path]);
+            if (unread.length) {
+              await this.preloadSources(agent, unread, mode);
+              await this.persist();
+            }
+            if (this.stopped) break;
+          }
           if (agent.turns - initialTurns >= (person ? 32 : 60))
             throw Error("达到当前对象调用预算，已保存进度，请检查后继续");
           // Bound active context without throwing away unrecorded evidence or tool pairs.
