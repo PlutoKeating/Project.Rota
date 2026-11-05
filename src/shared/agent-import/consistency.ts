@@ -24,7 +24,9 @@ export function courseConflicts(plans: TimetableProposal[]) {
         timetable_id: string;
         person: string;
         term: string | null;
+        term_id: string | null;
         class_name?: string | null;
+        meetings: { weekday: number | null; period_from: number | null; period_to: number | null; weeks: number[] | null; no_fixed_time: boolean }[];
         entries: number[];
         sources: TimetableProposal["sources"];
       }[];
@@ -41,21 +43,46 @@ export function courseConflicts(plans: TimetableProposal[]) {
       const existing = group.variants.find(
         (v) => v.timetable_id === plan.id && v.teacher === teacher,
       );
-      if (existing) existing.entries.push(index);
+      const meeting = {
+        weekday: entry.weekday ?? null, period_from: entry.period_from ?? null,
+        period_to: entry.period_to ?? null,
+        weeks: entry.weeks ? [...new Set(entry.weeks)].sort((a, b) => a - b) : null,
+        no_fixed_time: entry.no_fixed_time ?? false,
+      };
+      if (existing) { existing.entries.push(index); existing.meetings.push(meeting); }
       else
         group.variants.push({
           teacher,
           timetable_id: plan.id,
           person: plan.person.full_name,
           term: plan.term_name,
+          term_id: plan.term_id ?? null,
           class_name: plan.person.class_name,
+          meetings: [meeting],
           entries: [index],
           sources: plan.sources,
         });
     }
-  return [...groups.values()].filter(
-    (g) => new Set(g.variants.map((v) => v.teacher)).size > 1,
-  );
+  const all = [...groups.values()];
+  type Variant = typeof all[number]["variants"][number];
+  const norm = (value: string | null | undefined) => value?.normalize("NFKC").replace(/\s+/gu, "") ?? "";
+  const comparable = (a: Variant, b: Variant) => {
+    if (a.teacher === b.teacher) return false;
+    if (a.term_id && b.term_id && a.term_id !== b.term_id) return false;
+    const aClass = norm(a.class_name), bClass = norm(b.class_name);
+    if (aClass && bClass && aClass !== bClass) return false;
+    return a.meetings.some((x) => b.meetings.some((y) => {
+      if (x.weekday !== null && y.weekday !== null && x.weekday !== y.weekday) return false;
+      if (x.period_from !== null && x.period_to !== null && y.period_from !== null && y.period_to !== null &&
+          (x.period_to < y.period_from || y.period_to < x.period_from)) return false;
+      if (x.weeks && y.weeks && !x.weeks.some((week) => y.weeks!.includes(week))) return false;
+      // Missing class/time cannot prove separate contexts: retain the source review.
+      return true;
+    }));
+  };
+  return all.map((group) => ({ ...group,
+    variants: group.variants.filter((variant) => group.variants.some((other) => comparable(variant, other))),
+  })).filter((group) => group.variants.length > 1);
 }
 export function validateConsistencyReview(
   conflicts: ReturnType<typeof courseConflicts>,

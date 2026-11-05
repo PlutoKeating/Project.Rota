@@ -1511,3 +1511,24 @@ test("final coordinator receives retained consistency conclusions with their exp
   await expect.poll(async () => (await saved(page))?.status).toBe("review");
   expect(conclusions).toEqual([{ key: "teacher:数学", resolution: "different_context", explanation: "已回看原件，两人分属不同教学组" }]);
 });
+
+test("different explicit classes retain their teachers without cross-class correction requests", async ({ page }) => {
+  let pendingGroups: number | undefined;
+  await setup(page, (body) => {
+    if (body.mode === "discover") return discovery();
+    const context = JSON.parse(body.context), reply = personReply(body);
+    if (body.mode === "person") {
+      reply.calls[0].args.information.class_name = context.person.key === "a" ? "一班" : "二班";
+      reply.calls[0].args.timetables[0].entries[0].teacher = context.person.key === "a" ? "张老师" : "李老师";
+    }
+    if (body.mode === "verify") reply.calls[0].args.checks[0].verified_entries[0].teacher = context.person.key === "a" ? "张老师" : "李老师";
+    if (body.mode === "reconcile") pendingGroups = context.remainingConflictCount;
+    return reply;
+  });
+  await upload(page);
+  await expect.poll(async () => (await saved(page))?.status).toBe("review");
+  expect(pendingGroups).toBe(0);
+  const job = await saved(page);
+  expect(Object.values(job.timetables).map((t: any) => t.entries[0].teacher)).toEqual(["张老师", "李老师"]);
+  expect(job.validatedRevision).toBe(job.revision);
+});

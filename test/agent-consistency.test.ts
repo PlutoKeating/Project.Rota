@@ -47,7 +47,7 @@ it("does not treat repeated meetings or corrected spellings as a disagreement", 
     ] as any),
   ).toEqual([]);
 });
-it("requires explanations for every remaining disagreement, including legitimate different classes", () => {
+it("requires explanations for every remaining disagreement when context is unknown", () => {
   const conflicts = courseConflicts(plans as any);
   expect(() =>
     validateConsistencyReview(conflicts, [
@@ -150,4 +150,36 @@ it("invalid compact review indices explain the exact group and required per-tabl
   const group = courseConflicts(plans as any)[0];
   expect(() => validateCheckedVariants(group, { key: group.key, resolution: "different_context", explanation: "核对", checked_variant_indices: [0], checked_variants: [] }))
     .toThrow(`当前组${group.key}须提交checked_variant_indices=[0,1]`);
+});
+
+const scopedPlans = () => plans.map((plan) => ({ ...plan, term_id: "fall", person: { ...plan.person, class_name: "一班" }, entries: plan.entries.map((entry) => ({ ...entry, weekday: 1, period_from: 1, period_to: 2, weeks: [1, 2] })) }));
+it.each(["class", "term", "weekday", "period", "week"])("does not treat a distinct %s teaching context as a conflicting teacher", (dimension) => {
+  const input = scopedPlans();
+  if (dimension === "class") input[1].person.class_name = "二班";
+  if (dimension === "term") input[1].term_id = "spring";
+  if (dimension === "weekday") input[1].entries[0].weekday = 2;
+  if (dimension === "period") { input[1].entries[0].period_from = 3; input[1].entries[0].period_to = 4; }
+  if (dimension === "week") input[1].entries[0].weeks = [3, 4];
+  expect(courseConflicts(input as any)).toEqual([]);
+});
+it("retains same-context disagreements and excludes unrelated third-class variants", () => {
+  const input = scopedPlans();
+  input[1].entries[0].weeks = [2, 3];
+  const unrelated = { ...input[0], id: "c", person: { id: "c", full_name: "丙", class_name: "二班" }, entries: [{ ...input[0].entries[0], teacher: "另一教师" }] };
+  const groups = courseConflicts([...input, unrelated] as any);
+  expect(groups).toHaveLength(1);
+  expect(groups[0].variants.map((v) => v.timetable_id)).toEqual(["a", "b"]);
+  expect(() => validateConsistencyReview(groups, [])).toThrow("跨课表");
+});
+it("unknown class or time cannot establish separate teaching contexts", () => {
+  const input = scopedPlans();
+  expect(courseConflicts([{ ...input[0], person: { id: "a", full_name: "甲" } }, input[1]] as any)).toHaveLength(1);
+  expect(courseConflicts([input[0], { ...input[1], entries: [{ ...input[1].entries[0], weeks: null, weekday: null, period_from: null, period_to: null }] }] as any)).toHaveLength(1);
+});
+it("changing overlapping meetings invalidates their old teacher review", () => {
+  const input = scopedPlans(), groups = courseConflicts(input as any);
+  const review: ConsistencyReview = { key: groups[0].key, resolution: "unresolved", explanation: "待核对", checked_variants: [] };
+  const saved = { [review.key]: { signature: canonical(groups[0]), review } };
+  input[1].entries[0].weeks = [2, 3];
+  expect(retainedConsistencyReviews(courseConflicts(input as any), saved)).toEqual([]);
 });
