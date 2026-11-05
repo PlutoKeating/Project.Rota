@@ -309,3 +309,20 @@ it("unknown time preserves unrelated existing courses even within declared repla
   expect(job.draft.timetable_entry.some((e) => e.name === "遮挡课")).toBe(false);
   expect(Object.values(job.timetables!)[0].entries).toHaveLength(2);
 });
+
+
+it("unused blank timetable layout periods do not block known course clocks", () => {
+  const job = jobFixture();
+  job.calendars!.cal.periods.push({ index: 13, start: null, end: null });
+  projectPeople(job);
+  expect(job.timetables!["workspace:fall"].bound).toBe(true);
+  expect(job.calendars!.cal.periods.map((p) => p.index)).toEqual([1]);
+});
+it("a blank clock actually referenced by a course still blocks its binding", () => {
+  const job = jobFixture();
+  job.calendars!.cal.periods.push({ index: 13, start: null, end: null });
+  Object.assign(job.session!.people.a.timetables.fall.entries[0], { period_from: 13, period_to: 13 });
+  projectPeople(job);
+  expect(job.timetables!["workspace:fall"].bound).toBe(false);
+  expect(job.calendars!.cal.periods.map((p) => p.index)).toEqual([1, 13]);
+});

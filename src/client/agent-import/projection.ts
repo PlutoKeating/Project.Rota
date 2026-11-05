@@ -51,6 +51,12 @@ export function projectPeople(job: Job) {
       .filter((t) => t.calendar_id === proposed.id);
     const calendar = calendarThroughWeeks(proposed, tables.flatMap((t) =>
       t.entries.flatMap((e) => e.weeks ?? [])));
+    // Blank layout rows are not evidence of required extra teaching periods.
+    // Keep every clock that is known or referenced by an actual course.
+    if (tables.some((t) => t.entries.length))
+      calendar.periods = calendar.periods.filter((period) => period.start || period.end ||
+        tables.some((t) => t.entries.some((entry) => entry.period_from !== null &&
+          period.index >= entry.period_from && period.index <= (entry.period_to ?? entry.period_from))));
     // Preserve the course evidence supporting the derived storage horizon.
     const horizonSources = tables.filter((t) => t.entries.some((e) =>
       e.weeks?.includes(calendar.week_count!))).flatMap((t) => t.sources);
