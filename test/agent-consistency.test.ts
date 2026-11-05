@@ -131,5 +131,17 @@ it("bounds source fanout without splitting or omitting conflict groups", () => {
   expect(consistencyBatch(groups).map((g) => g.key)).toEqual(["0", "1"]);
   expect(consistencyBatch(groups.slice(2)).map((g) => g.key)).toEqual(["2", "3"]);
   const large = { ...groups[0], variants: groups.flatMap((g) => g.variants) };
-  expect(consistencyBatch([large, groups[1]])).toEqual([large]);
+  expect(consistencyBatch([large, groups[1]])).toEqual([large, groups[1]]);
+});
+
+it("reuses an oversized source set for up to five groups without increasing image fanout", () => {
+  const base = courseConflicts(plans as any)[0];
+  const sources = Array.from({ length: 10 }, (_, i) => ({ source: String(i), locator: "page:1", explanation: "test", inferred: false }));
+  const groups = Array.from({ length: 7 }, (_, i) => ({ ...base, key: String(i), variants: [
+    { ...base.variants[0], sources },
+  ] }));
+  expect(consistencyBatch(groups)).toEqual(groups.slice(0, 5));
+  expect(consistencyBatch(groups.slice(5))).toEqual(groups.slice(5));
+  const moreSources = { ...groups[1], variants: [{ ...groups[1].variants[0], sources: [...sources, { ...sources[0], source: "new" }] }] };
+  expect(consistencyBatch([groups[0], moreSources])).toEqual([groups[0]]);
 });

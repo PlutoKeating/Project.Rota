@@ -119,7 +119,8 @@ export function consistencyBatch(groups: ReturnType<typeof courseConflicts>) {
   const batch: typeof groups = [], sources = new Set<string>();
   for (const group of groups) {
     const next = new Set([...sources, ...group.variants.flatMap((v) => v.sources.map((s) => s.source))]);
-    if (batch.length && (batch.length >= 5 || next.size > 8)) break;
+    // An indivisible large group already paid this image cost; reuse those sources.
+    if (batch.length && (batch.length >= 5 || next.size > Math.max(8, sources.size))) break;
     batch.push(group);
     for (const path of next) sources.add(path);
   }
