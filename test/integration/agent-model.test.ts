@@ -312,6 +312,10 @@ describe("native provider tool protocols", () => {
     },
   ])("adapts $kind native tool calls", async ({ kind, url, response }) => {
     const env = await setup(kind, url);
+    if (kind === "google")
+      await env.DB.prepare("UPDATE llm_provider SET params = ? WHERE id = ?")
+        .bind(JSON.stringify({ vision: true, reasoningEffort: "low" }), "model")
+        .run();
     const fetched: string[] = [];
     let requestBody: any;
     vi.stubGlobal(
@@ -327,10 +331,14 @@ describe("native provider tool protocols", () => {
       { messages: [{ role: "user", content: "检查材料" }], context: "{}" },
       "native",
     );
-    if (kind === "google")
+    if (kind === "google") {
+      expect(requestBody.generationConfig.thinkingConfig).toEqual({
+        thinkingLevel: "low",
+      });
       expect(requestBody.generationConfig.mediaResolution).toBe(
         "MEDIA_RESOLUTION_HIGH",
       );
+    }
     expect(result.calls[0].name).toBe("tree");
     expect(JSON.stringify(result)).not.toContain("never-send-to-browser");
     expect(fetched[0]).toContain(kind === "google" ? "/v1beta/" : "/v1/");

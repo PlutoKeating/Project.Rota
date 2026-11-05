@@ -93,7 +93,11 @@ export async function vertexTestEnvironment() {
     model,
     api_key_secret: "VERTEX_TEST_PLACEHOLDER",
     enabled: 1,
-    params: JSON.stringify({ vision: true, toolCalling: true }),
+    params: JSON.stringify({
+      vision: true,
+      toolCalling: true,
+      reasoningEffort: "low",
+    }),
   };
   return {
     env: {

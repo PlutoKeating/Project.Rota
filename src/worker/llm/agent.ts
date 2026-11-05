@@ -250,6 +250,9 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
             p.kind === "google"
               ? {
                   google: {
+                    ...(effort && ["low", "medium", "high"].includes(effort)
+                      ? { thinkingConfig: { thinkingLevel: effort } }
+                      : {}),
                     mediaResolution: [
                       "MEDIA_RESOLUTION_LOW",
                       "MEDIA_RESOLUTION_MEDIUM",

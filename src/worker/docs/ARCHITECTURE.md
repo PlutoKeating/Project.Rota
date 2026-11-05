@@ -42,3 +42,5 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 验证使用 `pnpm check`、`pnpm build`；浏览器对象协议由 `pnpm test:agent-browser` 覆盖。本地真实模型验收脚本隔离业务写入，历史旧架构成绩不代表新版准确率与耗时。
 
 复核工具 `finish_person.checks` 使用显式数组，每项包含课表 `key` 和字段核对结果；不使用动态键字典，以确保 Google 工具 schema 保留核对字段。对象持久化与正式审核报告仍按课表键保存检查结果，无新增依赖、环境变量或数据库迁移。
+
+Google 导入请求支持供应商 params.reasoningEffort（或 reasoning_effort）的 low / medium / high，传递为原生 thinkingConfig.thinkingLevel；未配置时保留模型默认。隔离 Vertex 验收固定使用 gemini-4-argon 与 low，避免默认思考强度影响计时。本次无需新增依赖、迁移或部署参数。

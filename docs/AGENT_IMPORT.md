@@ -79,3 +79,5 @@ pnpm test:agent-live /private/input.zip /private/output /private/snapshot.json
 隔离真实测试可用 `ROTA_LIVE_FEEDBACK` 对已有测试批次提交复核意见后恢复；没有已有批次时拒绝该参数。它调用与界面相同的 feedback 路径，不写正式业务。此种恢复结果不可算作全新无干预性能；不得把对照标注或正确答案作为复核意见输入被测模型。
 
 提交操作员复核意见时，如果协调器没有待执行工具，则保留已完成对话与来源覆盖；如果还有旧指令未执行，则重置协调器以取消它们。最新复核意见始终通过当前 context 提供，已核对差异仍按事实签名校验。
+
+Google 导入请求支持供应商 params.reasoningEffort（或 reasoning_effort）的 low / medium / high，传递为原生 thinkingConfig.thinkingLevel；未配置时保留模型默认。隔离 Vertex 验收固定使用 gemini-4-argon 与 low，避免默认思考强度影响计时。本次无需新增依赖、迁移或部署参数。
