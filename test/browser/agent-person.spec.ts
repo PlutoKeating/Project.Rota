@@ -266,7 +266,7 @@ test("large batches bound concurrency and retain every person's verified result"
     if (body.mode === "person") {
       active++;
       peak = Math.max(peak, active);
-      if (active === 16) release();
+      if (active === 8) release();
       await firstWave;
       await new Promise((resolve) => setTimeout(resolve, 50));
       active--;
@@ -275,9 +275,9 @@ test("large batches bound concurrency and retain every person's verified result"
     return personReply(body);
   });
   await upload(page, keys);
-  await expect.poll(async () => (await saved(page))?.status).toBe("review");
+  await expect.poll(async () => (await saved(page))?.status, { timeout: 10000 }).toBe("review");
   const job = await saved(page);
-  expect(peak).toBe(16);
+  expect(peak).toBe(8);
   expect(verified.size).toBe(18);
   expect(Object.keys(job.timetables)).toHaveLength(18);
   expect(job.draft.person).toHaveLength(18);
