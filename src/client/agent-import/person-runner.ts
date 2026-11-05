@@ -11,6 +11,7 @@ import {
   emptyAgent,
   revisionAgent,
   mergeRevisionRequests,
+  misplacedSourceRevisions,
   writePersonSchema,
   personTableSchema,
   validateVerifiedEntries,
@@ -1150,6 +1151,16 @@ export class ImportRunner {
           reason: "关联人员对象已完成来源复核",
         });
     }
+    const handoffs = misplacedSourceRevisions(Object.values(session.people));
+    for (const args of handoffs) {
+      const call = { id: "source-handoff:" + crypto.randomUUID(), name: "revise_person", args };
+      const value = await this.execute(session.coordinator, call, "reconcile");
+      await archive(this.job.id, call.id, "tool", {
+        actor: "coordinator", mode: "reconcile", name: call.name, args, result: value.result, automatic: true,
+      });
+      this.log(`补充错放来源 ${args.key}：重新独立复核`);
+    }
+    if (handoffs.length) { await this.persist(); return; }
     try {
       projectPeople(this.job);
     } catch (e) {

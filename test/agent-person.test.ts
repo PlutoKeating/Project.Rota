@@ -13,6 +13,7 @@ import {
   personTableSchema,
   revisionAgent,
   mergeRevisionRequests,
+  misplacedSourceRevisions,
 } from "../src/shared/agent-import/person-workspace";
 import {
   emptySnapshot,
@@ -383,4 +384,33 @@ it("merges parallel findings per person without losing instructions or recheck t
   expect(mergeRevisionRequests([...requests, { key: "a", instruction: "范围不限" }])[0].recheck_entries).toBeUndefined();
   expect(requests).toEqual(before);
   expect(() => mergeRevisionRequests([{ key: "a", instruction: "a".repeat(3000) }, { key: "a", instruction: "b".repeat(3000) }])).toThrow();
+});
+
+it("source handoff requires one explicit printed name and a unique completed target, and never mutates facts", () => {
+  const target = jobFixture().session!.people.a;
+  const donor = structuredClone(target);
+  donor.key = "b";
+  donor.information!.full_name = "乙";
+  donor.sources = ["b.txt"];
+  donor.timetables.fall.entries = [];
+  donor.timetables.fall.sources = [{ ...sources[0], source: "b.txt" }];
+  donor.checks.fall = { identity: "原件为甲", courses_and_times: "本人缺失", teachers_and_locations: "本人缺失", calendar: "缺失", coverage: "missing", coverage_reason: "错放", checked_entries: [], source_person_names: ["甲"] };
+  const people = [target, donor], before = structuredClone(people);
+  expect(misplacedSourceRevisions(people)).toMatchObject([{ key: target.key, sources: ["b.txt"] }]);
+  expect(people).toEqual(before);
+  const ambiguous = structuredClone(target); ambiguous.key = "third";
+  expect(misplacedSourceRevisions([...people, ambiguous])).toEqual([]);
+  target.sources.push("b.txt");
+  expect(misplacedSourceRevisions(people)).toEqual([]);
+  target.sources.pop();
+  donor.checks.fall.source_person_names = [];
+  expect(misplacedSourceRevisions(people)).toEqual([]);
+  donor.checks.fall.source_person_names = ["甲", "丙"];
+  expect(misplacedSourceRevisions(people)).toEqual([]);
+  donor.checks.fall.source_person_names = ["甲"];
+  donor.status = "verifying";
+  expect(misplacedSourceRevisions(people)).toEqual([]);
+  donor.status = "done";
+  donor.timetables.fall.entries = structuredClone(target.timetables.fall.entries);
+  expect(misplacedSourceRevisions(people)).toEqual([]);
 });

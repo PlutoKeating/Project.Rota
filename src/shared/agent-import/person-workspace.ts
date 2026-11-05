@@ -133,6 +133,30 @@ export function mergeRevisionRequests(requests: RevisionRequest[]) {
   }
   return [...merged.values()];
 }
+/** Route only explicit, independently checked names; never copy course facts or infer from folders. */
+export function misplacedSourceRevisions(people: PersonWorkspace[]): RevisionRequest[] {
+  const norm = (value: string) => value.normalize("NFKC").trim();
+  const candidates = new Map<string, Set<string>>();
+  for (const donor of people) {
+    if (donor.status !== "done") continue;
+    for (const table of Object.values(donor.timetables)) {
+      const check = donor.checks[table.key];
+      const names = [...new Set((check?.source_person_names ?? []).map(norm))];
+      if (table.entries.length || check?.coverage !== "missing" || names.length !== 1) continue;
+      const matches = people.filter((p) => p.information && norm(p.information.full_name) === names[0]);
+      if (matches.length !== 1 || matches[0].key === donor.key || matches[0].status !== "done") continue;
+      const target = matches[0];
+      const paths = candidates.get(target.key) ?? new Set<string>();
+      for (const source of table.sources)
+        if (donor.sources.includes(source.source) && !target.sources.includes(source.source)) paths.add(source.source);
+      if (paths.size) candidates.set(target.key, paths);
+    }
+  }
+  return [...candidates].filter(([, paths]) => paths.size <= 100).map(([key, paths]) => ({
+    key, sources: [...paths],
+    instruction: "其他人员的缺失课表复核在原件印出你的姓名，补充来源供你独立核实。请回看全部来源确认身份，合并互补课程、避免重复条目，并核对底部无固定时段课程；来源属于他人时保留错放说明，不得复制他人课程。",
+  }));
+}
 /** Preserve only previously completed independent observations outside explicit revision targets. */
 export function revisionAgent(
   person: PersonWorkspace,
@@ -202,7 +226,7 @@ export interface PersonWorkspace extends z.infer<typeof assignmentSchema> {
   version: number;
   resumeStatus?: "extracting" | "verifying";
   agent: AgentState;
-  checks: Record<string, FieldChecks>;
+  checks: Record<string, FieldChecks & { source_person_names?: string[]; source_student_numbers?: string[] }>;
   identityChoice?: { id: string | null; information: string };
   match?: { id?: string; candidates: string[]; reason: string };
 }

@@ -155,7 +155,7 @@ export const toolSpecs = {
               .array(z.string().min(1).max(200))
               .max(20)
               .describe(
-                "本课表原件明确印出的姓名；没有印出姓名时为空数组。不得填目录名或推测姓名，不包含仅用于教师对照的他人课表姓名。",
+                "本课表原件明确印出的姓名；错放材料导致本人课表missing时仍记录原件印出的姓名，供重新分派来源。没有印出姓名时为空数组。不得填目录名或推测姓名，不包含仅用于教师对照的他人课表姓名。",
               ),
             source_student_numbers: z
               .array(z.string().min(1).max(200))

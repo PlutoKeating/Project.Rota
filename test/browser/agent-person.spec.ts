@@ -1386,3 +1386,40 @@ for (const defect of ["duplicate", "unknown-time"] as const) {
     }
   });
 }
+
+test("verified misplaced source reaches its unique named person before global review", async ({ page }) => {
+  let supplementaryRead = false, targetVerifications = 0;
+  await setup(page, (body) => {
+    if (body.mode === "discover") return discovery();
+    const context = JSON.parse(body.context);
+    const reply = personReply(body);
+    if (context.person?.key === "b") {
+      if (body.mode === "person") {
+        const write = reply.calls[0].args;
+        write.timetables[0].entries = [];
+        write.timetables[0].unresolved = ["原件印出甲，乙本人课表缺失"];
+      }
+      if (body.mode === "verify") {
+        const check = reply.calls[0].args.checks[0];
+        check.coverage = "missing";
+        check.checked_entries = [];
+        check.verified_entries = [];
+        check.source_person_names = ["甲"];
+      }
+    }
+    if (context.person?.key === "a" && body.mode === "verify") {
+      targetVerifications++;
+      supplementaryRead ||= JSON.stringify(body.messages).includes('b.txt');
+    }
+    return reply;
+  });
+  await upload(page);
+  await expect.poll(async () => (await saved(page))?.status).toBe("review");
+  expect(targetVerifications).toBe(2);
+  expect(supplementaryRead).toBe(true);
+  const job = await saved(page);
+  expect(job.session.people.a.sources).toEqual(["a.txt", "b.txt"]);
+  expect(job.session.people.b.timetables.fall.entries).toEqual([]);
+  expect(job.session.people.b.checks.fall.coverage).toBe("missing");
+  expect(job.validatedRevision).toBe(job.revision);
+});
