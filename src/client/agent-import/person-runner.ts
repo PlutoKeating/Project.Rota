@@ -29,6 +29,7 @@ import {
   validateCheckedVariants,
   validateConsistencyReview,
 } from "../../shared/agent-import/consistency";
+import { pendingTimedEntries } from "../../shared/agent-import/timetable";
 import { calendarMissing } from "../../shared/agent-import/calendar";
 import {
   withoutImages,
@@ -531,6 +532,21 @@ export class ImportRunner {
             t.entries.length
           )
             verificationErrors.push("不完整课表不能覆盖整个学期，须用 amend_timetable 明确 replace_weeks：" + t.key);
+          const pending = pendingTimedEntries(t.entries);
+          if (pending.length && (check.coverage !== "partial" || !t.unresolved.length))
+            verificationErrors.push("未知时段须标记partial并在本课表unresolved中写明待补事项：" + t.key);
+          const seen = new Map<string, number>();
+          t.entries.forEach((entry, index) => {
+            // Match persisted timetable uniqueness, including normalized teaching weeks.
+            // Teacher/location differences do not create a second occurrence.
+            if (entry.no_fixed_time || pending.includes(entry)) return;
+            const signature = canonical([entry.name, entry.weekday, entry.period_from,
+              entry.period_to, [...new Set(entry.weeks!)].sort((a, b) => a - b)]);
+            const previous = seen.get(signature);
+            if (previous !== undefined)
+              verificationErrors.push(`重复课程索引：${t.key}[${previous},${index}]，请按原件合并同一课程，使用write_person替换课表后重新核对`);
+            else seen.set(signature, index);
+          });
           if (!t.entries.length && check.coverage !== "missing")
             verificationErrors.push("零课程方案须明确标记 missing，不能据此清空旧课表");
         }

@@ -1337,3 +1337,52 @@ test("completed person releases image payloads and a later revision rereads orig
   }, job.id);
   expect(size).toBe(buffer.length);
 });
+
+for (const defect of ["duplicate", "unknown-time"] as const) {
+  test(`person completion rejects ${defect} before global review and accepts source correction`, async ({ page }) => {
+    let rejected = false;
+    await setup(page, (body) => {
+      if (body.mode === "discover") return discovery(["a"]);
+      const reply = personReply(body);
+      if (body.mode === "person") {
+        const table = reply.calls[0].args.timetables[0];
+        if (defect === "duplicate") table.entries.push({ ...table.entries[0], weeks: [2, 1], teacher: "另一识别结果" });
+        else table.entries[0].weeks = null;
+      }
+      if (body.mode === "verify") {
+        const message = defect === "duplicate" ? "重复课程索引" : "未知时段须标记partial";
+        rejected ||= JSON.stringify(body.messages).includes(message);
+        const checks = reply.calls[0].args.checks;
+        if (!rejected) {
+          if (defect === "duplicate") {
+            checks[0].checked_entries = [0, 1];
+            checks[0].verified_entries[1].teacher = "另一识别结果";
+          } else checks[0].verified_entries[0].weeks = null;
+        } else if (defect === "duplicate") {
+          const write = personReply({ mode: "person", context: body.context }).calls[0];
+          checks[0].checked_entries = [0];
+          checks[0].verified_entries = checks[0].verified_entries.slice(0, 1);
+          return output([write, ...reply.calls]);
+        } else {
+          checks[0].coverage = "partial";
+          checks[0].verified_entries[0].weeks = null;
+          return output([
+            { name: "amend_timetable", args: { key: "fall", entries: [], replace_weeks: [1, 2], unresolved: ["原件周次被遮挡，待补"] } },
+            ...reply.calls,
+          ]);
+        }
+      }
+      return reply;
+    });
+    await upload(page, ["a"]);
+    await expect.poll(async () => (await saved(page))?.status).toBe("review");
+    expect(rejected).toBe(true);
+    const job = await saved(page);
+    expect(job.validatedRevision).toBe(job.revision);
+    expect(job.session.people.a.timetables.fall.entries).toHaveLength(1);
+    if (defect === "unknown-time") {
+      expect(job.session.people.a.timetables.fall.entries[0].weeks).toBeNull();
+      expect(job.session.people.a.checks.fall.coverage).toBe("partial");
+    }
+  });
+}
