@@ -91,3 +91,5 @@ Google 导入请求支持供应商 params.reasoningEffort（或 reasoning_effort
 协调器在每批差异核对前自动预读当前最多 5 组差异中尚未读取的来源，复用人员预读、来源覆盖及工具日志；已读来源不重复自动加载。PDF/表格预读未覆盖的页面或范围仍由模型继续读取，different_context 的完整来源门槛保持不变。此优化只消除已知来源的纯读取模型往返，不自动接受核对结论。无新增依赖或迁移。
 
 人员工具新增 amend_timetable，仅按当前人员的课表 key 和原课程 index 局部修正字段，或更新 replace_weeks / unresolved。未提及字段不应用创建默认值，整份候选课表校验成功后才替换，非法索引不留下前半份改动；修正清空旧检查，仍须 finish_person 逐项复核。短课表 key 使用 main / fall 等标识，最多 30 字符。协议需前后端同步发布，无新增依赖、环境变量或数据库迁移。
+
+真实 Vertex 验收另支持 `pnpm test:agent-vertex-apply /private/input.zip /private/new-output`：从全新空快照开始，快照/批次/租约/提交/报告调用真实 Worker API，业务写入仅进入本进程隔离 SQLite；模型仍使用本机 Vertex。此模式拒绝快照文件与旧浏览器检查点，不继承远端存储环境变量。材料完整且客户端检查通过后自动提交到测试库，输出 applyMs、回读快照和审核报告，总耗时包含提交。缺少日历等条件时保持未提交并返回失败，不补造事实。默认 test:agent-vertex 仍禁止业务提交。可用 test/fixtures/live-apply.txt 做明确标注为虚构材料的提交链路冒烟测试；它不能证明真实压缩包的速度或准确率。无需新增依赖或迁移。

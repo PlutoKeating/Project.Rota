@@ -19,7 +19,8 @@
     "test:agent-person": "pnpm assets:ocr && playwright test --config test/browser/agent.config.ts agent-person.spec.ts",
     "test:agent-live": "pnpm assets:ocr && node --env-file=.env.production test/live/agent-import.mjs",
     "assets:ocr": "node scripts/prepare-ocr.mjs",
-    "test:agent-vertex": "node test/live/agent-import.mjs --vertex"
+    "test:agent-vertex": "node test/live/agent-import.mjs --vertex",
+    "test:agent-vertex-apply": "node test/live/agent-import.mjs --vertex --apply-local"
   },
   "dependencies": {
     "7z-wasm": "^1.2.0",

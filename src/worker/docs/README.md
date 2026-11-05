@@ -36,3 +36,5 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 正式提交继续校验差异、引用、租约和排班冲突，派生数据与审核记录同事务写入。review 最大 2 MB 并纳入幂等摘要；已提交列表与报告检查批次归属，不保存原件或对话。仍要求既有 0005 迁移，本次无新增依赖、Secret 或业务迁移。
 
 验证使用 `pnpm check`、`pnpm build`；浏览器对象协议由 `pnpm test:agent-browser` 覆盖。本地真实模型验收脚本隔离业务写入，历史旧架构成绩不代表新版准确率与耗时。
+
+真实 Vertex 验收另支持 `pnpm test:agent-vertex-apply /private/input.zip /private/new-output`：从全新空快照开始，快照/批次/租约/提交/报告调用真实 Worker API，业务写入仅进入本进程隔离 SQLite；模型仍使用本机 Vertex。此模式拒绝快照文件与旧浏览器检查点，不继承远端存储环境变量。材料完整且客户端检查通过后自动提交到测试库，输出 applyMs、回读快照和审核报告，总耗时包含提交。缺少日历等条件时保持未提交并返回失败，不补造事实。默认 test:agent-vertex 仍禁止业务提交。可用 test/fixtures/live-apply.txt 做明确标注为虚构材料的提交链路冒烟测试；它不能证明真实压缩包的速度或准确率。无需新增依赖或迁移。

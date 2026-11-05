@@ -10,10 +10,14 @@ import { createHash } from "node:crypto";
 const arguments_ = process.argv.slice(2);
 const vertexFlag = arguments_[0] === "--vertex";
 if (vertexFlag) arguments_.shift();
+const applyLocal = arguments_[0] === "--apply-local";
+if (applyLocal) arguments_.shift();
 const [archivePath, outputPath, snapshotPath] = arguments_;
+if (applyLocal && (!vertexFlag || snapshotPath))
+  throw Error("--apply-local requires --vertex and an empty business snapshot (no snapshot file)");
 if (!archivePath || !outputPath)
   throw Error(
-    "Usage: node --env-file=.env.production test/live/agent-import.mjs ARCHIVE PRIVATE_OUTPUT [SNAPSHOT_JSON]",
+    "Usage: node test/live/agent-import.mjs [--vertex [--apply-local]] ARCHIVE PRIVATE_OUTPUT [SNAPSHOT_JSON]",
   );
 const port = Number(process.env.ROTA_LIVE_PORT ?? 5188);
 const out = path.resolve(outputPath);
@@ -217,12 +221,44 @@ try {
   const snapshot = snapshotPath
     ? JSON.parse(await fs.readFile(snapshotPath, "utf8"))
     : emptySnapshot();
+  let localBusiness;
+  if (applyLocal) {
+    const { D1Stub, createKv } = await vite.ssrLoadModule("/test/helpers/d1.ts");
+    const { default: app } = await vite.ssrLoadModule("/src/worker/index.ts");
+    const ddl = await fs.readFile("migrations/0001_init.sql", "utf8");
+    const guards = await fs.readFile("migrations/0003_assignment_guards.sql", "utf8");
+    // Explicit bindings only: never inherit a remote storage URL or production credentials.
+    const businessEnv = {
+      DB: new D1Stub(ddl + guards),
+      CONFIG: createKv(),
+      APP_ENV: "test",
+      AUTH_DEV_BYPASS: "true",
+    };
+    localBusiness = (request) => app.request(request, undefined, businessEnv);
+  }
   browser = await chromium.launchPersistentContext(path.join(out, "browser"), {
     headless: true,
   });
   let requests = 0;
   await browser.route("**/api/**", async (route) => {
     const p = new URL(route.request().url()).pathname;
+    if (localBusiness && !p.endsWith("/turn") && !p.endsWith("/auth/me")) {
+      const request = route.request();
+      const response = await localBusiness(
+        new Request(request.url(), {
+          method: request.method(),
+          headers: { "content-type": "application/json" },
+          ...(!["GET", "HEAD"].includes(request.method())
+            ? { body: request.postData() }
+            : {}),
+        }),
+      );
+      return route.fulfill({
+        status: response.status,
+        body: await response.text(),
+        contentType: "application/json",
+      });
+    }
     let data = { status: "draft" };
     if (p.endsWith("/auth/me"))
       data = {
@@ -305,10 +341,11 @@ try {
   const bytes = Array.from(await fs.readFile(archivePath));
   const start = Date.now();
   const result = await page.evaluate(
-    async ({ bytes, name, maxMs, feedback }) => {
+    async ({ bytes, name, maxMs, feedback, applyLocal }) => {
       const r = await import("/src/client/agent-import/runtime.ts"),
         s = await import("/src/client/agent-import/store.ts");
       const existing = (await s.listJobs("live-test"))[0];
+      if (applyLocal && existing) throw Error("Local apply acceptance requires a fresh output directory");
       const job =
         existing ??
         (await r.createJob("live-test", [
@@ -337,13 +374,33 @@ try {
         ...f,
         size: blob.size,
       }));
-      return { job, history, files, validation: await r.checkJob(job) };
+      const validation = await r.checkJob(job);
+      let applyMs = null,
+        persisted = null,
+        report = null,
+        applyError = null;
+      if (applyLocal && job.status === "review" && !validation.issues.length) {
+        const applyStart = Date.now();
+        try {
+          await r.applyJob(job);
+          applyMs = Date.now() - applyStart;
+          const snapshotResponse = await fetch("/api/agent-imports/snapshot");
+          const reportResponse = await fetch(`/api/agent-imports/${job.id}/report`);
+          if (!snapshotResponse.ok || !reportResponse.ok) throw Error("Unable to read back committed local data");
+          persisted = await snapshotResponse.json();
+          report = await reportResponse.json();
+        } catch (error) {
+          applyError = error.message;
+        }
+      }
+      return { job, history, files, validation, applyMs, persisted, report, applyError };
     },
     {
       bytes,
       name: path.basename(archivePath),
       maxMs: Number(process.env.ROTA_LIVE_MAX_MS ?? 1200000),
       feedback: process.env.ROTA_LIVE_FEEDBACK ?? "",
+      applyLocal,
     },
   );
   await progressWrites;
@@ -370,10 +427,13 @@ try {
       reviewedPlans: Object.keys(result.job.timetableChecks ?? {}).length,
       issues: result.validation.issues.length,
       unread: result.validation.unread.length,
+      applyMs: result.applyMs,
+      applyError: result.applyError,
     }),
   );
   if (
-    result.job.status !== "review" ||
+    result.job.status !== (applyLocal ? "applied" : "review") ||
+    result.applyError ||
     result.validation.issues.length ||
     result.validation.unread.length ||
     !result.job.draft.timetable_entry.length
