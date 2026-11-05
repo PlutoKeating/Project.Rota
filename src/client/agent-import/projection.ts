@@ -6,6 +6,7 @@ import {
 import {
   calendarMissing,
   stageCalendar,
+  calendarThroughWeeks,
 } from "../../shared/agent-import/calendar";
 import {
   matchPerson,
@@ -41,12 +42,26 @@ export function projectPeople(job: Job) {
     }
   }
   const bindings = new Map<string, { termId: string; profileId: string }>();
-  for (const calendar of Object.values(job.calendars ?? {})) {
+  const calendars = structuredClone(job.calendars ?? {});
+  for (const proposed of Object.values(calendars)) {
+    const tables = Object.values(job.session.people)
+      .filter((p) => p.status === "done")
+      .flatMap((p) => Object.values(p.timetables))
+      .filter((t) => t.calendar_id === proposed.id);
+    const calendar = calendarThroughWeeks(proposed, tables.flatMap((t) =>
+      t.entries.flatMap((e) => e.weeks ?? [])));
+    // Preserve the course evidence supporting the derived storage horizon.
+    const horizonSources = tables.filter((t) => t.entries.some((e) =>
+      e.weeks?.includes(calendar.week_count!))).flatMap((t) => t.sources);
+    calendar.sources = [...new Map([...calendar.sources, ...horizonSources]
+      .map((source) => [canonical(source), source])).values()].slice(0, 30);
+    calendars[calendar.id] = calendar;
     if (calendarMissing(calendar).length) continue;
     const staged = stageCalendar(draft, evidence, calendar);
     draft = staged.draft;
     evidence = staged.evidence;
     bindings.set(calendar.id, staged);
+    calendars[calendar.id] = staged.calendar;
   }
   const owners = new Map<string, string>();
   const scopes = new Map<string, Set<number>>();
@@ -171,13 +186,14 @@ export function projectPeople(job: Job) {
         };
     }
   }
-  for (const c of Object.values(job.calendars ?? {}))
+  for (const c of Object.values(calendars))
     c.timetable_ids = Object.values(job.session.people).flatMap((p) =>
       Object.values(p.timetables)
         .filter((t) => t.calendar_id === c.id)
         .map((t) => p.id + ":" + t.key),
     );
   job.draft = draft;
+  job.calendars = calendars;
   job.evidence = evidence;
   job.timetables = plans;
   job.timetableChecks = checks;

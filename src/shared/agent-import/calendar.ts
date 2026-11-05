@@ -37,8 +37,6 @@ export const calendarSchema = z
       ctx.addIssue({ code: "custom", message });
     if (c.start_date && new Date(c.start_date + "T00:00:00Z").getUTCDay() !== 1)
       invalid("首周日期必须是周一");
-    if (c.week_count && c.minimum_weeks && c.week_count < c.minimum_weeks)
-      invalid("总周数不能小于已知课程周次");
     if (new Set(c.periods.map((p) => p.index)).size !== c.periods.length)
       invalid("节次重复");
     for (const p of c.periods)
@@ -46,10 +44,15 @@ export const calendarSchema = z
         invalid("下课时间必须晚于上课时间");
   });
 export type CalendarProposal = z.infer<typeof calendarSchema>;
+/** Storage horizon, not a claim about the school's fixed semester length. */
+export function calendarThroughWeeks(c: CalendarProposal, weeks: number[] = []) {
+  const last = Math.max(c.week_count ?? 0, c.minimum_weeks ?? 0, ...weeks);
+  return { ...c, week_count: last || null };
+}
 export function calendarMissing(c: CalendarProposal) {
   return [
     ...(!c.start_date ? ["第一教学周周一"] : []),
-    ...(!c.week_count ? ["总教学周数（至少多少周不能代替总周数）"] : []),
+    ...(!calendarThroughWeeks(c).week_count ? ["课程周次范围"] : []),
     ...(!c.periods.length ? ["节次作息"] : []),
     ...c.periods.flatMap((p) => [
       ...(!p.start ? [`第${p.index}节上课时间`] : []),
@@ -57,12 +60,13 @@ export function calendarMissing(c: CalendarProposal) {
     ]),
   ];
 }
-/** Only materializes explicitly supplied complete fields. Never derives a calendar from business text. */
+/** Dates/clocks require evidence; the stored horizon follows known course weeks. */
 export function stageCalendar(
   base: Snapshot,
   proof: Record<string, Evidence[]>,
   c: CalendarProposal,
 ) {
+  c = calendarThroughWeeks(c);
   const missing = calendarMissing(c);
   if (missing.length) throw Error("作息尚不完整：" + missing.join("、"));
   const draft = structuredClone(base),
@@ -73,8 +77,7 @@ export function stageCalendar(
   if (c.term_id && !existingTerm) throw Error("明确引用的学期不存在");
   if (
     c.term_id &&
-    (existingTerm!.start_date !== c.start_date ||
-      existingTerm!.week_count !== c.week_count)
+    existingTerm!.start_date !== c.start_date
   )
     throw Error("日历与引用学期不一致，请先核对");
   const put = (
@@ -91,9 +94,10 @@ export function stageCalendar(
     );
     evidence[entity + ":" + id] = c.sources;
   };
-  if (!c.term_id)
+  c = calendarThroughWeeks(c, existingTerm ? [Number(existingTerm.week_count)] : []);
+  if (!c.term_id || Number(existingTerm!.week_count) < c.week_count!)
     put("term", termId, {
-      name: c.name,
+      name: existingTerm?.name ?? c.name,
       start_date: c.start_date,
       week_count: c.week_count,
     });
@@ -110,7 +114,7 @@ export function stageCalendar(
         start_time: p.start,
         end_time: p.end,
       });
-  return { draft, evidence, termId, profileId };
+  return { draft, evidence, termId, profileId, calendar: c };
 }
 export const fieldChecksSchema = z.object({
   identity: z.string().min(1).max(1000),
@@ -150,7 +154,7 @@ export function calendarBindingIssues(job: {
       !term ||
       !profile ||
       term.start_date !== c.start_date ||
-      term.week_count !== c.week_count ||
+      Number(term.week_count) < (calendarThroughWeeks(c).week_count ?? Infinity) ||
       canonical(JSON.parse(String(profile.periods))) !== canonical(c.periods)
     )
       issues.push(`${c.name}：日历证据已变更，须重新生成并核对绑定的学期/作息`);

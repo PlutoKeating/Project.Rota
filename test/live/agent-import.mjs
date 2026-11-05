@@ -339,9 +339,18 @@ try {
     return progressWrites;
   });
   const bytes = Array.from(await fs.readFile(archivePath));
+  const supplementDir = process.env.ROTA_LIVE_SUPPLEMENT_DIR;
+  const supplements = supplementDir
+    ? await Promise.all((await fs.readdir(supplementDir, { withFileTypes: true }))
+        .filter((entry) => entry.isFile()).sort((a, b) => a.name.localeCompare(b.name))
+        .map(async (entry) => ({ name: entry.name,
+          bytes: Array.from(await fs.readFile(path.join(supplementDir, entry.name))) })))
+    : [];
+  if (supplements.some((f) => f.name === path.basename(archivePath)))
+    throw Error("Supplement names must differ from the original input name");
   const start = Date.now();
   const result = await page.evaluate(
-    async ({ bytes, name, maxMs, feedback, applyLocal }) => {
+    async ({ bytes, name, supplements, maxMs, feedback, applyLocal }) => {
       const r = await import("/src/client/agent-import/runtime.ts"),
         s = await import("/src/client/agent-import/store.ts");
       const existing = (await s.listJobs("live-test"))[0];
@@ -350,6 +359,7 @@ try {
         existing ??
         (await r.createJob("live-test", [
           new File([new Uint8Array(bytes)], name),
+          ...supplements.map((f) => new File([new Uint8Array(f.bytes)], f.name)),
         ]));
       if (feedback) {
         if (!existing) throw Error("ROTA_LIVE_FEEDBACK requires an existing isolated test batch");
@@ -397,6 +407,7 @@ try {
     },
     {
       bytes,
+      supplements,
       name: path.basename(archivePath),
       maxMs: Number(process.env.ROTA_LIVE_MAX_MS ?? 1200000),
       feedback: process.env.ROTA_LIVE_FEEDBACK ?? "",
@@ -405,6 +416,9 @@ try {
   );
   await progressWrites;
   result.elapsedMs = Date.now() - start;
+  result.inputManifest = [{ name: path.basename(archivePath), bytes }, ...supplements]
+    .map((f) => ({ name: f.name, size: f.bytes.length,
+      sha256: createHash("sha256").update(new Uint8Array(f.bytes)).digest("hex") }));
   result.totalJobAgeMs = Date.now() - result.job.createdAt;
   await fs.writeFile(
     path.join(out, "result.json"),

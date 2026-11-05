@@ -128,6 +128,29 @@ function jobFixture(): Job {
   };
 }
 describe("person object projection", () => {
+  it("derives the horizon from course weeks and extends an existing term without dropping other people's data", () => {
+    const job = jobFixture();
+    job.calendars!.cal.week_count = null;
+    job.calendars!.cal.minimum_weeks = null;
+    job.session!.people.a.timetables.fall.entries[0].weeks = [18];
+    projectPeople(job);
+    expect(job.calendars!.cal.week_count).toBe(18);
+    expect(job.draft.term[0].week_count).toBe(18);
+    expect(job.draft.timetable_entry.find((e) => e.id === "old-other")?.weeks).toBe("[1,2,3]");
+    const actual = materialize(job.draft, job.base);
+    expect(validateTransition(job.base, actual)).toEqual([]);
+    expect(actual.timetable_event.some((e) => e.person_id === "existing"
+      && String(e.starts_at).startsWith("2026-12-29"))).toBe(true);
+  });
+  it("a shorter supplied calendar range never truncates explicit later course weeks", () => {
+    const job = jobFixture();
+    job.calendars!.cal.term_id = null;
+    job.calendars!.cal.week_count = 17;
+    job.session!.people.a.timetables.fall.entries[0].weeks = [18];
+    projectPeople(job);
+    expect(job.draft.term.find((t) => t.id === "cal:term")?.week_count).toBe(18);
+    expect(job.draft.timetable_entry.find((e) => e.id === "workspace:fall:0")?.weeks).toBe("[18]");
+  });
   it("matches A, preserves existing information, replaces only the person's term B", () => {
     const job = jobFixture();
     projectPeople(job);

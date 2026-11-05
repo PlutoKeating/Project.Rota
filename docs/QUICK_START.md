@@ -91,3 +91,5 @@ LINKML_BIN=.venv/bin/linkml bash scripts/gen.sh
 新版将导入工具协议改为 discover/person/verify/reconcile，前端与 Worker 必须同步发布；既有0005数据库迁移继续适用，无新增Secret或运行依赖。旧版草稿和原件保留查看，重新选择原材料创建新版批次，不运行旧 pending 工具。发布前执行 `pnpm check && pnpm test:agent-browser && pnpm build`。`pnpm test:agent-person` 可单独检查对象并行、隔离与恢复。
 
 真实 Vertex 验收另支持 `pnpm test:agent-vertex-apply /private/input.zip /private/new-output`：从全新空快照开始，快照/批次/租约/提交/报告调用真实 Worker API，业务写入仅进入本进程隔离 SQLite；模型仍使用本机 Vertex。此模式拒绝快照文件与旧浏览器检查点，不继承远端存储环境变量。材料完整且客户端检查通过后自动提交到测试库，输出 applyMs、回读快照和审核报告，总耗时包含提交。缺少日历等条件时保持未提交并返回失败，不补造事实。默认 test:agent-vertex 仍禁止业务提交。可用 test/fixtures/live-apply.txt 做明确标注为虚构材料的提交链路冒烟测试；它不能证明真实压缩包的速度或准确率。无需新增依赖或迁移。
+
+真实模型验收可设置 ROTA_LIVE_SUPPLEMENT_DIR 指向私有补充材料目录；目录内普通文件与原压缩包通过同一次 createJob 上传，结果记录各输入的大小与 SHA-256。补充材料可包含操作员确认的日历或作息，不能包含人工课程标注答案。基准报告必须说明使用了哪些补充输入，不能将其称作仅凭原包识别出的事实。

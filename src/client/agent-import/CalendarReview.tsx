@@ -26,8 +26,8 @@ export function CalendarReview({
         <section key={c.id} className="border-t border-slate-200 py-3 text-sm">
           <p className="font-medium">{c.name} · 日历证据</p>
           <p>
-            首周周一：{c.start_date ?? "待定"}；总周数：{c.week_count ?? "待定"}
-            {c.minimum_weeks ? `（已知至少 ${c.minimum_weeks} 周）` : ""}
+            首周周一：{c.start_date ?? "待定"}；覆盖周数：{c.week_count ?? c.minimum_weeks ?? "按课程确定"}
+            {c.minimum_weeks ? `（课程已知至第 ${c.minimum_weeks} 周）` : ""}
           </p>
           <p className="text-xs text-slate-500">
             适用：
@@ -116,7 +116,7 @@ export function CalendarReview({
                 }
               />
             </Field>
-            <Field label="总教学周数（未知留空）">
+            <Field label="覆盖周数（留空按课程确定）">
               <TextInput
                 type="number"
                 min={1}

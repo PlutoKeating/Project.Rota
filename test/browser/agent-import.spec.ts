@@ -340,7 +340,7 @@ test("calendar review shows known clocks, accepts missing fields, and creates a 
   await expect(page.getByLabel("第一教学周周一", { exact: true })).toHaveValue(
     "2026-08-31",
   );
-  await page.getByLabel("总教学周数（未知留空）", { exact: true }).fill("18");
+  await page.getByLabel("覆盖周数（留空按课程确定）", { exact: true }).fill("18");
   await page.getByLabel("第1节下课", { exact: true }).fill("09:15");
   await page.getByLabel("仍待确认的事项（每行一项）", { exact: true }).fill("");
   await expect(page.locator("body")).toHaveJSProperty("scrollWidth", 390);

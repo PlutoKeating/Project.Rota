@@ -73,11 +73,21 @@ it("refuses to materialize partial clocks without changing the draft", () => {
     sources: proof,
   });
   expect(calendarMissing(c)).toEqual([
-    "总教学周数（至少多少周不能代替总周数）",
     "第1节下课时间",
   ]);
   expect(() => stageCalendar(base, {}, c)).toThrow("尚不完整");
   expect(base.term).toHaveLength(0);
+});
+it("known course range materializes without requiring a fixed semester total", () => {
+  const c = calendarSchema.parse({
+    id: "dynamic", name: "秋季", start_date: "2026-08-31", week_count: null,
+    minimum_weeks: 18, periods: [{ index: 1, start: "08:30", end: "09:10" }],
+    timetable_ids: [], sources: proof,
+  });
+  expect(calendarMissing(c)).toEqual([]);
+  const staged = stageCalendar(emptySnapshot(), {}, c);
+  expect(staged.draft.term[0].week_count).toBe(18);
+  expect(c.week_count).toBeNull();
 });
 it("complete reviewed calendar yields actual scheduled availability with all teacher and place fields", () => {
   const base = emptySnapshot();

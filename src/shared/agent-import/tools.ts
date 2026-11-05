@@ -107,7 +107,7 @@ export const toolSpecs = {
   },
   save_calendars: {
     description:
-      "批量维护公共学期/作息证据，未知日期、总周数、钟点填 null。id 为稳定引用，timetable_ids 可留空，人员 B 用 calendar_id 引用。完整后程序生成并绑定，不需逐条建数据库记录。",
+      "批量维护公共学期/作息证据，未知日期、钟点填 null；不要求固定总周数，week_count 可留 null，运行时按关联课程的最大明确周次自动覆盖，minimum_weeks 可记录已知最大周次。id 为稳定引用，timetable_ids 可留空，人员 B 用 calendar_id 引用。完整后程序生成并绑定，不需逐条建数据库记录。",
     schema: z.object({ calendars: z.array(calendarSchema).min(1).max(100) }),
   },
   mark_material: {

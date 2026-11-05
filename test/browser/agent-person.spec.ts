@@ -197,6 +197,25 @@ test("independent people overlap model requests and commit only after human revi
   await expect.poll(() => applied.length).toBe(1);
   expect(applied[0].review.timetables).toHaveLength(2);
 });
+test("an unset semester total derives course coverage and permits reviewed submission", async ({ page }) => {
+  const applied = await setup(page, (body) => {
+    if (body.mode === "discover") {
+      const reply = discovery();
+      const call = reply.calls.find((c) => c.name === "save_calendars")!;
+      call.args.calendars[0] = { ...calendar, week_count: null };
+      return output(reply.calls);
+    }
+    return personReply(body);
+  });
+  await upload(page);
+  await expect.poll(async () => (await saved(page))?.status).toBe("review");
+  const job = await saved(page);
+  expect(job.draft.term[0].week_count).toBe(2);
+  expect(Object.values(job.timetables).every((t: any) => t.bound)).toBe(true);
+  await page.getByRole("button", { name: "审核无误，导入全部选中内容" }).click();
+  await expect.poll(() => applied.length).toBe(1);
+});
+
 test("large batches bound concurrency and retain every person's verified result", async ({ page }) => {
   const keys = Array.from({ length: 18 }, (_, i) => i === 0 ? "a" : `person${i}`);
   let active = 0;
