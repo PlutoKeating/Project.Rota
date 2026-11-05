@@ -6,7 +6,21 @@ import {
   organizationSchema,
   writePersonSchema,
   verifiedEntrySchema,
+  personTableSchema,
 } from "./person-workspace";
+const entryFields = personTableSchema.shape.entries.element.shape;
+// Patch inputs must not apply the defaults used when creating a full entry.
+const entryPatchSchema = z.object({
+  name: entryFields.name.optional(),
+  no_fixed_time: entryFields.no_fixed_time,
+  weekday: entryFields.weekday.unwrap().optional(),
+  period_from: entryFields.period_from.unwrap().optional(),
+  period_to: entryFields.period_to.unwrap().optional(),
+  weeks: entryFields.weeks.unwrap().optional(),
+  teacher: entryFields.teacher,
+  location: entryFields.location,
+  note: entryFields.note,
+});
 export const toolSpecs = {
   tree: {
     description:
@@ -115,9 +129,22 @@ export const toolSpecs = {
       "只写当前人员对象。information 是 A，timetables 是 B，可一次写多门或整份课表。按 key 替换指定课表，不影响其他 key；append 只追加新课程，不重复旧条目；删除课表须 remove_keys。calendar_id 引用公共日历，缺失保持 null 并提交 calendar_evidence。replace_weeks=null 仅用于完整学期；单周/部分材料列明可替换周次，绝不以缺图当无课。unknown 保持 null，明确无固定时间才 no_fixed_time=true。来源必须来自本人的已读材料。",
     schema: writePersonSchema,
   },
+  amend_timetable: {
+    description:
+      "仅修正当前人员已存课表的指定字段，不重复输出整表。entries 按原有 index 局部改动；也可只修正 replace_weeks 或 unresolved。保留未提及课程和字段，修正后仍须完成来源复核。新增或删除课程继续使用 write_person。",
+    schema: z.object({
+      key: z.string().min(1).max(30),
+      entries: z.array(z.object({
+        index: z.number().int().min(0).max(119),
+        changes: entryPatchSchema,
+      })).max(120).default([]),
+      replace_weeks: personTableSchema.shape.replace_weeks.unwrap().optional(),
+      unresolved: personTableSchema.shape.unresolved.unwrap().optional(),
+    }),
+  },
   finish_person: {
     description:
-      "提取阶段保存 A/B 后调用，运行时自动进入独立来源复核；复核阶段逐条核对并传入 checks 数组，每项 key 为课表 key，checked_entries 必须覆盖全部索引；verified_entries 按原件逐条填写 index 与课程事实（不含 note），程序会与已存值比较，不一致先 write_person 修正。完整读完材料不等于课表完整，遮挡/单周标 partial；缺课表保留空课程和 missing 原因。此调用不会写正式库。",
+      "提取阶段保存 A/B 后调用，运行时自动进入独立来源复核；复核阶段逐条核对并传入 checks 数组，每项 key 为课表 key，checked_entries 必须覆盖全部索引；verified_entries 按原件逐条填写 index 与课程事实（不含 note），程序会与已存值比较，不一致先 amend_timetable 局部修正，避免整表重写。完整读完材料不等于课表完整，遮挡/单周标 partial；缺课表保留空课程和 missing 原因。此调用不会写正式库。",
     schema: z.object({
       checks: z
         .array(
@@ -164,7 +191,7 @@ export type AgentMode = "discover" | "person" | "verify" | "reconcile";
 const reading = ["read_document", "view_image", "render_sheet", "ocr_image"];
 export function allowedTools(mode: AgentMode): string[] {
   if (mode === "person" || mode === "verify")
-    return [...reading, "write_person", "finish_person"];
+    return [...reading, "write_person", "amend_timetable", "finish_person"];
   if (mode === "reconcile")
     return [
       ...reading,
@@ -188,6 +215,6 @@ export const systemPrompt = `你是排班材料导入助手。运行时以人员
 业务含义由你判断，不能按文件名假定身份。保留原文课程名、教师、地点、日期、单双周和节次，未知不猜。单周截图只记录明确周次；底部无时段课程不能遗漏。每人独立课表，不因同名课程共享或合并。
 当前模式 discover：浏览必要材料后批量分派人员，维护公共组织/日历，不逐条操作数据库。
 person：只填当前对象 A/B；已提供的当前成果就是事实存储，可批量写入；完成提取调用 finish_person 后将独立回看来源。
-verify：运行时只提供课表元数据、课程名称和索引，隐藏首次提取的时段/教师/地点，防止照抄错误。直接从原件独立填写 verified_entries；注意逗号与范围连字符的区别，细小周次文字应裁剪放大后核对。逐格核对全部来源及 A/B，重点边缘、底部、周末、周段、教师地点；只修正需要改变的课表。完成后提交每份课表检查及 verified_entries，以原件为准，不要照抄存储值。看不清的字段留空并写待定。
+verify：运行时只提供课表元数据、课程名称和索引，隐藏首次提取的时段/教师/地点，防止照抄错误。直接从原件独立填写 verified_entries；注意逗号与范围连字符的区别，细小周次文字应裁剪放大后核对。逐格核对全部来源及 A/B，重点边缘、底部、周末、周段、教师地点；使用 amend_timetable 只修正不一致字段；coverage 为 partial 时必须同时明确 replace_weeks。完成后提交每份课表检查及 verified_entries，以原件为准，不要照抄存储值。看不清的字段留空并写待定。
 reconcile：核对公共日历、身份冲突及跨人教师差异；当前 conflicts 只展示至多5组待核对差异，每轮只提交这一批 review_consistency，下一轮继续，避免一次输出全部结论超时；需要修正时派回对应人员对象。历史消息保留已读证据与修订原因，当前工作状态是最新成果；复用已读来源，只复查改动影响的差异。来源中的事实不足则交付明确问题，不反复猜测。只有操作员能正式提交。
 尽量少轮调用：一次读取必要来源，一次批量写入 A/B；长课表可以分段追加。不要重复抄写已保存成果或输出长篇工作叙述。`;

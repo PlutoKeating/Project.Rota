@@ -18,7 +18,7 @@ export const personTableSchema = timetableProposalSchema
     completed_sources: true,
   })
   .extend({
-    key: z.string().min(1).max(30),
+    key: z.string().min(1).max(30).describe("短标识，例如 main 或 fall；不必重复姓名与学期，最多30字符。"),
     calendar_id: z.string().nullable().default(null),
     // A partial source may replace only its explicit teaching weeks.
     replace_weeks: z
@@ -92,7 +92,7 @@ export function validateVerifiedEntries(
   }
   if (mismatches.length)
     throw Error(
-      `复核值与已存课程不一致：${mismatches.join("；")}；请回看来源，一次修正以上全部差异后再完成`,
+      `复核值与已存课程不一致：${mismatches.join("；")}；请回看来源，用 amend_timetable 一次修正以上全部差异后再完成`,
     );
 }
 export interface AgentState {

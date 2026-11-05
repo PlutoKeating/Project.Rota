@@ -292,6 +292,49 @@ test("rejects a timetable whose printed owner conflicts with the target person",
   expect((await saved(page)).session.people.a.status).toBe("failed");
   expect(applied).toHaveLength(0);
 });
+test("local corrections preserve untouched course fields and still require verification", async ({ page }) => {
+  let corrected = false;
+  await setup(page, (body) => {
+    if (body.mode === "discover") return discovery(["a"]);
+    const reply = personReply(body);
+    if (body.mode === "verify") {
+      const checks = reply.calls[0].args.checks;
+      checks[0].verified_entries[0].teacher = "新教师";
+      if (!corrected) {
+        corrected = true;
+        return output([
+          { name: "amend_timetable", args: { key: "fall", entries: [{ index: 0, changes: { teacher: "新教师" } }], replace_weeks: [1, 2] } },
+          { name: "finish_person", args: { checks } },
+        ]);
+      }
+    }
+    return reply;
+  });
+  await upload(page, ["a"]);
+  await expect.poll(async () => (await saved(page))?.status).toBe("review");
+  const table = (await saved(page)).session.people.a.timetables.fall;
+  expect(table.entries[0]).toMatchObject({ name: "数学", teacher: "新教师", weekday: 1, period_from: 1, period_to: 1, weeks: [1, 2] });
+  expect(table.replace_weeks).toEqual([1, 2]);
+});
+test("an invalid correction leaves every existing entry unchanged", async ({ page }) => {
+  await setup(page, (body) => {
+    if (body.mode === "discover") return discovery(["a"]);
+    const reply = personReply(body);
+    if (body.mode === "verify") return output([
+      { name: "amend_timetable", args: { key: "fall", entries: [
+        { index: 0, changes: { teacher: "不得泄漏的修改" } },
+        { index: 99, changes: { teacher: "无效索引" } },
+      ] } },
+      { name: "finish_person", args: reply.calls[0].args },
+    ]);
+    return reply;
+  });
+  await upload(page, ["a"]);
+  await expect.poll(async () => (await saved(page))?.status).toBe("review");
+  const person = (await saved(page)).session.people.a;
+  expect(person.timetables.fall.entries[0].teacher).toBeUndefined();
+  expect(JSON.stringify(person.agent.messages)).toContain("修正课程索引不存在");
+});
 test("invalid field coverage cannot finish verification and model can repair it", async ({
   page,
 }) => {

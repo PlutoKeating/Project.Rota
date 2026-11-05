@@ -1,4 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { toolSpecs } from "../src/shared/agent-import/tools";
+it("partial timetable corrections do not manufacture defaults for untouched fields", () => {
+  const parsed = toolSpecs.amend_timetable.schema.parse({
+    key: "main", entries: [{ index: 1, changes: { teacher: "新教师" } }],
+  });
+  expect(parsed).toEqual({ key: "main", entries: [{ index: 1, changes: { teacher: "新教师" } }] });
+});
 import {
   emptyAgent,
   emptySession,

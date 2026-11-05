@@ -33,7 +33,7 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 
 `api/agent-import.ts` 负责鉴权快照、批次、租约、原值校验和原子提交；`llm/agent.ts` 是 AI SDK 单轮凭据代理。协调器与 m 个人员子智能体都在浏览器执行，Worker 不解包、不识别文档、不运行 Agent 循环。
 
-协议模式为 discover/person/verify/reconcile。协调器可分派人员和维护公共组织/日历；人员仅获得来源阅读、write_person 和 finish_person。Worker 返回调用及参数校验错误，由浏览器按对象权限执行；新旧协议不可混用，前后端同步发布。详见根目录 `docs/API.md` 与 `docs/AGENT_IMPORT.md`。
+协议模式为 discover/person/verify/reconcile。协调器可分派人员和维护公共组织/日历；人员仅获得来源阅读、write_person、amend_timetable 和 finish_person。Worker 返回调用及参数校验错误，由浏览器按对象权限执行；新旧协议不可混用，前后端同步发布。详见根目录 `docs/API.md` 与 `docs/AGENT_IMPORT.md`。
 
 保留 OpenAI Compatible、Responses、Google、Anthropic 与 Workers AI 适配；Responses 由 params.api 显式选择。供应商按能力、全局排序和本批成功模型选择；保留 OpenCode 会话头、禁止重定向、内联图像检查、超时与脱敏诊断。SDK 隐式重试关闭，每候选最多 90 秒、候选窗口最多 120 秒。真实材料只经已配置模型读取，密钥不下发。
 
@@ -46,3 +46,5 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 Google 导入请求支持供应商 params.reasoningEffort（或 reasoning_effort）的 low / medium / high，传递为原生 thinkingConfig.thinkingLevel；未配置时保留模型默认。隔离 Vertex 验收固定使用 gemini-4-argon 与 low，避免默认思考强度影响计时。本次无需新增依赖、迁移或部署参数。
 
 人员复核 checks 新增必填 source_person_names：列出本课表原件明确印出的姓名（没有姓名时为空数组，教师对照材料不算本人课表）。有课程的方案若与目标姓名不符，运行时拒绝完成，须纠正身份或将误分派材料交回协调器；仅写文字冲突说明不能放行。已有完成检查点不追溯升级，验收须新建批次。工具协议变更要求前后端同步发布，无新增依赖、环境变量或迁移。
+
+人员工具新增 amend_timetable，仅按当前人员的课表 key 和原课程 index 局部修正字段，或更新 replace_weeks / unresolved。未提及字段不应用创建默认值，整份候选课表校验成功后才替换，非法索引不留下前半份改动；修正清空旧检查，仍须 finish_person 逐项复核。短课表 key 使用 main / fall 等标识，最多 30 字符。协议需前后端同步发布，无新增依赖、环境变量或数据库迁移。

@@ -21,7 +21,7 @@
 
 协调器可用 tree/unpack、阅读工具、dispatch_people、save_calendars、mark_material、finish_discovery；全批协调可重新分派或移除重复人员对象、revise_person、save_calendars、finish_import。
 
-人员子智能体只有 read_document/view_image/render_sheet/ocr_image、write_person、finish_person。write_person 绑定当前人员，不接受他人对象 ID；A/B 可一次批量写入，长课表按 key 追加。对子智能体未分派的文件和公共日历写入均拒绝。Office 派生附件继承父来源的阅读范围。
+人员子智能体只有 read_document/view_image/render_sheet/ocr_image、write_person、amend_timetable、finish_person。write_person 绑定当前人员，不接受他人对象 ID；A/B 可一次批量写入，长课表按 key 追加。对子智能体未分派的文件和公共日历写入均拒绝。Office 派生附件继承父来源的阅读范围。
 
 每个人提取完成后自动进入独立 verify 上下文，重新预读来源；checked_entries 必须覆盖最终全部课程，字段检查包含身份、课程时段、教师地点、日历和完整性。结构覆盖来自读取工具的实际坐标；读完文件不等于材料提供完整课表。跨人教师差异继续要求逐变体说明，different_context 需要协调器回看相关来源。
 
@@ -89,3 +89,5 @@ Google 导入请求支持供应商 params.reasoningEffort（或 reasoning_effort
 来源复核不一致时，一次返回本课表所有不一致的课程索引及字段名，不透露首次提取值、不修改已存数据，也不降低拒绝门槛，避免逐条报错导致重复整表生成。无新增依赖、迁移或部署参数。
 
 协调器在每批差异核对前自动预读当前最多 5 组差异中尚未读取的来源，复用人员预读、来源覆盖及工具日志；已读来源不重复自动加载。PDF/表格预读未覆盖的页面或范围仍由模型继续读取，different_context 的完整来源门槛保持不变。此优化只消除已知来源的纯读取模型往返，不自动接受核对结论。无新增依赖或迁移。
+
+人员工具新增 amend_timetable，仅按当前人员的课表 key 和原课程 index 局部修正字段，或更新 replace_weeks / unresolved。未提及字段不应用创建默认值，整份候选课表校验成功后才替换，非法索引不留下前半份改动；修正清空旧检查，仍须 finish_person 逐项复核。短课表 key 使用 main / fall 等标识，最多 30 字符。协议需前后端同步发布，无新增依赖、环境变量或数据库迁移。

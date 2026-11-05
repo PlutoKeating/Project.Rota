@@ -10,6 +10,7 @@ import {
 import {
   emptyAgent,
   writePersonSchema,
+  personTableSchema,
   validateVerifiedEntries,
   type AgentState,
   type PersonWorkspace,
@@ -391,6 +392,25 @@ export class ImportRunner {
             })),
           },
         };
+      }
+      case "amend_timetable": {
+        if (!person) throw Error("缺少人员对象");
+        const previous = person.timetables[args.key];
+        if (!previous) throw Error("当前人员不存在此课表 key");
+        if (new Set(args.entries.map((patch: any) => patch.index)).size !== args.entries.length)
+          throw Error("修正课程索引重复");
+        await this.validateSources(agent, previous.sources, person);
+        const next = structuredClone(previous);
+        for (const patch of args.entries) {
+          if (!next.entries[patch.index]) throw Error("修正课程索引不存在");
+          Object.assign(next.entries[patch.index], patch.changes);
+        }
+        if (args.replace_weeks !== undefined) next.replace_weeks = args.replace_weeks;
+        if (args.unresolved !== undefined) next.unresolved = args.unresolved;
+        person.timetables[args.key] = personTableSchema.parse(next);
+        person.checks = {};
+        person.version++;
+        return { result: { saved: true, key: args.key, courses: next.entries.length } };
       }
       case "finish_person": {
         if (!person || agent.pending.length !== 1)
