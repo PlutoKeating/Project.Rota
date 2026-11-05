@@ -163,7 +163,7 @@ export const toolSpecs = {
               .describe(
                 "本课表原件明确印出的学号；图片须先 view_image 裁剪放大表头或学号区域，逐位核对重复数字；没有学号时为空数组，不包含他人对照课表的学号。",
               ),
-            reuse_verified_entries: z.boolean().default(false).describe("复用同轮已提交的事实或局部返工 context.reusable_verified_indices 对应的独立事实；verified_entries 必须补齐其他索引及需更正的值。仍校验全部课程，重写课表或新增来源后不可沿用旧轮事实。"),
+            reuse_verified_entries: z.boolean().default(false).describe("复用同轮已提交的事实或局部返工 context.reusable_verified_indices 对应的独立事实；verified_entries 必须补齐其他索引及需更正的值。无旧缓存时仍保存本次新观察值，但复用标记不能补足缺失条目。仍校验全部课程，重写课表或新增来源后不可沿用旧轮事实。"),
             verified_entries: z.array(verifiedEntrySchema).max(120),
           }),
         )

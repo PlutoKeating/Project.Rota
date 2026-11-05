@@ -485,9 +485,9 @@ export class ImportRunner {
             if (new Set(check.verified_entries.map((entry: { index: number }) => entry.index)).size !== check.verified_entries.length)
               throw Error("复核索引重复：" + t.key);
             const previous = agent.verifiedEntries?.[t.key];
-            if (check.reuse_verified_entries && !previous)
-              throw Error("没有可复用的独立复核事实：" + t.key);
-            const observations = new Map((check.reuse_verified_entries ? previous! : [])
+            // An empty prior cache must not discard fresh observations from this call.
+            // Completion still requires every index and every fact to pass below.
+            const observations = new Map((check.reuse_verified_entries ? previous ?? [] : [])
               .map((entry) => [entry.index, entry]));
             for (const entry of check.verified_entries) observations.set(entry.index, entry);
             check.verified_entries = [...observations.values()];

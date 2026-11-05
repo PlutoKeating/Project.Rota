@@ -487,7 +487,7 @@ test("verification reuse requires observations from the current verification run
     if (body.mode === "discover") return discovery(["a"]);
     const reply = personReply(body);
     if (body.mode === "verify") {
-      rejected ||= JSON.stringify(body.messages).includes("没有可复用的独立复核事实");
+      rejected ||= JSON.stringify(body.messages).includes("复核值必须逐条覆盖课程");
       reply.calls[0].args.checks[0].reuse_verified_entries = true;
       reply.calls[0].args.checks[0].verified_entries = [];
     }
@@ -506,7 +506,7 @@ test("rewriting a timetable invalidates its cached source verification", async (
     if (body.mode === "discover") return discovery(["a"]);
     const reply = personReply(body);
     if (body.mode === "verify") {
-      rejected ||= JSON.stringify(body.messages).includes("没有可复用的独立复核事实");
+      rejected ||= JSON.stringify(body.messages).includes("复核值必须逐条覆盖课程");
       const checks = reply.calls[0].args.checks;
       if (first) {
         first = false;
@@ -1531,4 +1531,70 @@ test("different explicit classes retain their teachers without cross-class corre
   const job = await saved(page);
   expect(Object.values(job.timetables).map((t: any) => t.entries[0].teacher)).toEqual(["张老师", "李老师"]);
   expect(job.validatedRevision).toBe(job.revision);
+});
+
+for (const partial of [false, true]) {
+  test(`fresh verification observations survive a reuse flag without prior cache (${partial ? "partial" : "complete"})`, async ({ page }) => {
+    let attempts = 0;
+    let retained: number[] | undefined;
+    let coverageRejected = false;
+    await setup(page, (body) => {
+      if (body.mode === "discover") return discovery(["a"]);
+      const reply = personReply(body);
+      if (partial && body.mode === "person") {
+        const entries = reply.calls[0].args.timetables[0].entries;
+        entries.push({ ...entries[0], name: "英语", weekday: 2 });
+      }
+      if (body.mode === "verify") {
+        const check = reply.calls[0].args.checks[0];
+        check.reuse_verified_entries = true;
+        attempts++;
+        if (partial) {
+          check.checked_entries = [0, 1];
+          check.verified_entries[1].weekday = 2;
+          if (attempts === 1) check.verified_entries = check.verified_entries.slice(0, 1);
+          else {
+            retained = JSON.parse(body.context).person.timetables.fall.reusable_verified_indices;
+            coverageRejected ||= JSON.stringify(body.messages).includes("复核值必须逐条覆盖课程");
+            check.verified_entries = check.verified_entries.slice(1);
+          }
+        }
+      }
+      return reply;
+    });
+    await upload(page, ["a"]);
+    await expect.poll(async () => (await saved(page))?.status).toBe("review");
+    expect(attempts).toBe(partial ? 2 : 1);
+    if (partial) {
+      expect(retained).toEqual([0]);
+      expect(coverageRejected).toBe(true);
+    }
+    const job = await saved(page);
+    expect(job.session.people.a.agent.verifiedEntries.fall).toHaveLength(partial ? 2 : 1);
+    expect(job.validatedRevision).toBe(job.revision);
+  });
+}
+
+test("fresh cached observations cannot certify a conflicting teacher value", async ({ page }) => {
+  let attempts = 0, rejected = false;
+  await setup(page, (body) => {
+    if (body.mode === "discover") return discovery(["a"]);
+    const reply = personReply(body);
+    if (body.mode === "person") reply.calls[0].args.timetables[0].entries[0].teacher = "张老师";
+    if (body.mode === "verify") {
+      const check = reply.calls[0].args.checks[0];
+      check.reuse_verified_entries = true;
+      check.verified_entries[0].teacher = ++attempts === 1 ? "李老师" : "张老师";
+      if (attempts > 1) {
+        rejected = JSON.stringify(body.messages).includes("复核值与已存课程不一致");
+        expect(JSON.parse(body.context).person.timetables.fall.reusable_verified_indices).toEqual([0]);
+      }
+    }
+    return reply;
+  });
+  await upload(page, ["a"]);
+  await expect.poll(async () => (await saved(page))?.status).toBe("review");
+  expect(attempts).toBe(2);
+  expect(rejected).toBe(true);
+  expect((await saved(page)).session.people.a.timetables.fall.entries[0].teacher).toBe("张老师");
 });
