@@ -99,6 +99,40 @@ export const recheckEntriesSchema = z.array(z.object({
   key: z.string().min(1).max(30),
   indices: z.array(z.number().int().min(0).max(119)).min(1).max(120),
 })).min(1).max(30);
+export const revisionRequestSchema = z.object({
+  key: z.string(),
+  instruction: z.string().min(1).max(4000),
+  recheck_entries: recheckEntriesSchema.optional(),
+  sources: z.array(z.string()).max(100).optional(),
+});
+export type RevisionRequest = z.infer<typeof revisionRequestSchema>;
+export interface ConsistencyWorkspace {
+  id: string;
+  keys: string[];
+  signature: string;
+  agent: AgentState;
+  revisions: RevisionRequest[];
+  done: boolean;
+}
+/** Combine independent findings before changing a person, preserving every instruction. */
+export function mergeRevisionRequests(requests: RevisionRequest[]) {
+  const merged = new Map<string, RevisionRequest>();
+  for (const request of requests) {
+    const previous = merged.get(request.key);
+    if (!previous) { merged.set(request.key, structuredClone(request)); continue; }
+    const scopes = new Map<string, Set<number>>();
+    if (previous.recheck_entries && request.recheck_entries)
+      for (const item of [...previous.recheck_entries, ...request.recheck_entries])
+        scopes.set(item.key, new Set([...(scopes.get(item.key) ?? []), ...item.indices]));
+    merged.set(request.key, revisionRequestSchema.parse({
+      key: request.key,
+      instruction: previous.instruction + "\n" + request.instruction,
+      sources: [...new Set([...(previous.sources ?? []), ...(request.sources ?? [])])],
+      recheck_entries: scopes.size ? [...scopes].map(([key, indices]) => ({ key, indices: [...indices] })) : undefined,
+    }));
+  }
+  return [...merged.values()];
+}
 /** Preserve only previously completed independent observations outside explicit revision targets. */
 export function revisionAgent(
   person: PersonWorkspace,
@@ -179,6 +213,7 @@ export interface ImportSession {
   people: Record<string, PersonWorkspace>;
   organizations: z.infer<typeof organizationSchema>[];
   consistencyCheckpoints?: ConsistencyCheckpoints;
+  consistencyWorkers?: ConsistencyWorkspace[];
   concurrency: number;
   issues: string[];
 }

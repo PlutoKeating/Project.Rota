@@ -391,6 +391,7 @@ async function feedbackUnlocked(job: Job, text: string) {
   if (["running", "applied", "cancelled"].includes(job.status))
     throw Error("请先暂停处理");
   job.notes["最近操作员意见"] = text.trim();
+  delete job.session.consistencyWorkers; // Cancel queued reader findings on new operator instructions.
   job.session.phase = "reconcile";
   // Cancel unexecuted instructions; completed source evidence remains valid.
   if (job.session.coordinator.pending.length)

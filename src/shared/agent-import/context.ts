@@ -19,7 +19,7 @@ export interface TurnMetrics {
   outputTokens?: number;
   reasoningTokens?: number;
   finishReason?: string;
-  purpose: "discover" | "person" | "verify" | "reconcile";
+  purpose: "discover" | "person" | "verify" | "reconcile" | "consistency";
   actorId?: string;
 }
 

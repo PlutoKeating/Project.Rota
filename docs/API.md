@@ -231,7 +231,7 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 
 ### 人员对象单轮协议
 
-`POST /agent-imports/:id/turn` 接收 `{messages,context,mode?,preferredProvider?,cooldowns?}`。mode 为 discover（默认）、person、verify、reconcile；已删除 work/compact/checkpoint 模式。返回 `{messages,calls,model,providerId,metrics}`，合法 JSON 的工具参数错误返回 validationError，由浏览器反馈修正而不执行。
+`POST /agent-imports/:id/turn` 接收 `{messages,context,mode?,preferredProvider?,cooldowns?}`。mode 为 discover（默认）、person、verify、consistency、reconcile；已删除 work/compact/checkpoint 模式。返回 `{messages,calls,model,providerId,metrics}`，合法 JSON 的工具参数错误返回 validationError，由浏览器反馈修正而不执行。
 
 协调器工具负责材料分派、公共组织/日历和最终核对；人员模式仅开放本人来源阅读、write_person 与 finish_person。具体 schema 以 `src/shared/agent-import/tools.ts` 和 `person-workspace.ts` 为准。工具只写本地对象，正式写入继续使用上述 apply 事务接口。新旧前端/Worker 不能混用工具协议，须同步部署。
 
@@ -274,3 +274,5 @@ finish_person 会一次反馈当前人员的课程事实、原件姓名、覆盖
 协调器核对按最多5组、通常最多8份不同来源选择当前批次（单组超过上限仍整组保留）。仅在当前组集合变化时移出无关历史图片载荷，保留原件、来源覆盖、文本和工具记录；后续组再次引用已移出的来源会自动重读。当前组内新请求的裁剪图片不提前移除。自动预读日志包含模式与轮次，能追溯重复加载。不会减少须核对的组或放宽校验，无新增依赖、配置或迁移。
 
 人员因连接/超时失败时，可加入队尾补跑一次，优先处理尚未分派的对象，不等待所有慢请求结束才利用空闲并发位。保留已提取课程和历史记录，补跑重新建立来源读取上下文与独立复核，已完成对象不重跑；仍遵守每请求重试上限，不递归补跑。额度耗尽、验证错误或非法模型输出不进入补跑，暂停请求继续生效。不保证供应商延迟，无新增依赖或迁移。
+
+跨人核对新增 consistency 模式：待核对差异不少于两组时，按既有每批最多5组/通常8份来源划分，最多4个独立读取对象并行。各对象只可读取、保存本批核对结论或向本批涉及人员提出返工；不能修改日历、分派人员或交付导入。结论完成异步来源检查后合并检查点，避免并发覆盖。所有读取结束后按人合并返工说明、来源与重查索引；任一要求全量复核则合并为全量，不截断说明。部分失败保留已完成结论、待返工意见与未完成上下文，恢复不重跑已完成批次；暂停须等待在途请求结束，未执行工具可在刷新后继续。当前事实签名变化时丢弃过时读取任务，操作员新意见取消旧待执行意见。最终仍由协调器核对全局身份、日历、全部差异和提交条件，不减少检查组或放宽来源门槛。材料缺失/错放说明保留在各批上下文，避免遗漏跨目录证据。无新增依赖、环境变量、配置或迁移；前后端工具协议须同步构建发布。

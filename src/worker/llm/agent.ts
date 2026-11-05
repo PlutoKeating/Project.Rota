@@ -48,7 +48,7 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
       messages: z.array(z.unknown()).min(1).max(1000),
       context: z.string().max(100000),
       mode: z
-        .enum(["discover", "person", "verify", "reconcile"])
+        .enum(["discover", "person", "verify", "reconcile", "consistency"])
         .default("discover"),
       preferredProvider: z.string().max(100).optional(),
       cooldowns: z.record(z.string(), z.number()).optional(),

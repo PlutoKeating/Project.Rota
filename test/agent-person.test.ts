@@ -12,6 +12,7 @@ import {
   matchPerson,
   personTableSchema,
   revisionAgent,
+  mergeRevisionRequests,
 } from "../src/shared/agent-import/person-workspace";
 import {
   emptySnapshot,
@@ -365,4 +366,21 @@ describe("scoped revision evidence", () => {
       expect(() => revisionAgent(person, person.sources, target)).toThrow("返工范围");
     expect(person).toEqual(before);
   });
+});
+
+
+it("merges parallel findings per person without losing instructions or recheck targets", () => {
+  const requests = [
+    { key: "a", instruction: "核对数学", sources: ["a.txt"], recheck_entries: [{ key: "fall", indices: [0, 1] }] },
+    { key: "a", instruction: "核对物理", sources: ["b.txt"], recheck_entries: [{ key: "fall", indices: [1, 2] }] },
+    { key: "b", instruction: "全表核对" },
+  ];
+  const before = structuredClone(requests), merged = mergeRevisionRequests(requests);
+  expect(merged).toEqual([
+    { key: "a", instruction: "核对数学\n核对物理", sources: ["a.txt", "b.txt"], recheck_entries: [{ key: "fall", indices: [0, 1, 2] }] },
+    { key: "b", instruction: "全表核对" },
+  ]);
+  expect(mergeRevisionRequests([...requests, { key: "a", instruction: "范围不限" }])[0].recheck_entries).toBeUndefined();
+  expect(requests).toEqual(before);
+  expect(() => mergeRevisionRequests([{ key: "a", instruction: "a".repeat(3000) }, { key: "a", instruction: "b".repeat(3000) }])).toThrow();
 });

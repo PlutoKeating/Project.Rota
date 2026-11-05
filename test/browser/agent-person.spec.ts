@@ -1035,7 +1035,7 @@ test("failed automatic unpack cannot establish organization evidence", async ({ 
 });
 
 
-test("coordinator reloads an evicted image when a later review group needs it", async ({ page }) => {
+test("parallel consistency readers load only their assigned source images", async ({ page }) => {
   let batches = 0, firstScoped = false, reloaded = false;
   const courses = (key: string) => (key === "c" ? [5] : key === "b" ? [0, 1, 2, 3, 4] : [0, 1, 2, 3, 4, 5]);
   await setup(page, (body) => {
@@ -1045,11 +1045,12 @@ test("coordinator reloads an evicted image when a later review group needs it", 
       { name: "finish_discovery", args: {} },
     ]);
     const context = JSON.parse(body.context);
-    if (body.mode === "reconcile") {
+    if (body.mode === "reconcile") return output([{ name: "finish_import", args: {} }]);
+    if (body.mode === "consistency") {
       const images = body.messages.filter((m: any) => m.role === "user" && Array.isArray(m.content) && m.content.some((p: any) => p.type === "image"));
       const hasC = images.some((m: any) => JSON.stringify(m.content.filter((p: any) => p.type === "text")).includes("c.png"));
-      if (batches === 0) firstScoped = !hasC;
-      if (batches === 1) reloaded = hasC;
+      if (context.conflicts.some((g: any) => g.course === "课程0")) firstScoped = !hasC;
+      if (context.conflicts.some((g: any) => g.course === "课程5")) reloaded = hasC;
       if (!context.conflicts.length) return output([{ name: "finish_import", args: {} }]);
       batches++;
       return output([{ name: "review_consistency", args: { reviews: context.conflicts.map((g: any) => ({
@@ -1164,4 +1165,122 @@ test("scoped revision retains independent unchanged observations but requires ta
   expect(rejectedMissing).toBe(true);
   expect((await saved(page)).draft.timetable_entry).toHaveLength(2);
   expect((await saved(page)).draft.timetable_entry.find((e: any) => e.name === "数学").teacher).toBe("新教师");
+});
+
+
+test("independent consistency batches overlap and defer person revisions until readers drain", async ({ page }) => {
+  let active = 0, maxActive = 0, revised = false, readersDrained = false, revisionAfterDrain = false;
+  let startedReaders = 0, releaseReaders!: () => void;
+  const readersStarted = new Promise<void>((resolve) => { releaseReaders = resolve; });
+  const entries = (key: string) => Array.from({ length: 6 }, (_, index) => ({
+    name: "课程" + index, weekday: index + 1, period_from: 1, period_to: 1, weeks: [1, 2], teacher: key + "教师",
+  }));
+  await setup(page, async (body) => {
+    if (body.mode === "discover") return discovery();
+    const c = JSON.parse(body.context);
+    if (body.mode === "person") {
+      const reply = personReply(body); reply.calls[0].args.timetables[0].entries = entries(c.person.key); return reply;
+    }
+    if (body.mode === "verify") {
+      if (revised && c.person.key === "a") revisionAfterDrain = readersDrained;
+      return output([{ name: "finish_person", args: { checks: [{ key: "fall", ...fields, checked_entries: [0, 1, 2, 3, 4, 5], verified_entries: entries(c.person.key).map((entry, index) => ({ ...entry, index })) }] } }]);
+    }
+    if (body.mode === "consistency") {
+      active++; maxActive = Math.max(maxActive, active);
+      if (++startedReaders === 2) releaseReaders();
+      await readersStarted;
+      const last = c.conflicts.some((g: any) => g.course === "课程5");
+      await new Promise((resolve) => setTimeout(resolve, last ? 250 : 80));
+      active--;
+      if (last) readersDrained = true;
+      if (!last && !revised) {
+        revised = true;
+        return output([{ name: "revise_person", args: { key: "a", instruction: "局部复核课程0", recheck_entries: [{ key: "fall", indices: [0] }] } }]);
+      }
+      return output([{ name: "review_consistency", args: { reviews: c.conflicts.map((g: any) => ({ key: g.key, resolution: "different_context", explanation: "原件明确不同教师", checked_variant_indices: g.variants.map((v: any) => v.index) })) } }]);
+    }
+    return output([{ name: "finish_import", args: {} }]);
+  });
+  await upload(page);
+  await expect.poll(async () => (await saved(page))?.status, { timeout: 10000 }).toBe("review");
+  expect(maxActive).toBe(2);
+  expect(revisionAfterDrain).toBe(true);
+  expect((await saved(page)).importCheck.consistency_review).toHaveLength(6);
+});
+
+
+test("failed parallel reader preserves peer checkpoints and resumes without replaying them", async ({ page }) => {
+  let fail = true, successfulBatchCalls = 0, rejectedForbiddenTool = false;
+  const entries = (key: string) => Array.from({ length: 6 }, (_, index) => ({ name: "核对课" + index,
+    weekday: index + 1, period_from: 1, period_to: 1, weeks: [1, 2], teacher: key + "教师" }));
+  await setup(page, (body) => {
+    if (body.mode === "discover") return discovery();
+    const c = JSON.parse(body.context);
+    if (body.mode === "person") {
+      const reply = personReply(body); reply.calls[0].args.timetables[0].entries = entries(c.person.key); return reply;
+    }
+    if (body.mode === "verify") return output([{ name: "finish_person", args: { checks: [{ key: "fall", ...fields,
+      checked_entries: [0, 1, 2, 3, 4, 5], verified_entries: entries(c.person.key).map((entry, index) => ({ ...entry, index })),
+    }] } }]);
+    if (body.mode === "consistency") {
+      const small = c.conflicts.some((g: any) => g.course === "核对课5");
+      if (small) rejectedForbiddenTool ||= JSON.stringify(body.messages).includes("当前对象不允许此工具");
+      if (small && fail) return output([{ name: "finish_import", args: {} }]);
+      if (!small) successfulBatchCalls++;
+      return output([{ name: "review_consistency", args: { reviews: c.conflicts.map((g: any) => ({ key: g.key,
+        resolution: "different_context", explanation: "已读取原件", checked_variant_indices: g.variants.map((v: any) => v.index),
+      })) } }]);
+    }
+    return output([{ name: "finish_import", args: {} }]);
+  });
+  await upload(page);
+  await expect.poll(async () => (await saved(page))?.error).toContain("部分跨人核对失败");
+  await expect.poll(async () => (await saved(page))?.status).toBe("paused");
+  expect(Object.keys((await saved(page)).session.consistencyCheckpoints)).toHaveLength(5);
+  expect((await saved(page)).session.consistencyWorkers.filter((worker: any) => worker.done)).toHaveLength(1);
+  expect(rejectedForbiddenTool).toBe(true);
+  fail = false;
+  await page.getByRole("button", { name: "继续处理", exact: true }).click();
+  await expect.poll(async () => (await saved(page))?.status).toBe("review");
+  expect(successfulBatchCalls).toBe(1);
+  expect((await saved(page)).importCheck.consistency_review).toHaveLength(6);
+});
+
+
+test("paused parallel readers persist pending calls and resume them after reload", async ({ page }) => {
+  let calls = 0, release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const entries = (key: string) => Array.from({ length: 6 }, (_, index) => ({ name: "暂停课" + index,
+    weekday: index + 1, period_from: 1, period_to: 1, weeks: [1, 2], teacher: key + "教师" }));
+  await setup(page, async (body) => {
+    if (body.mode === "discover") return discovery();
+    const c = JSON.parse(body.context);
+    if (body.mode === "person") {
+      const reply = personReply(body); reply.calls[0].args.timetables[0].entries = entries(c.person.key); return reply;
+    }
+    if (body.mode === "verify") return output([{ name: "finish_person", args: { checks: [{ key: "fall", ...fields,
+      checked_entries: [0, 1, 2, 3, 4, 5], verified_entries: entries(c.person.key).map((entry, index) => ({ ...entry, index })),
+    }] } }]);
+    if (body.mode === "consistency") {
+      calls++;
+      await gate;
+      return output([{ name: "review_consistency", args: { reviews: c.conflicts.map((g: any) => ({ key: g.key,
+        resolution: "different_context", explanation: "已读取原件", checked_variant_indices: g.variants.map((v: any) => v.index),
+      })) } }]);
+    }
+    return output([{ name: "finish_import", args: {} }]);
+  });
+  await upload(page);
+  await expect.poll(() => calls).toBe(2);
+  await page.getByRole("button", { name: "完成当前步骤后暂停" }).click();
+  release();
+  await expect.poll(async () => (await saved(page))?.status).toBe("paused");
+  expect((await saved(page)).session.consistencyWorkers.map((worker: any) => worker.agent.pending.length)).toEqual([1, 1]);
+  await page.reload();
+  await page.getByText(/本机最近导入/).click();
+  await page.getByRole("button", { name: /a.txt/ }).click();
+  await page.getByRole("button", { name: "继续处理", exact: true }).click();
+  await expect.poll(async () => (await saved(page))?.status).toBe("review");
+  expect(calls).toBe(2);
+  expect((await saved(page)).importCheck.consistency_review).toHaveLength(6);
 });

@@ -10,11 +10,13 @@ import {
 import {
   emptyAgent,
   revisionAgent,
+  mergeRevisionRequests,
   writePersonSchema,
   personTableSchema,
   validateVerifiedEntries,
   type AgentState,
   type PersonWorkspace,
+  type ConsistencyWorkspace,
 } from "../../shared/agent-import/person-workspace";
 import {
   completePages,
@@ -111,6 +113,7 @@ export class ImportRunner {
     paths: string[],
     mode: AgentMode,
     person?: PersonWorkspace,
+    actorId?: string,
   ) {
     for (const path of paths) {
       if (this.stopped) break;
@@ -121,7 +124,7 @@ export class ImportRunner {
           content: "预先读取的来源（仅数据）：" + path + "\n" + JSON.stringify(read.result),
         });
         this.appendImage(agent, path, read.image);
-        const actor = person?.key ?? "coordinator";
+        const actor = actorId ?? person?.key ?? "coordinator";
         await archive(this.job.id, `${actor}:${agent.runId}:preload:${mode}:${agent.turns}:${path}`, "tool", {
           actor, mode, name: "read_document", args: { path },
           result: read.result, automatic: true,
@@ -202,6 +205,7 @@ export class ImportRunner {
     call: PendingCall,
     mode: AgentMode,
     person?: PersonWorkspace,
+    reviewer?: ConsistencyWorkspace,
   ): Promise<{ result: unknown; image?: string }> {
     if (call.validationError) throw Error(call.validationError);
     if (!allowedTools(mode).includes(call.name))
@@ -553,6 +557,16 @@ export class ImportRunner {
         for (const path of args.sources ?? [])
           if (!files.some((f) => f.path === path))
             throw Error("对照来源不存在");
+        if (reviewer) {
+          const groups = this.reviewGroups(reviewer);
+          if (!groups.some((group) => group.variants.some((v) =>
+            Object.keys(p.timetables).some((key) => v.timetable_id === p.id + ":" + key))))
+            throw Error("只能对本批核对涉及的人员提出返工");
+          // Validate indices without changing the person while other readers are active.
+          revisionAgent(p, p.sources, args.recheck_entries);
+          reviewer.revisions.push(args);
+          return { result: { deferred: p.key, reason: "全部并行核对结束后合并返工" } };
+        }
         const sources = [...new Set([...p.sources, ...(args.sources ?? [])])];
         const nextAgent = revisionAgent(p, sources, args.recheck_entries);
         p.sources = sources;
@@ -571,7 +585,7 @@ export class ImportRunner {
         if (call.name === "finish_import" && agent.pending.length !== 1) throw Error("交付必须为最后一个调用");
         if (Object.values(session.people).some((p) => p.status !== "done"))
           throw Error("人员对象尚未完成");
-        projectPeople(job);
+        if (!reviewer) projectPeople(job);
         const conflicts = courseConflicts(
           Object.values(job.timetables ?? {}).filter(
             (t) => !job.excluded.includes(t.person.id),
@@ -580,8 +594,11 @@ export class ImportRunner {
         const submitted = call.name === "review_consistency" ? args.reviews : args.consistency_review;
         if (new Set(submitted.map((r: { key: string }) => r.key)).size !== submitted.length)
           throw Error("同一批核对不能重复 key");
-        const checkpoints = { ...session.consistencyCheckpoints };
+        if (reviewer) this.reviewGroups(reviewer);
+        const updates: NonNullable<typeof session.consistencyCheckpoints> = {};
         for (let review of submitted) {
+          if (reviewer && !reviewer.keys.includes(review.key))
+            throw Error("不能保存本批范围外的核对结论");
           const group = conflicts.find((g) => g.key === review.key);
           if (!group) throw Error("核对项已不属于当前差异：" + review.key);
           review = validateCheckedVariants(group, review);
@@ -594,8 +611,10 @@ export class ImportRunner {
             if ((await this.sourcesRead(agent, paths)).length)
               throw Error("任课差异结论须回看来源：" + group.key);
           }
-          checkpoints[group.key] = { signature: canonical(group), review };
+          updates[group.key] = { signature: canonical(group), review };
         }
+        // Merge after asynchronous source checks, so concurrent readers cannot overwrite peers.
+        const checkpoints = { ...session.consistencyCheckpoints, ...updates };
         session.consistencyCheckpoints = checkpoints;
         const reviews = retainedConsistencyReviews(conflicts, checkpoints);
         if (call.name === "review_consistency")
@@ -646,8 +665,40 @@ export class ImportRunner {
     }
     throw Error("工具未实现");
   }
-  private async context(person?: PersonWorkspace) {
+  private reviewGroups(reviewer: ConsistencyWorkspace) {
+    const groups = courseConflicts(Object.values(this.job.timetables ?? {})
+      .filter((table) => !this.job.excluded.includes(table.person.id)))
+      .filter((group) => reviewer.keys.includes(group.key));
+    if (canonical(groups) !== reviewer.signature)
+      throw Error("核对快照已变化，须重新分派");
+    return groups;
+  }
+  private async context(person?: PersonWorkspace, reviewer?: ConsistencyWorkspace) {
     const job = this.job;
+    if (reviewer) {
+      const groups = this.reviewGroups(reviewer);
+      const reviewed = retainedConsistencyReviews(groups, job.session!.consistencyCheckpoints);
+      const pending = groups.filter((group) => !reviewed.some((review) => review.key === group.key));
+      return JSON.stringify({
+        reviewBatch: reviewer.id,
+        conflicts: pending.map((group) => ({ ...group,
+          variants: group.variants.map((variant, index) => ({ ...variant, index })),
+        })),
+        remainingConflictCount: pending.length,
+        people: Object.values(job.session!.people).flatMap((person) => {
+          const tables = Object.values(person.timetables).filter((table) => groups.some((group) =>
+            group.variants.some((v) => v.timetable_id === person.id + ":" + table.key)));
+          return tables.length ? [{ key: person.key, label: person.label, sources: person.sources,
+            tables: tables.map((table) => ({ id: person.id + ":" + table.key, key: table.key })),
+          }] : [];
+        }),
+        materialIssues: Object.values(job.session!.people).flatMap((person) => {
+          const issues = [...person.unresolved, ...Object.values(person.timetables).flatMap((table) => table.unresolved)];
+          return issues.length ? [{ person: person.label, sources: person.sources, issues }] : [];
+        }),
+        feedback: job.notes["最近操作员意见"],
+      });
+    }
     if (person)
       return JSON.stringify({
         person: {
@@ -726,6 +777,7 @@ export class ImportRunner {
     agent: AgentState,
     mode: AgentMode,
     person?: PersonWorkspace,
+    reviewer?: ConsistencyWorkspace,
   ): Promise<Reply> {
     let networkRetries = 0,
       modelRetries = 0;
@@ -736,7 +788,7 @@ export class ImportRunner {
           {
             mode,
             messages: await fitImagePayload(agent.messages),
-            context: await this.context(person),
+            context: await this.context(person, reviewer),
             preferredProvider: this.job.preferredProvider,
             cooldowns: this.job.cooldowns,
           },
@@ -747,7 +799,7 @@ export class ImportRunner {
           error instanceof ApiError
             ? (error.details as { metrics?: TurnMetrics })?.metrics
             : undefined;
-        if (metrics) this.recordMetrics(metrics, person?.key ?? "coordinator");
+        if (metrics) this.recordMetrics(metrics, reviewer?.id ?? person?.key ?? "coordinator");
         const attempts = metrics?.attempts ?? [];
         const quota =
           attempts.length &&
@@ -793,10 +845,10 @@ export class ImportRunner {
     if (this.job.metrics.length > 200)
       this.job.metrics.splice(0, this.job.metrics.length - 200);
   }
-  private async actor(person?: PersonWorkspace) {
+  private async actor(person?: PersonWorkspace, reviewer?: ConsistencyWorkspace) {
     const job = this.job,
       session = job.session!;
-    let agent = person?.agent ?? session.coordinator;
+    let agent = reviewer?.agent ?? person?.agent ?? session.coordinator;
     if (person?.status === "queued") person.status = "extracting";
     if (person?.status === "failed")
       person.status = person.resumeStatus ?? "extracting";
@@ -806,12 +858,18 @@ export class ImportRunner {
     const initialTurns = agent.turns;
     try {
       while (!this.stopped && job.status === "running") {
+        if (reviewer && !agent.pending.length && (reviewer.revisions.length ||
+            retainedConsistencyReviews(this.reviewGroups(reviewer), session.consistencyCheckpoints).length === reviewer.keys.length)) {
+          reviewer.done = true;
+          await this.persist();
+          break;
+        }
         if (
           person?.status === "done" ||
           (!person && ["people", "review"].includes(session.phase))
         )
           break;
-        const mode: AgentMode = person
+        const mode: AgentMode = reviewer ? "consistency" : person
           ? person.status === "verifying"
             ? "verify"
             : "person"
@@ -834,11 +892,12 @@ export class ImportRunner {
           await this.persist();
         }
         if (!agent.pending.length) {
-          if (mode === "reconcile") {
+          if (mode === "reconcile" || mode === "consistency") {
             const conflicts = courseConflicts(Object.values(job.timetables ?? {})
               .filter((table) => !job.excluded.includes(table.person.id)));
             const reviewed = retainedConsistencyReviews(conflicts, session.consistencyCheckpoints);
-            const current = consistencyBatch(conflicts.filter((group) => !reviewed.some((r) => r.key === group.key)));
+            const current = reviewer ? this.reviewGroups(reviewer) :
+              consistencyBatch(conflicts.filter((group) => !reviewed.some((r) => r.key === group.key)));
             const paths = [...new Set(current.flatMap((group) =>
               group.variants.flatMap((variant) => variant.sources.map((source) => source.source))))];
             // Prepare the same source evidence required by review_consistency without a model round trip.
@@ -852,7 +911,7 @@ export class ImportRunner {
             }
             const unread = paths.filter((path) => !agent.coverage[path] || agent.evictedImageSources?.includes(path));
             if (unread.length) {
-              await this.preloadSources(agent, unread, mode);
+              await this.preloadSources(agent, unread, mode, undefined, reviewer?.id);
               await this.persist();
             }
             if (this.stopped) break;
@@ -869,9 +928,9 @@ export class ImportRunner {
               : "协调公共日历与跨人差异";
           job.requestStartedAt = Date.now();
           this.update({ ...job });
-          const reply = await this.request(agent, mode, person);
+          const reply = await this.request(agent, mode, person, reviewer);
           if (reply.metrics)
-            this.recordMetrics(reply.metrics, person?.key ?? "coordinator");
+            this.recordMetrics(reply.metrics, reviewer?.id ?? person?.key ?? "coordinator");
           job.preferredProvider = reply.providerId;
           job.model = reply.model;
           agent.turns++;
@@ -882,7 +941,7 @@ export class ImportRunner {
           agent.messages.push(...reply.messages);
           // These two operations share the current completed snapshot. Checkpoint
           // before queuing revisions; later fact changes invalidate its signature.
-          agent.pending = mode === "reconcile" && reply.calls.every((call) =>
+          agent.pending = ["reconcile", "consistency"].includes(mode) && reply.calls.every((call) =>
             ["review_consistency", "revise_person"].includes(call.name))
             ? [...reply.calls].sort((a, b) => Number(a.name === "revise_person") - Number(b.name === "revise_person"))
             : reply.calls;
@@ -894,7 +953,7 @@ export class ImportRunner {
           const started = Date.now();
           let value: { result: unknown; image?: string };
           try {
-            value = await this.execute(agent, call, mode, person);
+            value = await this.execute(agent, call, mode, person, reviewer);
             agent.failures = 0;
           } catch (e) {
             value = { result: { error: (e as Error).message } };
@@ -925,10 +984,10 @@ export class ImportRunner {
           }
           await archive(
             job.id,
-            `${person?.key ?? "coordinator"}:${agent.runId}:${agent.turns}:${call.id}`,
+            `${reviewer?.id ?? person?.key ?? "coordinator"}:${agent.runId}:${agent.turns}:${call.id}`,
             "tool",
             {
-              actor: person?.key ?? "coordinator",
+              actor: reviewer?.id ?? person?.key ?? "coordinator",
               name: call.name,
               args: {
                 ...(call.args as object),
@@ -941,7 +1000,7 @@ export class ImportRunner {
             },
           );
           this.log(
-            `${person?.label ?? "协调器"} · ${call.name} · ${Date.now() - started} ms`,
+            `${reviewer?.id ?? person?.label ?? "协调器"} · ${call.name} · ${Date.now() - started} ms`,
           );
           // Switching extraction to verification starts a fresh context and fresh coverage.
           if (
@@ -969,10 +1028,64 @@ export class ImportRunner {
         person.resumeStatus =
           person.status === "verifying" ? "verifying" : "extracting";
         person.status = "failed";
-      } else throw e;
-      this.log((person?.label ?? "协调器") + "：" + agent.error);
+      } else if (!reviewer) throw e;
+      this.log((reviewer?.id ?? person?.label ?? "协调器") + "：" + agent.error);
       await this.persist();
     }
+  }
+  private async runConsistency() {
+    const job = this.job, session = job.session!;
+    // Resume coordinator tool sequences before creating a new read-only wave.
+    if (session.coordinator.pending.length) return false;
+    projectPeople(job);
+    const groups = courseConflicts(Object.values(job.timetables ?? {})
+      .filter((table) => !job.excluded.includes(table.person.id)));
+    const reviewed = retainedConsistencyReviews(groups, session.consistencyCheckpoints);
+    const remaining = groups.filter((group) => !reviewed.some((review) => review.key === group.key));
+    const workers = (session.consistencyWorkers ?? []).filter((worker) =>
+      canonical(groups.filter((group) => worker.keys.includes(group.key))) === worker.signature &&
+      (!worker.done || worker.revisions.length));
+    if (!workers.length && remaining.length < 2) {
+      delete session.consistencyWorkers;
+      return false;
+    }
+    const assigned = new Set(workers.flatMap((worker) => worker.keys));
+    let unassigned = remaining.filter((group) => !assigned.has(group.key));
+    while (unassigned.length) {
+      const batch = consistencyBatch(unassigned);
+      workers.push({ id: "核对:" + crypto.randomUUID().slice(0, 8),
+        keys: batch.map((group) => group.key), signature: canonical(batch),
+        agent: emptyAgent(), revisions: [], done: false,
+      });
+      unassigned = unassigned.slice(batch.length);
+    }
+    session.consistencyWorkers = workers;
+    await this.persist();
+    const pending = workers.filter((worker) => !worker.done);
+    let index = 0;
+    // Readers only: queued revisions are applied after every in-flight reader drains.
+    const outcomes = await Promise.allSettled(Array.from({ length: Math.min(4, session.concurrency, pending.length) }, async () => {
+      while (!this.stopped && index < pending.length)
+        await this.actor(undefined, pending[index++]);
+    }));
+    const failed = outcomes.find((outcome) => outcome.status === "rejected");
+    if (failed?.status === "rejected") throw failed.reason;
+    if (this.stopped) return true;
+    if (workers.some((worker) => !worker.done))
+      throw Error("部分跨人核对失败，已完成结论及待返工意见已保存；继续时恢复未完成核对");
+    for (const worker of workers) this.reviewGroups(worker);
+    const revisions = mergeRevisionRequests(workers.flatMap((worker) => worker.revisions));
+    for (const [index, args] of revisions.entries()) {
+      const call = { id: "parallel-revision:" + index, name: "revise_person", args };
+      const value = await this.execute(session.coordinator, call, "reconcile");
+      await archive(job.id, "parallel-revision:" + crypto.randomUUID(), "tool", {
+        actor: "coordinator", mode: "reconcile", name: call.name, args, result: value.result,
+      });
+      this.log(`合并返工 ${args.key}：${args.instruction}`);
+    }
+    delete session.consistencyWorkers;
+    await this.persist();
+    return revisions.length > 0;
   }
   private async runPeople() {
     const session = this.job.session!;
@@ -1045,7 +1158,10 @@ export class ImportRunner {
       }
       while (!this.stopped && job.status === "running") {
         if (job.session.phase === "people") await this.runPeople();
-        else await this.actor();
+        else {
+          const handedOff = job.session.phase === "reconcile" && await this.runConsistency();
+          if (!this.stopped && !handedOff) await this.actor();
+        }
       }
     };
     try {

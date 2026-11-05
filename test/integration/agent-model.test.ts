@@ -28,7 +28,7 @@ async function setup(kind: string, url: string) {
   } as unknown as Env;
 }
 describe("single-turn credential proxy", () => {
-  it.each(["discover", "person", "verify", "reconcile"])(
+  it.each(["discover", "person", "verify", "reconcile", "consistency"])(
     "scopes the new object tools in %s mode",
     async (mode) => {
       const env = await setup("openai_compatible", "https://model.example/v1");
@@ -73,6 +73,8 @@ describe("single-turn credential proxy", () => {
         expect(names).toContain("write_person");
         expect(names).not.toContain("dispatch_people");
         expect(names).not.toContain("save_calendars");
+      } else if (mode === "consistency") {
+        expect(names).toEqual(["read_document", "view_image", "render_sheet", "ocr_image", "revise_person", "review_consistency"]);
       } else expect(names).toContain("dispatch_people");
     },
   );
