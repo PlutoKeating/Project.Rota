@@ -66,6 +66,11 @@ export type TimetableProposal = z.infer<typeof timetableProposalSchema> & {
   bound: boolean;
   unscheduledIds?: string[];
 };
+/** Unknown time is retained in the durable review, never converted to no_fixed_time. */
+export function pendingTimedEntries(entries: TimetableProposal["entries"]) {
+  return entries.filter((e) => !e.no_fixed_time &&
+    (e.weekday === null || e.period_from === null || e.period_to === null || e.weeks === null));
+}
 /** Explicit model-produced fields only. No filename matching, text parsing, or inferred dates. */
 export function stageTimetable(
   base: Snapshot,

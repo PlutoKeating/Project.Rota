@@ -14,6 +14,7 @@ import {
 } from "../../shared/agent-import/person-workspace";
 import {
   stageTimetable,
+  pendingTimedEntries,
   type TimetableProposal,
 } from "../../shared/agent-import/timetable";
 import { proposalSignature } from "./verification";
@@ -111,6 +112,7 @@ export function projectPeople(job: Job) {
         table.entries.length && table.calendar_id
           ? bindings.get(table.calendar_id)
           : undefined;
+      const hasUnknownTime = pendingTimedEntries(table.entries).length > 0;
       if (binding) {
         const scopeKey = personId + ":" + binding.termId;
         const weeks =
@@ -135,7 +137,10 @@ export function projectPeople(job: Job) {
           )) {
             const remaining = (
               JSON.parse(String(entry.weeks)) as number[]
-            ).filter((w) => !weeks.includes(w));
+            ).filter((w) => !weeks.includes(w) || (hasUnknownTime &&
+              !table.entries.some((known) => known.name === entry.name &&
+                known.weekday === entry.weekday && known.period_from === entry.period_from &&
+                known.period_to === entry.period_to && known.weeks?.includes(w))));
             if (
               remaining.length ===
               (JSON.parse(String(entry.weeks)) as number[]).length
@@ -153,7 +158,7 @@ export function projectPeople(job: Job) {
           const enrollments = draft.enrollment.filter(
             (e) => e.person_id === personId && e.term_id === binding.termId,
           );
-          if (table.replace_weeks && enrollments.length)
+          if ((table.replace_weeks || hasUnknownTime) && enrollments.length)
             throw Error(
               p.label +
                 "：已有共享课程选课，局部覆盖须先在课程管理中明确处理，不能删除其他周",

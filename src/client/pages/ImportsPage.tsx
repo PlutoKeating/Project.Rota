@@ -485,7 +485,7 @@ export function ImportsPage() {
                     disabled={!!issues.length || !job.session}
                     onClick={() => void finish()}
                   >
-                    审核无误，导入全部选中内容
+                    确认导入已知内容并保存待补清单
                   </Button>
                 )}
               </div>

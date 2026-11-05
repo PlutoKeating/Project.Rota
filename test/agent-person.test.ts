@@ -294,3 +294,18 @@ describe("source verification facts", () => {
     expect(t).toEqual(before);
   });
 });
+
+
+it("unknown time preserves unrelated existing courses even within declared replacement weeks", () => {
+  const job = jobFixture();
+  const table = job.session!.people.a.timetables.fall;
+  table.replace_weeks = [1, 2];
+  table.entries.push({ name: "遮挡课", weekday: 3, period_from: 1, period_to: 2, weeks: null });
+  table.unresolved = ["遮挡课周次未知"];
+  projectPeople(job);
+  expect(job.draft.timetable_entry.find((e) => e.id === "old-existing")?.weeks).toBe("[1,2,3]");
+  expect(job.draft.timetable_entry.find((e) => e.id === "old-other")?.weeks).toBe("[1,2,3]");
+  expect(job.draft.timetable_entry.filter((e) => e.name === "新课")).toHaveLength(1);
+  expect(job.draft.timetable_entry.some((e) => e.name === "遮挡课")).toBe(false);
+  expect(Object.values(job.timetables!)[0].entries).toHaveLength(2);
+});

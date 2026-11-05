@@ -193,7 +193,7 @@ test("independent people overlap model requests and commit only after human revi
   ]));
 
   await page
-    .getByRole("button", { name: "审核无误，导入全部选中内容" })
+    .getByRole("button", { name: "确认导入已知内容并保存待补清单" })
     .click();
   await expect.poll(() => applied.length).toBe(1);
   expect(applied[0].review.timetables).toHaveLength(2);
@@ -249,7 +249,7 @@ test("an unset semester total derives course coverage and permits reviewed submi
   const job = await saved(page);
   expect(job.draft.term[0].week_count).toBe(2);
   expect(Object.values(job.timetables).every((t: any) => t.bound)).toBe(true);
-  await page.getByRole("button", { name: "审核无误，导入全部选中内容" }).click();
+  await page.getByRole("button", { name: "确认导入已知内容并保存待补清单" }).click();
   await expect.poll(() => applied.length).toBe(1);
 });
 
@@ -299,7 +299,7 @@ test("missing public calendar yields review with structured courses but prohibit
   });
   expect(applied).toHaveLength(0);
   await expect(
-    page.getByRole("button", { name: "审核无误，导入全部选中内容" }),
+    page.getByRole("button", { name: "确认导入已知内容并保存待补清单" }),
   ).toBeDisabled();
 });
 test("a child cannot read another person's material or change shared calendars", async ({
@@ -976,7 +976,39 @@ test("verified missing timetable permits personnel-only submission without inven
     return r.checkJob((await s.loadJob(id))!);
   }, job.id);
   expect(validation.issues).toEqual([]);
-  await page.getByRole("button", { name: "审核无误，导入全部选中内容" }).click();
+  await page.getByRole("button", { name: "确认导入已知内容并保存待补清单" }).click();
   await expect.poll(() => applied.length).toBe(1);
   expect(Object.values(applied[0].review.checks).map((check: any) => check.coverage)).toEqual(["missing"]);
+});
+
+
+test("verified partial times persist in review while only known sessions are submitted", async ({ page }) => {
+  const unknown = { name: "待补课程", weekday: 2, period_from: 3, period_to: 4, weeks: null, no_fixed_time: false };
+  const applied = await setup(page, (body) => {
+    if (body.mode === "discover") return discovery(["a"]);
+    const reply = personReply(body);
+    if (body.mode === "person") {
+      const table = reply.calls[0].args.timetables[0];
+      table.entries.push(unknown);
+      table.replace_weeks = [1, 2];
+      table.unresolved = ["待补课程的周次被遮挡"];
+    }
+    if (body.mode === "verify") {
+      const check = reply.calls[0].args.checks[0];
+      check.checked_entries = [0, 1];
+      check.verified_entries[1] = { ...unknown, index: 1 };
+      check.coverage = "partial";
+    }
+    return reply;
+  });
+  await upload(page, ["a"]);
+  await expect.poll(async () => (await saved(page))?.status).toBe("review");
+  const job = await saved(page);
+  expect(job.draft.timetable_entry).toHaveLength(1);
+  expect(job.summary).toContain("1 项时段待补");
+  expect(job.unresolved.join(" ")).toContain("不能据此判定有空");
+  await page.getByRole("button", { name: "确认导入已知内容并保存待补清单" }).click();
+  await expect.poll(() => applied.length).toBe(1);
+  expect(applied[0].review.timetables[0].entries[1]).toMatchObject(unknown);
+  expect(applied[0].review.unresolved.join(" ")).toContain("待补课程");
 });

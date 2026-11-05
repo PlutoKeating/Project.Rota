@@ -18,6 +18,7 @@ import {
   timetableProposalSchema,
   stageTimetable,
   timetableWarnings,
+  pendingTimedEntries,
 } from "../../shared/agent-import/timetable";
 import {
   calendarSchema,
@@ -188,7 +189,10 @@ export async function checkJob(job: Job) {
         });
       else if (
         t.entries.length !==
-        t.entryIds.length + (t.unscheduledIds?.length ?? 0)
+        t.entryIds.length + (t.unscheduledIds?.length ?? 0) &&
+        !(job.timetableChecks?.[t.id]?.checks?.coverage === "partial" &&
+          !needsVerification(job, t) && t.unresolved.length &&
+          t.entries.length === t.entryIds.length + (t.unscheduledIds?.length ?? 0) + pendingTimedEntries(t.entries).length)
       )
         issues.push({
           message: `${t.person.full_name}：部分课程缺少星期、节次或周次，尚未形成完整占用`,
@@ -206,7 +210,9 @@ export async function checkJob(job: Job) {
     warnings: Object.values(job.timetables ?? {})
       .filter((t) => !job.excluded.includes(t.person.id))
       .flatMap((t) =>
-        timetableWarnings(t.entries).map((w) => t.person.full_name + "：" + w),
+        [...timetableWarnings(t.entries), ...pendingTimedEntries(t.entries).map((e) =>
+          `「${e.name}」时段不完整，仅保存在待补清单，尚未计入课程占用；不能据此判定有空。`)]
+          .map((w) => t.person.full_name + "：" + w),
       ),
     unread: unread.map((f) => f.path),
     blocked: blocked.map((f) => ({ path: f.path, reason: f.reason })),
