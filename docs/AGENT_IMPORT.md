@@ -9,7 +9,7 @@
 ## 执行架构
 
 - `shared/agent-import/person-workspace.ts`：人员对象 A/B、来源、状态、检查和身份匹配契约。
-- `client/agent-import/person-runner.ts`：协调器与人员子智能体；默认最多 3 个人员并行。协调器发现完成后启动人员任务，人员全部完成后汇合协调公共事实。每人最多 32 次模型请求/次运行，协调器最多 60 次；连续 6 次工具错误暂停当前对象。
+- `client/agent-import/person-runner.ts`：协调器与人员子智能体；默认最多 8 个人员并行。协调器发现完成后启动人员任务，人员全部完成后汇合协调公共事实。每人最多 32 次模型请求/次运行，协调器最多 60 次；连续 6 次工具错误暂停当前对象。
 - `client/agent-import/projection.ts`：唯一共享草稿写入者。子智能体只维护自己的对象，完成汇合后程序生成业务差异。
 - `client/agent-import/state.ts` / `store.ts`：对象状态与 IndexedDB 持久化。模型响应的待执行调用先保存，再执行；完成调用与对象成果同一快照保存。单批保存串行化，避免并行成果相互覆盖。
 - `client/agent-import/runtime.ts`：人工编辑、身份选择、检查、租约和正式提交。
@@ -81,3 +81,5 @@ pnpm test:agent-live /private/input.zip /private/output /private/snapshot.json
 提交操作员复核意见时，如果协调器没有待执行工具，则保留已完成对话与来源覆盖；如果还有旧指令未执行，则重置协调器以取消它们。最新复核意见始终通过当前 context 提供，已核对差异仍按事实签名校验。
 
 Google 导入请求支持供应商 params.reasoningEffort（或 reasoning_effort）的 low / medium / high，传递为原生 thinkingConfig.thinkingLevel；未配置时保留模型默认。隔离 Vertex 验收固定使用 gemini-4-argon 与 low，避免默认思考强度影响计时。本次无需新增依赖、迁移或部署参数。
+
+新建批次的人员并发上限调整为 8；已有检查点保留其原并发设置。来源复核、共享文件串行读取和检查点串行保存不变。浏览器专项使用 10 人批次验证并发上限及全部复核成果保留。无需新增依赖或迁移，沿用现有前后端构建部署。
