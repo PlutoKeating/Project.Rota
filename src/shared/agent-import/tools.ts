@@ -165,7 +165,7 @@ export const toolSpecs = {
   },
   revise_person: {
     description:
-      "协调器将跨人疑点或操作员意见交给指定人员对象重新处理，不直接改写他人课表。可扩充其 sources 以回看清晰对照；instruction 明确哪些值需要核对，不能因同名课程强行统一教师。",
+      "协调器将跨人疑点或操作员意见交给指定人员对象重新处理，不直接改写他人课表。已有课表直接进入新的独立来源复核，可局部修正但仍须核对全表；无课表时重新提取。可扩充其 sources 以回看清晰对照；instruction 明确哪些值需要核对，不能因同名课程强行统一教师。",
     schema: z.object({
       key: z.string(),
       instruction: z.string().min(1).max(4000),

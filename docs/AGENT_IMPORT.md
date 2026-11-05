@@ -93,3 +93,5 @@ Google 导入请求支持供应商 params.reasoningEffort（或 reasoning_effort
 人员工具新增 amend_timetable，仅按当前人员的课表 key 和原课程 index 局部修正字段，或更新 replace_weeks / unresolved。未提及字段不应用创建默认值，整份候选课表校验成功后才替换，非法索引不留下前半份改动；修正清空旧检查，仍须 finish_person 逐项复核。短课表 key 使用 main / fall 等标识，最多 30 字符。协议需前后端同步发布，无新增依赖、环境变量或数据库迁移。
 
 真实 Vertex 验收另支持 `pnpm test:agent-vertex-apply /private/input.zip /private/new-output`：从全新空快照开始，快照/批次/租约/提交/报告调用真实 Worker API，业务写入仅进入本进程隔离 SQLite；模型仍使用本机 Vertex。此模式拒绝快照文件与旧浏览器检查点，不继承远端存储环境变量。材料完整且客户端检查通过后自动提交到测试库，输出 applyMs、回读快照和审核报告，总耗时包含提交。缺少日历等条件时保持未提交并返回失败，不补造事实。默认 test:agent-vertex 仍禁止业务提交。可用 test/fixtures/live-apply.txt 做明确标注为虚构材料的提交链路冒烟测试；它不能证明真实压缩包的速度或准确率。无需新增依赖或迁移。
+
+跨人返工已有课表时，revise_person 直接建立新的独立 verify 上下文，重新读取来源并隐藏已存时段/教师/地点；可局部修正，但仍须提交全表逐字段检查。无课表对象仍先提取。省去重复提取阶段，不跳过来源复核；前后端同步发布，无新增依赖、配置或迁移。

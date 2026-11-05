@@ -500,7 +500,9 @@ export class ImportRunner {
             throw Error("对照来源不存在");
         p.sources = [...new Set([...p.sources, ...(args.sources ?? [])])];
         p.instruction = args.instruction;
-        p.status = "queued";
+        // Existing tables go straight to a fresh independent source check.
+        // Verification tools can amend/rewrite them without a redundant extraction pass.
+        p.status = Object.keys(p.timetables).length ? "verifying" : "queued";
         p.agent = emptyAgent();
         p.checks = {};
         p.version++;

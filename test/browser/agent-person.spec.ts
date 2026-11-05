@@ -660,6 +660,8 @@ test("verification rejects source weeks that disagree with the saved entry", asy
 
 test("coordinator retains source evidence across person revision waves", async ({ page }) => {
   let revised = false, retained = false;
+  const revisionModes: string[] = [];
+  let independentlyRechecked = false;
   await setup(page, (body) => {
     if (body.mode === "discover") return discovery(["a"]);
     if (body.mode === "reconcile" && !revised) {
@@ -669,12 +671,21 @@ test("coordinator retains source evidence across person revision waves", async (
         { name: "revise_person", args: { key: "a", instruction: "再次核对数学周次" } },
       ]);
     }
+    if (revised && ["person", "verify"].includes(body.mode)) {
+      revisionModes.push(body.mode);
+      const context = JSON.parse(body.context);
+      independentlyRechecked = context.person.timetables.fall.entries[0].weekday === undefined
+        && body.messages.some((m: any) => typeof m.content === "string"
+          && m.content.startsWith("预先读取的来源") && m.content.includes("a.txt"));
+    }
     if (body.mode === "reconcile") retained = JSON.stringify(body.messages).includes("再次核对数学周次");
     return personReply(body);
   });
   await upload(page, ["a"]);
   await expect.poll(async () => (await saved(page))?.status).toBe("review");
   expect(retained).toBe(true);
+  expect(revisionModes).toEqual(["verify"]);
+  expect(independentlyRechecked).toBe(true);
 });
 
 test("source verification cannot copy the extraction's time and teacher fields", async ({ page }) => {
