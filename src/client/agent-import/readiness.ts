@@ -38,7 +38,7 @@ export function reviewSummary(job: Job, submitted = job.status === "applied") {
   const partial = plans.filter(
     (p) => job.timetableChecks?.[p.id]?.checks?.coverage !== "complete",
   ).length;
-  return `${submitted ? "已提交" : "待审核"}：${new Set(plans.map((p) => p.person.id)).size} 人、${plans.reduce((n, p) => n + p.entries.length, 0)} 项课程；${plans.filter((p) => !p.bound).length} 份课表待绑定学期/作息，${partial} 份材料不完整或完整性未确认。新增人员 ${added("person")}、部门 ${added("organization")}、学期 ${added("term")}。${submitted ? "正式数据已提交。" : "正式数据尚未提交。"}`;
+  return `${submitted ? "已提交" : "待审核"}：${new Set(plans.map((p) => p.person.id)).size} 人、${plans.reduce((n, p) => n + p.entries.length, 0)} 项课程；${plans.filter((p) => p.entries.length && !p.bound).length} 份课表待绑定学期/作息，${partial} 份材料不完整或完整性未确认。新增人员 ${added("person")}、部门 ${added("organization")}、学期 ${added("term")}。${submitted ? "正式数据已提交。" : "正式数据尚未提交。"}`;
 }
 
 export { calendarBindingIssues } from "../../shared/agent-import/calendar";

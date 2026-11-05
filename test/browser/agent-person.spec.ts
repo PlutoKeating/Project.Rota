@@ -942,3 +942,38 @@ test("operator feedback retains completed coordinator evidence", async ({ page }
   expect(result.pending).toEqual([]);
   expect(result.reset).toBe(true);
 });
+
+
+test("verified missing timetable permits personnel-only submission without inventing a calendar", async ({ page }) => {
+  const applied = await setup(page, (body) => {
+    if (body.mode === "discover") return discovery(["a"], false);
+    const reply = personReply(body, false);
+    if (body.mode === "person") {
+      const table = reply.calls[0].args.timetables[0];
+      table.entries = [];
+      table.unresolved = ["原件属于他人，缺少本人课表"];
+    }
+    if (body.mode === "verify") {
+      const check = reply.calls[0].args.checks[0];
+      check.checked_entries = [];
+      check.verified_entries = [];
+      check.coverage = "missing";
+    }
+    return reply;
+  });
+  await upload(page, ["a"]);
+  await expect.poll(async () => (await saved(page))?.status).toBe("review");
+  const job = await saved(page);
+  expect(job.draft.person).toHaveLength(1);
+  expect(job.draft.term).toHaveLength(0);
+  expect(job.draft.timetable_entry).toHaveLength(0);
+  const validation = await page.evaluate(async (id) => {
+    const r = await import("/src/client/agent-import/runtime.ts");
+    const s = await import("/src/client/agent-import/store.ts");
+    return r.checkJob((await s.loadJob(id))!);
+  }, job.id);
+  expect(validation.issues).toEqual([]);
+  await page.getByRole("button", { name: "审核无误，导入全部选中内容" }).click();
+  await expect.poll(() => applied.length).toBe(1);
+  expect(Object.values(applied[0].review.checks).map((check: any) => check.coverage)).toEqual(["missing"]);
+});

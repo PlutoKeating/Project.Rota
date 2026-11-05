@@ -179,7 +179,10 @@ export async function checkJob(job: Job) {
         issues.push({
           message: `${t.person.full_name}：等待 Agent 回看原件逐项核对`,
         });
-      if (!t.bound)
+      const missingOnly = !t.entries.length &&
+        job.timetableChecks?.[t.id]?.checks?.coverage === "missing" &&
+        !needsVerification(job, t);
+      if (!t.bound && !missingOnly)
         issues.push({
           message: `${t.person.full_name}：已保存 ${t.entries.length} 项课程，待绑定学期/作息后才能正式导入`,
         });
