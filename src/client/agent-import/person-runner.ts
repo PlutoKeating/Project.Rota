@@ -157,11 +157,13 @@ export class ImportRunner {
     agent: AgentState,
     sources: { source: string }[],
     person?: PersonWorkspace,
+    allowArchiveMetadata = false,
   ) {
     const files = await materials(this.job.id);
     for (const { source } of sources) {
       if (source === "操作员意见" && this.job.notes["最近操作员意见"]) continue;
       if (source === "现有数据" && !person) continue;
+      if (!person && allowArchiveMetadata && agent.openedArchives?.includes(source)) continue;
       if (person && !person.sources.includes(source))
         throw Error("来源不属于当前人员：" + source);
       if (!files.some((f) => f.path === source) || !agent.coverage[source])
@@ -211,6 +213,7 @@ export class ImportRunner {
           status: "done",
           reason: "已解包，子文件逐项分派",
         });
+        agent.openedArchives = [...new Set([...(agent.openedArchives ?? []), args.path])];
         return result;
       }
       case "dispatch_people": {
@@ -224,7 +227,7 @@ export class ImportRunner {
             if (!files.some((f) => f.path === path))
               throw Error("人员来源文件不存在：" + path);
         for (const org of args.organizations)
-          await this.validateSources(agent, org.sources);
+          await this.validateSources(agent, org.sources, undefined, true);
         const organizations = [...session.organizations];
         for (const org of args.organizations) {
           const i = organizations.findIndex((o) => o.id === org.id);

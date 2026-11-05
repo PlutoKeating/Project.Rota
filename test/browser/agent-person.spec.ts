@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { emptySnapshot } from "../../src/shared/agent-import/model";
+import JSZip from "jszip";
 const evidence = (path: string) => [
   {
     source: path,
@@ -197,6 +198,42 @@ test("independent people overlap model requests and commit only after human revi
   await expect.poll(() => applied.length).toBe(1);
   expect(applied[0].review.timetables).toHaveLength(2);
 });
+test("only successfully unpacked archive metadata can support an organization", async ({ page }) => {
+  let discoveryTurns = 0, initiallyRejected = false;
+  const archive = "学生部门.zip", child = archive + "!/a.txt";
+  const organization = { id: "org", name: "学生部门", sources: evidence(archive) };
+  await setup(page, (body) => {
+    if (body.mode === "discover") {
+      if (discoveryTurns++ === 0) return output([
+        { name: "dispatch_people", args: { people: [], organizations: [organization] } },
+        { name: "unpack", args: { path: archive } },
+      ]);
+      initiallyRejected = JSON.stringify(body.messages).includes("证据来源尚未读取");
+      return output([
+        { name: "read_document", args: { path: child } },
+        { name: "dispatch_people", args: { people: [{ ...assignment("a"), sources: [child], organization_ids: ["org"] }], organizations: [organization] } },
+        { name: "save_calendars", args: { calendars: [{ ...calendar, sources: evidence(child) }] } },
+        { name: "finish_discovery", args: {} },
+      ]);
+    }
+    const reply = personReply(body);
+    if (body.mode === "person") {
+      reply.calls[0].args.timetables[0].sources = evidence(child);
+      return output(reply.calls);
+    }
+    return reply;
+  });
+  const zip = new JSZip().file("a.txt", "甲 学号 a 数学 周一第1节 1-2周");
+  await page.getByLabel("选择导入材料").setInputFiles({
+    name: archive, mimeType: "application/zip", buffer: await zip.generateAsync({ type: "nodebuffer" }),
+  });
+  await expect.poll(async () => (await saved(page))?.status).toBe("review");
+  expect(initiallyRejected).toBe(true);
+  const job = await saved(page);
+  expect(job.session.organizations[0].sources[0].source).toBe(archive);
+  expect(job.session.coordinator.coverage[archive]).toBeUndefined();
+});
+
 test("an unset semester total derives course coverage and permits reviewed submission", async ({ page }) => {
   const applied = await setup(page, (body) => {
     if (body.mode === "discover") {

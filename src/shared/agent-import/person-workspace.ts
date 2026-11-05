@@ -106,6 +106,7 @@ export interface AgentState {
     validationError?: string;
   }[];
   coverage: Record<string, CoverageState>;
+  openedArchives?: string[];
   turns: number;
   failures: number;
   error?: string;
