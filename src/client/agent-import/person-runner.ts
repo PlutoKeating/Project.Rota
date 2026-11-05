@@ -430,6 +430,7 @@ export class ImportRunner {
             args.checks.length
         )
           throw Error("须为每份课表填写 checks");
+        const verificationErrors: string[] = [];
         for (const t of Object.values(person.timetables)) {
           const check = args.checks.find(
             (c: { key: string }) => c.key === t.key,
@@ -438,9 +439,15 @@ export class ImportRunner {
             !check ||
             new Set(check.checked_entries).size !== t.entries.length ||
             check.checked_entries.some((i: number) => !t.entries[i])
-          )
-            throw Error("核对索引必须覆盖全部课程：" + t.key);
-          validateVerifiedEntries(t, check.verified_entries);
+          ) {
+            verificationErrors.push("核对索引必须覆盖全部课程：" + t.key);
+            if (!check) continue;
+          }
+          try {
+            validateVerifiedEntries(t, check.verified_entries);
+          } catch (error) {
+            verificationErrors.push((error as Error).message);
+          }
           const normalizeName = (name: string) =>
             name.normalize("NFKC").replace(/\s+/gu, "");
           if (
@@ -450,7 +457,7 @@ export class ImportRunner {
                 normalizeName(name) !== normalizeName(person.information!.full_name),
             )
           )
-            throw Error(
+            verificationErrors.push(
               "原件姓名与目标人员不一致，不能把他人课程写给当前人员；请按原件修正身份，或移除误分派课表并保留缺失说明，由协调器重新分派来源",
             );
           if (
@@ -458,16 +465,17 @@ export class ImportRunner {
             !t.unresolved.length &&
             !person.unresolved.length
           )
-            throw Error("不完整材料须写明待定事项");
+            verificationErrors.push("不完整材料须写明待定事项");
           if (
             check.coverage !== "complete" &&
             t.replace_weeks === null &&
             t.entries.length
           )
-            throw Error("不完整课表不能覆盖整个学期，须明确 replace_weeks");
+            verificationErrors.push("不完整课表不能覆盖整个学期，须用 amend_timetable 明确 replace_weeks：" + t.key);
           if (!t.entries.length && check.coverage !== "missing")
-            throw Error("零课程方案须明确标记 missing，不能据此清空旧课表");
+            verificationErrors.push("零课程方案须明确标记 missing，不能据此清空旧课表");
         }
+        if (verificationErrors.length) throw Error(verificationErrors.join("\n"));
         person.checks = Object.fromEntries(
           args.checks.map(
             ({

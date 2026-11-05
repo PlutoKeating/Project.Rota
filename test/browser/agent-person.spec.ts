@@ -292,6 +292,27 @@ test("rejects a timetable whose printed owner conflicts with the target person",
   expect((await saved(page)).session.people.a.status).toBe("failed");
   expect(applied).toHaveLength(0);
 });
+test("verification returns field, identity and coverage problems in one response", async ({ page }) => {
+  let allProblems = false;
+  await setup(page, (body) => {
+    if (body.mode === "discover") return discovery(["a"]);
+    const reply = personReply(body);
+    if (body.mode === "verify") {
+      const history = JSON.stringify(body.messages);
+      allProblems ||= ["复核值与已存课程不一致", "原件姓名与目标人员不一致", "不完整材料须写明待定事项", "replace_weeks"]
+        .every((text) => history.includes(text));
+      const checks = reply.calls[0].args.checks;
+      checks[0].source_person_names = ["乙"];
+      checks[0].coverage = "partial";
+      checks[0].verified_entries[0].teacher = "新教师";
+    }
+    return reply;
+  });
+  await upload(page, ["a"]);
+  await expect.poll(async () => (await saved(page))?.session?.people?.a?.status).toBe("failed");
+  expect(allProblems).toBe(true);
+  expect((await saved(page)).session.people.a.checks).toEqual({});
+});
 test("local corrections preserve untouched course fields and still require verification", async ({ page }) => {
   let corrected = false;
   await setup(page, (body) => {
