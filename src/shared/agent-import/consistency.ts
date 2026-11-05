@@ -83,7 +83,7 @@ export function validateCheckedVariants(
     const indices = review.checked_variant_indices;
     if (review.checked_variants.length || indices.length !== group.variants.length ||
         new Set(indices).size !== indices.length || indices.some((i) => !group.variants[i]))
-      throw Error("核对编号须完整且不重复地引用当前组的所有变体，不能同时提交 checked_variants");
+      throw Error(`核对编号须完整且不重复地引用当前组的所有变体，不能同时提交 checked_variants。当前组${group.key}须提交checked_variant_indices=${JSON.stringify(group.variants.map((_, i) => i))}；编号对应课表变体，不是去重后的教师名单。`);
     const checked_variants = indices.map((i) => ({
       timetable_id: group.variants[i].timetable_id,
       teacher: group.variants[i].teacher,

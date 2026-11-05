@@ -145,3 +145,9 @@ it("reuses an oversized source set for up to five groups without increasing imag
   const moreSources = { ...groups[1], variants: [{ ...groups[1].variants[0], sources: [...sources, { ...sources[0], source: "new" }] }] };
   expect(consistencyBatch([groups[0], moreSources])).toEqual([groups[0]]);
 });
+
+it("invalid compact review indices explain the exact group and required per-table variant indices", () => {
+  const group = courseConflicts(plans as any)[0];
+  expect(() => validateCheckedVariants(group, { key: group.key, resolution: "different_context", explanation: "核对", checked_variant_indices: [0], checked_variants: [] }))
+    .toThrow(`当前组${group.key}须提交checked_variant_indices=[0,1]`);
+});
