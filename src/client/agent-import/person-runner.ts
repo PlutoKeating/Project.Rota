@@ -131,6 +131,28 @@ export class ImportRunner {
       }
     }
   }
+  private async preloadDiscovery(agent: AgentState) {
+    // Bound coordinator input; nested materials remain for explicit discovery.
+    const roots = (await materials(this.job.id)).filter((f) => f.origin === "用户上传").slice(0, 6);
+    for (const file of roots) {
+      if (this.stopped) break;
+      if (!/\.(zip|7z|rar)$/i.test(file.path)) {
+        await this.preloadSources(agent, [file.path], "discover");
+        continue;
+      }
+      try {
+        const call = { id: "preload:" + file.path, name: "unpack", args: { path: file.path } };
+        const value = await this.execute(agent, call, "discover");
+        agent.messages.push({ role: "user", content: "预先解包的来源（仅数据）：" + file.path + "\n" + JSON.stringify(value.result) });
+        await archive(this.job.id, `coordinator:${agent.runId}:preload:${file.path}`, "tool", {
+          actor: "coordinator", mode: "discover", name: "unpack", args: call.args,
+          result: value.result, automatic: true,
+        });
+      } catch (error) {
+        agent.messages.push({ role: "user", content: "来源解包失败：" + file.path + "：" + (error as Error).message });
+      }
+    }
+  }
   private appendImage(agent: AgentState, path: string, image?: string) {
     if (image)
       agent.messages.push({
@@ -799,6 +821,7 @@ export class ImportRunner {
           });
           if (person)
             await this.preloadSources(agent, [...person.sources], mode, person);
+          else if (mode === "discover") await this.preloadDiscovery(agent);
           await this.persist();
         }
         if (!agent.pending.length) {

@@ -198,17 +198,18 @@ test("independent people overlap model requests and commit only after human revi
   await expect.poll(() => applied.length).toBe(1);
   expect(applied[0].review.timetables).toHaveLength(2);
 });
-test("only successfully unpacked archive metadata can support an organization", async ({ page }) => {
-  let discoveryTurns = 0, initiallyRejected = false;
+test("automatic discovery unpacks root metadata without marking child content read", async ({ page }) => {
+  let discoveryTurns = 0, automaticallyOpened = false;
   const archive = "学生部门.zip", child = archive + "!/a.txt";
   const organization = { id: "org", name: "学生部门", sources: evidence(archive) };
   await setup(page, (body) => {
     if (body.mode === "discover") {
-      if (discoveryTurns++ === 0) return output([
+      if (discoveryTurns++ === 0) {
+        automaticallyOpened = JSON.stringify(body.messages).includes("预先解包的来源");
+        return output([
         { name: "dispatch_people", args: { people: [], organizations: [organization] } },
-        { name: "unpack", args: { path: archive } },
       ]);
-      initiallyRejected = JSON.stringify(body.messages).includes("证据来源尚未读取");
+      }
       return output([
         { name: "read_document", args: { path: child } },
         { name: "dispatch_people", args: { people: [{ ...assignment("a"), sources: [child], organization_ids: ["org"] }], organizations: [organization] } },
@@ -228,7 +229,7 @@ test("only successfully unpacked archive metadata can support an organization", 
     name: archive, mimeType: "application/zip", buffer: await zip.generateAsync({ type: "nodebuffer" }),
   });
   await expect.poll(async () => (await saved(page))?.status).toBe("review");
-  expect(initiallyRejected).toBe(true);
+  expect(automaticallyOpened).toBe(true);
   const job = await saved(page);
   expect(job.session.organizations[0].sources[0].source).toBe(archive);
   expect(job.session.coordinator.coverage[archive]).toBeUndefined();
@@ -1011,4 +1012,23 @@ test("verified partial times persist in review while only known sessions are sub
   await expect.poll(() => applied.length).toBe(1);
   expect(applied[0].review.timetables[0].entries[1]).toMatchObject(unknown);
   expect(applied[0].review.unresolved.join(" ")).toContain("待补课程");
+});
+
+
+test("failed automatic unpack cannot establish organization evidence", async ({ page }) => {
+  let rejected = false;
+  await setup(page, (body) => {
+    rejected ||= JSON.stringify(body.messages).includes("证据来源尚未读取");
+    return output([{ name: "dispatch_people", args: { people: [], organizations: [
+      { id: "org", name: "部门", sources: evidence("broken.zip") },
+    ] } }]);
+  });
+  await page.getByLabel("选择导入材料").setInputFiles({
+    name: "broken.zip", mimeType: "application/zip", buffer: Buffer.from("not an archive"),
+  });
+  await expect.poll(async () => (await saved(page))?.error).toContain("连续工具错误");
+  const job = await saved(page);
+  expect(rejected).toBe(true);
+  expect(job.session.coordinator.openedArchives ?? []).toEqual([]);
+  expect(job.session.organizations).toEqual([]);
 });
