@@ -797,6 +797,7 @@ export class ImportRunner {
     if (person?.status === "failed")
       person.status = person.resumeStatus ?? "extracting";
     agent.error = undefined;
+    agent.retryableFailure = false;
     agent.failures = 0;
     const initialTurns = agent.turns;
     try {
@@ -955,6 +956,11 @@ export class ImportRunner {
       }
     } catch (e) {
       agent.error = (e as Error).message;
+      const attempts = e instanceof ApiError
+        ? (e.details as { metrics?: TurnMetrics })?.metrics?.attempts ?? [] : [];
+      agent.retryableFailure = e instanceof ApiError && (e.status === 0 ||
+        (attempts.length > 0 && attempts.every((attempt) =>
+          ["timeout", "network_error"].includes(attempt.code ?? ""))));
       if (person) {
         person.resumeStatus =
           person.status === "verifying" ? "verifying" : "extracting";
@@ -969,16 +975,24 @@ export class ImportRunner {
     const pending = Object.values(session.people).filter(
       (p) => p.status !== "done",
     );
-    let index = 0;
-    await Promise.all(
-      Array.from(
-        { length: Math.min(session.concurrency, pending.length) },
+    const runQueue = async (queue: PersonWorkspace[]) => {
+      let index = 0;
+      await Promise.all(Array.from(
+        { length: Math.min(session.concurrency, queue.length) },
         async () => {
-          while (!this.stopped && index < pending.length)
-            await this.actor(pending[index++]);
+          while (!this.stopped && index < queue.length) await this.actor(queue[index++]);
         },
-      ),
-    );
+      ));
+    };
+    await runQueue(pending);
+    // One bounded second wave, after other people have drained. Never restart
+    // completed work, retry quota failures, or loop on invalid model output.
+    const transient = pending.filter((p) => p.status === "failed" && p.agent.retryableFailure);
+    if (!this.stopped && transient.length) {
+      this.log(`首轮已结束，补跑 ${transient.length} 个连接/超时失败对象`);
+      await this.persist();
+      await runQueue(transient);
+    }
     if (this.stopped) return;
     if (pending.some((p) => p.status !== "done"))
       throw Error("部分人员处理失败，其他成果已保存；继续时只恢复未完成对象");

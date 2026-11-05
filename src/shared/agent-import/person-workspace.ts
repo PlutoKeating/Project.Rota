@@ -113,6 +113,7 @@ export interface AgentState {
   verifiedEntries?: Record<string, z.infer<typeof verifiedEntrySchema>[]>;
   turns: number;
   failures: number;
+  retryableFailure?: boolean;
   error?: string;
 }
 export const emptyAgent = (): AgentState => ({

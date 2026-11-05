@@ -1081,3 +1081,36 @@ test("coordinator reloads an evicted image when a later review group needs it", 
   expect(reloaded).toBe(true);
   expect((await saved(page)).importCheck.consistency_review).toHaveLength(6);
 });
+
+
+for (const scenario of ["recover", "timeout", "quota_exhausted"]) {
+  test(`bounded second wave handles ${scenario} without repeating successful people`, async ({ page }) => {
+    let aCalls = 0, bRequests = 0;
+    await setup(page, (body) => {
+      if (body.mode === "discover") return discovery();
+      if (body.mode === "person" && JSON.parse(body.context).person.key === "a") aCalls++;
+      return personReply(body);
+    });
+    await page.route("**/api/agent-imports/*/turn", async (route) => {
+      const body = route.request().postDataJSON();
+      if (body.mode === "person" && JSON.parse(body.context).person.key === "b") {
+        bRequests++;
+        if (scenario !== "recover" || bRequests <= 2) {
+          const code = scenario === "quota_exhausted" ? scenario : "timeout";
+          return route.fulfill({ status: 502, json: { error: { code: "llm_error", message: code },
+            metrics: { requestId: "test", durationMs: 1, purpose: "person", attempts: [{ code, durationMs: 1, status: "error" }] },
+          } });
+        }
+      }
+      await route.fallback();
+    });
+    await upload(page);
+    await expect.poll(async () => {
+      const job = await saved(page);
+      return scenario === "recover" ? job?.status : job?.error && job.status;
+    }, { timeout: 15000 }).toBe(scenario === "recover" ? "review" : "paused");
+    expect(aCalls).toBe(1);
+    expect(bRequests).toBe(scenario === "recover" ? 3 : scenario === "timeout" ? 4 : 1);
+    expect((await saved(page)).session.people.a.status).toBe("done");
+  });
+}
