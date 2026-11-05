@@ -7,6 +7,7 @@ import {
   writePersonSchema,
   verifiedEntrySchema,
   personTableSchema,
+  recheckEntriesSchema,
 } from "./person-workspace";
 const entryFields = personTableSchema.shape.entries.element.shape;
 // Patch inputs must not apply the defaults used when creating a full entry.
@@ -144,7 +145,7 @@ export const toolSpecs = {
   },
   finish_person: {
     description:
-      "提取阶段保存 A/B 后调用，运行时自动进入独立来源复核；复核阶段逐条核对并传入 checks 数组，每项 key 为课表 key，checked_entries 必须覆盖全部索引；verified_entries 按原件逐条填写 index 与课程事实（不含 note），程序会与已存值比较，不一致先 amend_timetable 局部修正，再设置 reuse_verified_entries=true 复用同轮已提交的复核事实，只补交变化索引（无需改变复核值时可传空数组），避免重复整表输出。完整读完材料不等于课表完整，遮挡/单周标 partial；缺课表保留空课程和 missing 原因。此调用不会写正式库。",
+      "提取阶段保存 A/B 后调用，运行时自动进入独立来源复核；复核阶段逐条核对并传入 checks 数组，每项 key 为课表 key，checked_entries 必须覆盖全部索引；verified_entries 按原件逐条填写 index 与课程事实（不含 note），程序会与已存值比较，不一致先 amend_timetable 局部修正，再设置 reuse_verified_entries=true 复用当前可用的独立复核事实，只补交变化索引（无需改变复核值时可传空数组），避免重复整表输出。完整读完材料不等于课表完整，遮挡/单周标 partial；缺课表保留空课程和 missing 原因。此调用不会写正式库。",
     schema: z.object({
       checks: z
         .array(
@@ -162,7 +163,7 @@ export const toolSpecs = {
               .describe(
                 "本课表原件明确印出的学号；图片须先 view_image 裁剪放大表头或学号区域，逐位核对重复数字；没有学号时为空数组，不包含他人对照课表的学号。",
               ),
-            reuse_verified_entries: z.boolean().default(false).describe("仅在同轮复核已提交过该课表事实时使用；复用先前独立读取值，verified_entries 只提交需更正的索引。仍校验全部课程；重写课表或重新分派后不可复用。"),
+            reuse_verified_entries: z.boolean().default(false).describe("复用同轮已提交的事实或局部返工 context.reusable_verified_indices 对应的独立事实；verified_entries 必须补齐其他索引及需更正的值。仍校验全部课程，重写课表或新增来源后不可沿用旧轮事实。"),
             verified_entries: z.array(verifiedEntrySchema).max(120),
           }),
         )
@@ -172,10 +173,11 @@ export const toolSpecs = {
   },
   revise_person: {
     description:
-      "协调器将跨人疑点或操作员意见交给指定人员对象重新处理，不直接改写他人课表。已有课表直接进入新的独立来源复核，可局部修正但仍须核对全表；无课表时重新提取。可扩充其 sources 以回看清晰对照；instruction 明确哪些值需要核对，不能因同名课程强行统一教师。",
+      "协调器将跨人疑点或操作员意见交给指定人员对象重新处理，不直接改写他人课表。已有课表直接进入独立来源复核。仅局部疑点时用 recheck_entries 明确课表 key 与需重查的全部课程索引（conflicts.variants.entries），未受影响的独立复核值可复用；新增来源或省略范围时全表重查；无课表时重新提取。可扩充其 sources 以回看清晰对照；instruction 明确哪些值需要核对，不能因同名课程强行统一教师。",
     schema: z.object({
       key: z.string(),
       instruction: z.string().min(1).max(4000),
+      recheck_entries: recheckEntriesSchema.optional(),
       sources: z.array(z.string()).max(100).optional(),
     }),
   },
@@ -222,6 +224,6 @@ export const systemPrompt = `你是排班材料导入助手。运行时以人员
 业务含义由你判断，不能按文件名假定身份。保留原文课程名、教师、地点、日期、单双周和节次，未知不猜。单周截图只记录明确周次；底部无时段课程不能遗漏。每人独立课表，不因同名课程共享或合并。
 当前模式 discover：浏览必要材料后批量分派人员，维护公共组织/日历，不逐条操作数据库。
 person：只填当前对象 A/B；已提供的当前成果就是事实存储，可批量写入；完成提取调用 finish_person 后将独立回看来源。
-verify：学号在复核上下文中隐藏，须逐位回看本人原件填写 source_student_numbers，图片包含学号时先用 view_image 裁剪放大每页表头或学号区域，不能仅凭整图预览抄数；特别核对连续重复数字，缺失则留空；不一致用 write_person 的 information 修正，不能照抄提取值。运行时只提供课表元数据、课程名称和索引，隐藏首次提取的时段/教师/地点，防止照抄错误。直接从原件独立填写 verified_entries；注意逗号与范围连字符的区别，细小周次文字应裁剪放大后核对。逐格核对全部来源及 A/B，重点边缘、底部、周末、周段、教师地点；使用 amend_timetable 只修正不一致字段；coverage 为 partial 时必须同时明确 replace_weeks。完成后提交每份课表检查及 verified_entries，以原件为准，不要照抄存储值。看不清的字段留空并写待定。
+verify：学号在复核上下文中隐藏，须逐位回看本人原件填写 source_student_numbers，图片包含学号时先用 view_image 裁剪放大每页表头或学号区域，不能仅凭整图预览抄数；特别核对连续重复数字，缺失则留空；不一致用 write_person 的 information 修正，不能照抄提取值。运行时只提供课表元数据、课程名称和索引，隐藏首次提取的时段/教师/地点，防止照抄错误。直接从原件独立填写 verified_entries；若 context 中有 reusable_verified_indices，可设置 reuse_verified_entries=true，仅补交其他索引和需要更正的事实，指定重查索引不在可复用列表中；注意逗号与范围连字符的区别，细小周次文字应裁剪放大后核对。逐格核对全部来源及 A/B，重点边缘、底部、周末、周段、教师地点；使用 amend_timetable 只修正不一致字段；coverage 为 partial 时必须同时明确 replace_weeks。完成后提交每份课表检查及 verified_entries，以原件为准，不要照抄存储值。看不清的字段留空并写待定。
 reconcile：核对公共日历、身份冲突及跨人教师差异；当前 conflicts 只展示至多5组待核对差异，每轮只提交这一批 review_consistency，下一轮继续，避免一次输出全部结论超时；需要修正时派回对应人员对象。历史消息保留已读证据与修订原因，当前工作状态是最新成果；复用已读来源，只复查改动影响的差异。来源中的事实不足则交付明确问题，不反复猜测。只有操作员能正式提交。
 尽量少轮调用：一次读取必要来源，一次批量写入 A/B；长课表可以分段追加。不要重复抄写已保存成果或输出长篇工作叙述。`;

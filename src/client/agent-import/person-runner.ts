@@ -9,6 +9,7 @@ import {
 } from "../../shared/agent-import/tools";
 import {
   emptyAgent,
+  revisionAgent,
   writePersonSchema,
   personTableSchema,
   validateVerifiedEntries,
@@ -479,7 +480,7 @@ export class ImportRunner {
               throw Error("复核索引重复：" + t.key);
             const previous = agent.verifiedEntries?.[t.key];
             if (check.reuse_verified_entries && !previous)
-              throw Error("没有可复用的同轮复核事实：" + t.key);
+              throw Error("没有可复用的独立复核事实：" + t.key);
             const observations = new Map((check.reuse_verified_entries ? previous! : [])
               .map((entry) => [entry.index, entry]));
             for (const entry of check.verified_entries) observations.set(entry.index, entry);
@@ -552,12 +553,14 @@ export class ImportRunner {
         for (const path of args.sources ?? [])
           if (!files.some((f) => f.path === path))
             throw Error("对照来源不存在");
-        p.sources = [...new Set([...p.sources, ...(args.sources ?? [])])];
+        const sources = [...new Set([...p.sources, ...(args.sources ?? [])])];
+        const nextAgent = revisionAgent(p, sources, args.recheck_entries);
+        p.sources = sources;
         p.instruction = args.instruction;
         // Existing tables go straight to a fresh independent source check.
         // Verification tools can amend/rewrite them without a redundant extraction pass.
         p.status = Object.keys(p.timetables).length ? "verifying" : "queued";
-        p.agent = emptyAgent();
+        p.agent = nextAgent;
         p.checks = {};
         p.version++;
         session.phase = "people";
@@ -661,6 +664,7 @@ export class ImportRunner {
                     key,
                     {
                       ...table,
+                      reusable_verified_indices: person.agent.verifiedEntries?.[key]?.map((entry) => entry.index),
                       entries: table.entries.map((entry, index) => ({
                         index,
                         name: entry.name,

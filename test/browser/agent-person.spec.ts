@@ -487,7 +487,7 @@ test("verification reuse requires observations from the current verification run
     if (body.mode === "discover") return discovery(["a"]);
     const reply = personReply(body);
     if (body.mode === "verify") {
-      rejected ||= JSON.stringify(body.messages).includes("没有可复用的同轮复核事实");
+      rejected ||= JSON.stringify(body.messages).includes("没有可复用的独立复核事实");
       reply.calls[0].args.checks[0].reuse_verified_entries = true;
       reply.calls[0].args.checks[0].verified_entries = [];
     }
@@ -506,7 +506,7 @@ test("rewriting a timetable invalidates its cached source verification", async (
     if (body.mode === "discover") return discovery(["a"]);
     const reply = personReply(body);
     if (body.mode === "verify") {
-      rejected ||= JSON.stringify(body.messages).includes("没有可复用的同轮复核事实");
+      rejected ||= JSON.stringify(body.messages).includes("没有可复用的独立复核事实");
       const checks = reply.calls[0].args.checks;
       if (first) {
         first = false;
@@ -1123,3 +1123,45 @@ for (const scenario of ["recover", "timeout", "quota_exhausted"]) {
     expect((await saved(page)).session.people.a.status).toBe("done");
   });
 }
+
+
+test("scoped revision retains independent unchanged observations but requires target reread", async ({ page }) => {
+  let revised = false, attemptedMissing = false, rejectedMissing = false;
+  let reusable: number[] = [], hidden = false;
+  await setup(page, (body) => {
+    if (body.mode === "discover") return discovery(["a"]);
+    if (body.mode === "person") {
+      const r = personReply(body);
+      r.calls[0].args.timetables[0].entries.push({ name: "物理", weekday: 2, period_from: 1, period_to: 1, weeks: [1, 2] });
+      return r;
+    }
+    if (body.mode === "reconcile" && !revised) {
+      revised = true;
+      return output([{ name: "revise_person", args: { key: "a", instruction: "重查数学教师", recheck_entries: [{ key: "fall", indices: [0] }] } }]);
+    }
+    if (body.mode === "verify") {
+      const c = JSON.parse(body.context), table = c.person.timetables.fall;
+      const entries = table.entries.map((e: any, index: number) => ({ index, name: e.name, weekday: index + 1, period_from: 1, period_to: 1, weeks: [1, 2] }));
+      if (!revised) return output([{ name: "finish_person", args: { checks: [{ key: "fall", ...fields, checked_entries: [0, 1], verified_entries: entries }] } }]);
+      reusable = table.reusable_verified_indices ?? [];
+      hidden = table.entries.every((e: any) => e.weekday === undefined && e.teacher === undefined);
+      if (!attemptedMissing) {
+        attemptedMissing = true;
+        return output([{ name: "finish_person", args: { checks: [{ key: "fall", ...fields, checked_entries: [0, 1], reuse_verified_entries: true, verified_entries: [] }] } }]);
+      }
+      rejectedMissing = JSON.stringify(body.messages).includes("复核值必须逐条覆盖课程");
+      return output([
+        { name: "amend_timetable", args: { key: "fall", entries: [{ index: 0, changes: { teacher: "新教师" } }] } },
+        { name: "finish_person", args: { checks: [{ key: "fall", ...fields, checked_entries: [0, 1], reuse_verified_entries: true, verified_entries: [{ ...entries[0], teacher: "新教师" }] }] } },
+      ]);
+    }
+    return personReply(body);
+  });
+  await upload(page, ["a"]);
+  await expect.poll(async () => (await saved(page))?.status).toBe("review");
+  expect(reusable).toEqual([1]);
+  expect(hidden).toBe(true);
+  expect(rejectedMissing).toBe(true);
+  expect((await saved(page)).draft.timetable_entry).toHaveLength(2);
+  expect((await saved(page)).draft.timetable_entry.find((e: any) => e.name === "数学").teacher).toBe("新教师");
+});

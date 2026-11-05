@@ -95,6 +95,38 @@ export function validateVerifiedEntries(
       `复核值与已存课程不一致：${mismatches.join("；")}；请回看来源，用 amend_timetable 一次修正以上全部差异后再完成`,
     );
 }
+export const recheckEntriesSchema = z.array(z.object({
+  key: z.string().min(1).max(30),
+  indices: z.array(z.number().int().min(0).max(119)).min(1).max(120),
+})).min(1).max(30);
+/** Preserve only previously completed independent observations outside explicit revision targets. */
+export function revisionAgent(
+  person: PersonWorkspace,
+  sources: string[],
+  recheck?: z.infer<typeof recheckEntriesSchema>,
+): AgentState {
+  const agent = emptyAgent();
+  if (!recheck) return agent;
+  const targets = new Map<string, Set<number>>();
+  for (const item of recheck) {
+    const table = person.timetables[item.key];
+    if (!table || targets.has(item.key) || new Set(item.indices).size !== item.indices.length ||
+        item.indices.some((index) => !table.entries[index]))
+      throw Error("返工范围必须引用真实且不重复的课表/课程索引");
+    targets.set(item.key, new Set(item.indices));
+  }
+  if (person.status !== "done" || canonical([...sources].sort()) !== canonical([...person.sources].sort()))
+    return agent;
+  for (const table of Object.values(person.timetables)) {
+    const observations = person.agent.verifiedEntries?.[table.key];
+    if (!observations || !person.checks[table.key]) continue;
+    try { validateVerifiedEntries(table, observations); }
+    catch { continue; } // Stale or partial observations cannot certify unchanged entries.
+    (agent.verifiedEntries ??= {})[table.key] = structuredClone(observations
+      .filter((entry) => !targets.get(table.key)?.has(entry.index)));
+  }
+  return agent;
+}
 export interface AgentState {
   runId: string;
   pendingImages: { path: string; image: string }[];
@@ -109,7 +141,7 @@ export interface AgentState {
   openedArchives?: string[];
   reconcileImageScope?: string;
   evictedImageSources?: string[];
-  // Independent source observations, scoped to this verification run.
+  // Independent observations; explicit same-source revisions may retain unaffected entries.
   verifiedEntries?: Record<string, z.infer<typeof verifiedEntrySchema>[]>;
   turns: number;
   failures: number;

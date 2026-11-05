@@ -32,3 +32,5 @@ React 19、Tailwind 4，原有 hash 地址继续兼容。首页直接进入排�
 Worker `llm/agent.ts` 保留已有 AI SDK 与供应商适配，只开放 discover/person/verify/reconcile 对应的工具。人员不能写公共日历或他人对象。前后端需同步发布，无新增依赖、环境变量或业务迁移。旧版未完成批次原件保留，重新导入后使用新执行器。
 
 验证：`pnpm check`、`pnpm test:agent-browser`、`pnpm build`；人员专项 `pnpm test:agent-person`。浏览器测试拦截模型，不代表真实识别或耗时已验收。完整契约、恢复与覆盖边界见根目录 `docs/AGENT_IMPORT.md`。
+
+局部返工可按课程索引指定重查范围；来源不变且此前已独立核实的其他条目可复用，新增来源仍全量复核。指定重查条目必须重新提交原件事实，最终检查整表一致性；详见本模块架构。无新增依赖或部署配置，前后端工具协议同步发布。

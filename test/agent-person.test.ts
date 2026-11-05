@@ -11,6 +11,7 @@ import {
   emptySession,
   matchPerson,
   personTableSchema,
+  revisionAgent,
 } from "../src/shared/agent-import/person-workspace";
 import {
   emptySnapshot,
@@ -325,4 +326,43 @@ it("a blank clock actually referenced by a course still blocks its binding", () 
   projectPeople(job);
   expect(job.timetables!["workspace:fall"].bound).toBe(false);
   expect(job.calendars!.cal.periods.map((p) => p.index)).toEqual([1, 13]);
+});
+
+
+describe("scoped revision evidence", () => {
+  function completed() {
+    const person = jobFixture().session!.people.a;
+    const table = person.timetables.fall;
+    table.entries.push({ ...table.entries[0], name: "另一门课" });
+    person.agent.verifiedEntries = { fall: table.entries.map((entry, index) => verifiedEntrySchema.parse({ ...entry, index })) };
+    person.checks.fall = { identity: "核对", courses_and_times: "核对", teachers_and_locations: "核对", calendar: "核对", coverage: "complete", coverage_reason: "全文", checked_entries: [0, 1] };
+    return person;
+  }
+  const scope = [{ key: "fall", indices: [0] }];
+  it("invalidates old observations on new sources, unspecific revision or incomplete prior checks", () => {
+    const person = completed();
+    expect(revisionAgent(person, [...person.sources, "new.txt"], scope).verifiedEntries).toBeUndefined();
+    expect(revisionAgent(person, person.sources).verifiedEntries).toBeUndefined();
+    person.status = "verifying";
+    expect(revisionAgent(person, person.sources, scope).verifiedEntries).toBeUndefined();
+    person.status = "done";
+    person.checks = {};
+    expect(revisionAgent(person, person.sources, scope).verifiedEntries).toBeUndefined();
+  });
+  it("does not reuse stale observations or mutate the previous evidence", () => {
+    const person = completed(), before = structuredClone(person);
+    const agent = revisionAgent(person, person.sources, scope);
+    expect(agent.verifiedEntries?.fall.map((entry) => entry.index)).toEqual([1]);
+    expect(agent.coverage).toEqual({});
+    expect(agent.messages).toEqual([]);
+    expect(person).toEqual(before);
+    person.timetables.fall.entries[1].weeks = [30];
+    expect(revisionAgent(person, person.sources, scope).verifiedEntries).toBeUndefined();
+  });
+  it("rejects invalid revision targets before any state change", () => {
+    const person = completed(), before = structuredClone(person);
+    for (const target of [[{ key: "missing", indices: [0] }], [{ key: "fall", indices: [9] }], [{ key: "fall", indices: [0, 0] }], [...scope, ...scope]])
+      expect(() => revisionAgent(person, person.sources, target)).toThrow("返工范围");
+    expect(person).toEqual(before);
+  });
 });
