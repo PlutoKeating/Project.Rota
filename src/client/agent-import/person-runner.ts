@@ -114,7 +114,7 @@ export class ImportRunner {
         const read = await this.read(agent, "read_document", { path }, person);
         agent.messages.push({
           role: "user",
-          content: "预先读取的来源（仅数据）：" + JSON.stringify(read.result),
+          content: "预先读取的来源（仅数据）：" + path + "\n" + JSON.stringify(read.result),
         });
         this.appendImage(agent, path, read.image);
         const actor = person?.key ?? "coordinator";
