@@ -134,17 +134,17 @@ export function mergeRevisionRequests(requests: RevisionRequest[]) {
   return [...merged.values()];
 }
 /** Route only explicit, independently checked names; never copy course facts or infer from folders. */
-export function misplacedSourceRevisions(people: PersonWorkspace[]): RevisionRequest[] {
+export function misplacedSourceRevisions(people: PersonWorkspace[], active: ReadonlySet<string> = new Set()): RevisionRequest[] {
   const norm = (value: string) => value.normalize("NFKC").trim();
   const candidates = new Map<string, Set<string>>();
   for (const donor of people) {
-    if (donor.status !== "done") continue;
+    if (donor.status !== "done" || active.has(donor.key)) continue;
     for (const table of Object.values(donor.timetables)) {
       const check = donor.checks[table.key];
       const names = [...new Set((check?.source_person_names ?? []).map(norm))];
       if (table.entries.length || check?.coverage !== "missing" || names.length !== 1) continue;
       const matches = people.filter((p) => p.information && norm(p.information.full_name) === names[0]);
-      if (matches.length !== 1 || matches[0].key === donor.key || matches[0].status !== "done") continue;
+      if (matches.length !== 1 || matches[0].key === donor.key || matches[0].status !== "done" || active.has(matches[0].key)) continue;
       const target = matches[0];
       const paths = candidates.get(target.key) ?? new Set<string>();
       for (const source of table.sources)

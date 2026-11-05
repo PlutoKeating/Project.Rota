@@ -1116,12 +1116,33 @@ export class ImportRunner {
     );
     const queue = [...pending], retried = new Set<string>();
     let index = 0;
-    await Promise.all(Array.from(
+    const active = new Set<string>();
+    let routing = Promise.resolve();
+    const routeSources = () => routing = routing.then(async () => {
+      if (this.stopped) return;
+      // Serialize source assignment, and never replace an agent still draining its tools.
+      const handoffs = misplacedSourceRevisions(Object.values(session.people), active);
+      for (const args of handoffs) {
+        const call = { id: "source-handoff:" + crypto.randomUUID(), name: "revise_person", args };
+        const value = await this.execute(session.coordinator, call, "reconcile");
+        queue.push(session.people[args.key]);
+        await archive(this.job.id, call.id, "tool", {
+          actor: "coordinator", mode: "reconcile", name: call.name, args, result: value.result, automatic: true,
+        });
+        this.log(`补充错放来源 ${args.key}：已加入队列重新独立复核`);
+      }
+      if (handoffs.length) await this.persist();
+    });
+    await routeSources();
+    const results = await Promise.allSettled(Array.from(
       { length: Math.min(session.concurrency, queue.length) },
       async () => {
         while (!this.stopped && index < queue.length) {
           const person = queue[index++];
-          await this.actor(person);
+          active.add(person.key);
+          try { await this.actor(person); }
+          finally { active.delete(person.key); }
+          await routeSources();
           if (!this.stopped && person.status === "failed" && person.agent.retryableFailure && !retried.has(person.id)) {
             retried.add(person.id);
             // Keep extracted facts, but do not resubmit a repeatedly timed-out
@@ -1137,7 +1158,9 @@ export class ImportRunner {
       },
     ));
     if (this.stopped) return;
-    if (pending.some((p) => p.status !== "done"))
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
+    if (queue.some((p) => p.status !== "done"))
       throw Error("部分人员处理失败，其他成果已保存；继续时只恢复未完成对象");
     // No concurrent writers now. Mark a shared file complete only after all owners finish.
     for (const file of await materials(this.job.id)) {
@@ -1151,16 +1174,6 @@ export class ImportRunner {
           reason: "关联人员对象已完成来源复核",
         });
     }
-    const handoffs = misplacedSourceRevisions(Object.values(session.people));
-    for (const args of handoffs) {
-      const call = { id: "source-handoff:" + crypto.randomUUID(), name: "revise_person", args };
-      const value = await this.execute(session.coordinator, call, "reconcile");
-      await archive(this.job.id, call.id, "tool", {
-        actor: "coordinator", mode: "reconcile", name: call.name, args, result: value.result, automatic: true,
-      });
-      this.log(`补充错放来源 ${args.key}：重新独立复核`);
-    }
-    if (handoffs.length) { await this.persist(); return; }
     try {
       projectPeople(this.job);
     } catch (e) {

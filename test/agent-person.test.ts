@@ -398,8 +398,11 @@ it("source handoff requires one explicit printed name and a unique completed tar
   const people = [target, donor], before = structuredClone(people);
   expect(misplacedSourceRevisions(people)).toMatchObject([{ key: target.key, sources: ["b.txt"] }]);
   expect(people).toEqual(before);
+  expect(misplacedSourceRevisions(people, new Set([target.key]))).toEqual([]);
+  expect(misplacedSourceRevisions(people, new Set([donor.key]))).toEqual([]);
   const ambiguous = structuredClone(target); ambiguous.key = "third";
   expect(misplacedSourceRevisions([...people, ambiguous])).toEqual([]);
+  expect(misplacedSourceRevisions([...people, ambiguous], new Set([ambiguous.key]))).toEqual([]);
   target.sources.push("b.txt");
   expect(misplacedSourceRevisions(people)).toEqual([]);
   target.sources.pop();
