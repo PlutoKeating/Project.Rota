@@ -83,3 +83,5 @@ pnpm test:agent-live /private/input.zip /private/output /private/snapshot.json
 Google 导入请求支持供应商 params.reasoningEffort（或 reasoning_effort）的 low / medium / high，传递为原生 thinkingConfig.thinkingLevel；未配置时保留模型默认。隔离 Vertex 验收固定使用 gemini-4-argon 与 low，避免默认思考强度影响计时。本次无需新增依赖、迁移或部署参数。
 
 新建批次的人员并发上限调整为 8；已有检查点保留其原并发设置。来源复核、共享文件串行读取和检查点串行保存不变。浏览器专项使用 10 人批次验证并发上限及全部复核成果保留。无需新增依赖或迁移，沿用现有前后端构建部署。
+
+人员复核 checks 新增必填 source_person_names：列出本课表原件明确印出的姓名（没有姓名时为空数组，教师对照材料不算本人课表）。有课程的方案若与目标姓名不符，运行时拒绝完成，须纠正身份或将误分派材料交回协调器；仅写文字冲突说明不能放行。已有完成检查点不追溯升级，验收须新建批次。工具协议变更要求前后端同步发布，无新增依赖、环境变量或迁移。

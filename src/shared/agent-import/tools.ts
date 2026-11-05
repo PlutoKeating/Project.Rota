@@ -123,6 +123,12 @@ export const toolSpecs = {
         .array(
           fieldChecksSchema.extend({
             key: z.string().min(1).max(30),
+            source_person_names: z
+              .array(z.string().min(1).max(200))
+              .max(20)
+              .describe(
+                "本课表原件明确印出的姓名；没有印出姓名时为空数组。不得填目录名或推测姓名，不包含仅用于教师对照的他人课表姓名。",
+              ),
             verified_entries: z.array(verifiedEntrySchema).max(120),
           }),
         )

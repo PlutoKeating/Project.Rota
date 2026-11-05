@@ -44,3 +44,5 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 复核工具 `finish_person.checks` 使用显式数组，每项包含课表 `key` 和字段核对结果；不使用动态键字典，以确保 Google 工具 schema 保留核对字段。对象持久化与正式审核报告仍按课表键保存检查结果，无新增依赖、环境变量或数据库迁移。
 
 Google 导入请求支持供应商 params.reasoningEffort（或 reasoning_effort）的 low / medium / high，传递为原生 thinkingConfig.thinkingLevel；未配置时保留模型默认。隔离 Vertex 验收固定使用 gemini-4-argon 与 low，避免默认思考强度影响计时。本次无需新增依赖、迁移或部署参数。
+
+人员复核 checks 新增必填 source_person_names：列出本课表原件明确印出的姓名（没有姓名时为空数组，教师对照材料不算本人课表）。有课程的方案若与目标姓名不符，运行时拒绝完成，须纠正身份或将误分派材料交回协调器；仅写文字冲突说明不能放行。已有完成检查点不追溯升级，验收须新建批次。工具协议变更要求前后端同步发布，无新增依赖、环境变量或迁移。

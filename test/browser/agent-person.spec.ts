@@ -9,6 +9,7 @@ const evidence = (path: string) => [
   },
 ];
 const fields = {
+  source_person_names: [],
   identity: "已核对",
   courses_and_times: "已逐项核对",
   teachers_and_locations: "原件未提供，不猜造",
@@ -270,6 +271,26 @@ test("a child cannot read another person's material or change shared calendars",
   await expect.poll(async () => (await saved(page))?.status).toBe("review");
   expect(rejected).toBe(true);
   expect((await saved(page)).session.people.b.information.full_name).toBe("乙");
+});
+test("rejects a timetable whose printed owner conflicts with the target person", async ({ page }) => {
+  let rejected = false;
+  const applied = await setup(page, (body) => {
+    if (body.mode === "discover") return discovery(["a"]);
+    const reply = personReply(body);
+    if (body.mode === "verify") {
+      rejected ||= JSON.stringify(body.messages).includes("原件姓名与目标人员不一致");
+      return output(reply.calls.map((call) => ({
+        name: call.name,
+        args: { checks: call.args.checks.map((check: any) => ({ ...check, source_person_names: ["乙"] })) },
+      })));
+    }
+    return reply;
+  });
+  await upload(page, ["a"]);
+  await expect.poll(async () => (await saved(page))?.session?.people?.a?.status).toBe("failed");
+  expect(rejected).toBe(true);
+  expect((await saved(page)).session.people.a.status).toBe("failed");
+  expect(applied).toHaveLength(0);
 });
 test("invalid field coverage cannot finish verification and model can repair it", async ({
   page,

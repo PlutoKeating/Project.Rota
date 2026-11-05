@@ -393,6 +393,18 @@ export class ImportRunner {
           )
             throw Error("核对索引必须覆盖全部课程：" + t.key);
           validateVerifiedEntries(t, check.verified_entries);
+          const normalizeName = (name: string) =>
+            name.normalize("NFKC").replace(/\s+/gu, "");
+          if (
+            t.entries.length &&
+            check.source_person_names.some(
+              (name: string) =>
+                normalizeName(name) !== normalizeName(person.information!.full_name),
+            )
+          )
+            throw Error(
+              "原件姓名与目标人员不一致，不能把他人课程写给当前人员；请按原件修正身份，或移除误分派课表并保留缺失说明，由协调器重新分派来源",
+            );
           if (
             check.coverage !== "complete" &&
             !t.unresolved.length &&
