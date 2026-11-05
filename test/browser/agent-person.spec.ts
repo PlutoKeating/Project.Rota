@@ -1033,3 +1033,51 @@ test("failed automatic unpack cannot establish organization evidence", async ({ 
   expect(job.session.coordinator.openedArchives ?? []).toEqual([]);
   expect(job.session.organizations).toEqual([]);
 });
+
+
+test("coordinator reloads an evicted image when a later review group needs it", async ({ page }) => {
+  let batches = 0, firstScoped = false, reloaded = false;
+  const courses = (key: string) => (key === "c" ? [5] : key === "b" ? [0, 1, 2, 3, 4] : [0, 1, 2, 3, 4, 5]);
+  await setup(page, (body) => {
+    if (body.mode === "discover") return output([
+      { name: "dispatch_people", args: { people: ["a", "b", "c"].map((key) => ({ ...assignment(key), sources: [key + ".png"] })) } },
+      { name: "save_calendars", args: { calendars: [{ ...calendar, sources: evidence("a.png") }] } },
+      { name: "finish_discovery", args: {} },
+    ]);
+    const context = JSON.parse(body.context);
+    if (body.mode === "reconcile") {
+      const images = body.messages.filter((m: any) => m.role === "user" && Array.isArray(m.content) && m.content.some((p: any) => p.type === "image"));
+      const hasC = images.some((m: any) => JSON.stringify(m.content.filter((p: any) => p.type === "text")).includes("c.png"));
+      if (batches === 0) firstScoped = !hasC;
+      if (batches === 1) reloaded = hasC;
+      if (!context.conflicts.length) return output([{ name: "finish_import", args: {} }]);
+      batches++;
+      return output([{ name: "review_consistency", args: { reviews: context.conflicts.map((g: any) => ({
+        key: g.key, resolution: "different_context", explanation: "合成教师差异已回看",
+        checked_variant_indices: g.variants.map((v: any) => v.index),
+      })) } }]);
+    }
+    const reply = personReply(body);
+    const key = context.person.key;
+    if (body.mode === "person") {
+      reply.calls[0].args.information.full_name = key;
+      const table = reply.calls[0].args.timetables[0];
+      table.sources = evidence(key + ".png");
+      table.entries = courses(key).map((n) => ({ name: "课程" + n, teacher: key + "老师", weekday: 1, period_from: 1, period_to: 1, weeks: [1, 2] }));
+    }
+    if (body.mode === "verify") {
+      const check = reply.calls[0].args.checks[0];
+      check.checked_entries = courses(key).map((_, i) => i);
+      for (const entry of check.verified_entries) entry.teacher = key + "老师";
+    }
+    return reply;
+  });
+  const { readFile } = await import("node:fs/promises");
+  const buffer = await readFile("test/fixtures/import/schedule.png");
+  await page.getByLabel("选择导入材料").setInputFiles(["a", "b", "c"].map((key) => ({ name: key + ".png", mimeType: "image/png", buffer })));
+  await expect.poll(async () => (await saved(page))?.status).toBe("review");
+  expect(batches).toBe(2);
+  expect(firstScoped).toBe(true);
+  expect(reloaded).toBe(true);
+  expect((await saved(page)).importCheck.consistency_review).toHaveLength(6);
+});

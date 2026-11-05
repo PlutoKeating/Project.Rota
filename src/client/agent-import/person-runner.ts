@@ -21,6 +21,7 @@ import {
 } from "../../shared/agent-import/coverage";
 import {
   courseConflicts,
+  consistencyBatch,
   retainedConsistencyReviews,
   validateCheckedVariants,
   validateConsistencyReview,
@@ -28,6 +29,7 @@ import {
 import { calendarMissing } from "../../shared/agent-import/calendar";
 import {
   withoutImages,
+  scopeSourceImages,
   type TurnMetrics,
 } from "../../shared/agent-import/context";
 import { documentTool } from "./documents";
@@ -119,7 +121,7 @@ export class ImportRunner {
         });
         this.appendImage(agent, path, read.image);
         const actor = person?.key ?? "coordinator";
-        await archive(this.job.id, `${actor}:${agent.runId}:preload:${path}`, "tool", {
+        await archive(this.job.id, `${actor}:${agent.runId}:preload:${mode}:${agent.turns}:${path}`, "tool", {
           actor, mode, name: "read_document", args: { path },
           result: read.result, automatic: true,
         });
@@ -154,7 +156,8 @@ export class ImportRunner {
     }
   }
   private appendImage(agent: AgentState, path: string, image?: string) {
-    if (image)
+    if (image) {
+      agent.evictedImageSources = agent.evictedImageSources?.filter((source) => source !== path);
       agent.messages.push({
         role: "user",
         content: [
@@ -162,6 +165,7 @@ export class ImportRunner {
           { type: "image", image },
         ],
       });
+    }
   }
   private async sourcesRead(agent: AgentState, paths: string[]) {
     const files = await materials(this.job.id);
@@ -705,7 +709,7 @@ export class ImportRunner {
           unresolved: t.unresolved,
         })),
       })),
-      conflicts: pending.slice(0, 5).map((group) => ({
+      conflicts: consistencyBatch(pending).map((group) => ({
         ...group, variants: group.variants.map((variant, index) => ({ ...variant, index })),
       })),
       remainingConflictCount: pending.length,
@@ -829,12 +833,19 @@ export class ImportRunner {
             const conflicts = courseConflicts(Object.values(job.timetables ?? {})
               .filter((table) => !job.excluded.includes(table.person.id)));
             const reviewed = retainedConsistencyReviews(conflicts, session.consistencyCheckpoints);
-            const current = conflicts.filter((group) => !reviewed.some((r) => r.key === group.key)).slice(0, 5);
+            const current = consistencyBatch(conflicts.filter((group) => !reviewed.some((r) => r.key === group.key)));
             const paths = [...new Set(current.flatMap((group) =>
               group.variants.flatMap((variant) => variant.sources.map((source) => source.source))))];
             // Prepare the same source evidence required by review_consistency without a model round trip.
             // Partial PDF/sheet reads still require the model to request remaining pages/ranges.
-            const unread = paths.filter((path) => !agent.coverage[path]);
+            const scope = canonical(current.map((group) => group.key));
+            if (agent.reconcileImageScope !== scope) {
+              const scoped = scopeSourceImages(agent.messages, paths);
+              agent.messages = scoped.messages;
+              agent.evictedImageSources = [...new Set([...(agent.evictedImageSources ?? []), ...scoped.evicted])];
+              agent.reconcileImageScope = scope;
+            }
+            const unread = paths.filter((path) => !agent.coverage[path] || agent.evictedImageSources?.includes(path));
             if (unread.length) {
               await this.preloadSources(agent, unread, mode);
               await this.persist();

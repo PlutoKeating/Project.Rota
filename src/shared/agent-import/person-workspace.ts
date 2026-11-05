@@ -107,6 +107,8 @@ export interface AgentState {
   }[];
   coverage: Record<string, CoverageState>;
   openedArchives?: string[];
+  reconcileImageScope?: string;
+  evictedImageSources?: string[];
   // Independent source observations, scoped to this verification run.
   verifiedEntries?: Record<string, z.infer<typeof verifiedEntrySchema>[]>;
   turns: number;

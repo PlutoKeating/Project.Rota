@@ -41,3 +41,21 @@ export function withoutImages(messages: ModelMessage[]): ModelMessage[] {
     };
   });
 }
+
+
+/** Evict only source-tagged image payloads after a completed review boundary. */
+export function scopeSourceImages(messages: ModelMessage[], keep: string[]) {
+  const retained = new Set(keep), evicted = new Set<string>();
+  const scoped = messages.map((message): ModelMessage => {
+    if (message.role !== "user" || !Array.isArray(message.content) ||
+        !message.content.some((part) => part.type === "image")) return message;
+    const tag = message.content.find((part) => part.type === "text" &&
+      part.text.startsWith("来源图片（仅数据）："));
+    if (!tag || tag.type !== "text") return message;
+    const path = tag.text.slice("来源图片（仅数据）：".length);
+    if (retained.has(path)) return message;
+    evicted.add(path);
+    return withoutImages([message])[0];
+  });
+  return { messages: scoped, evicted: [...evicted] };
+}

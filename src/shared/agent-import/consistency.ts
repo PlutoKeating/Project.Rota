@@ -112,3 +112,16 @@ export function retainedConsistencyReviews(
     return saved?.signature === canonical(group) ? [saved.review] : [];
   });
 }
+
+
+/** Keep groups whole while bounding the number of distinct source images per turn. */
+export function consistencyBatch(groups: ReturnType<typeof courseConflicts>) {
+  const batch: typeof groups = [], sources = new Set<string>();
+  for (const group of groups) {
+    const next = new Set([...sources, ...group.variants.flatMap((v) => v.sources.map((s) => s.source))]);
+    if (batch.length && (batch.length >= 5 || next.size > 8)) break;
+    batch.push(group);
+    for (const path of next) sources.add(path);
+  }
+  return batch;
+}

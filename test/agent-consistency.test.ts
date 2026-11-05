@@ -121,3 +121,15 @@ it("resolves compact variant indices to the complete persisted evidence", () => 
     expect(() => validateCheckedVariants(group, { ...input, checked_variant_indices: indices })).toThrow("核对编号");
   expect(() => validateCheckedVariants(group, { ...input, checked_variants: result.checked_variants })).toThrow("不能同时");
 });
+
+import { consistencyBatch } from "../src/shared/agent-import/consistency";
+it("bounds source fanout without splitting or omitting conflict groups", () => {
+  const base = courseConflicts(plans as any)[0];
+  const groups = Array.from({ length: 6 }, (_, i) => ({ ...base, key: String(i), variants: [
+    { ...base.variants[0], sources: Array.from({ length: 3 }, (_, j) => ({ source: `${i}-${j}`, locator: "page:1", explanation: "test", inferred: false })) },
+  ] }));
+  expect(consistencyBatch(groups).map((g) => g.key)).toEqual(["0", "1"]);
+  expect(consistencyBatch(groups.slice(2)).map((g) => g.key)).toEqual(["2", "3"]);
+  const large = { ...groups[0], variants: groups.flatMap((g) => g.variants) };
+  expect(consistencyBatch([large, groups[1]])).toEqual([large]);
+});
