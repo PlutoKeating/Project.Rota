@@ -904,7 +904,7 @@ test("coordinator can checkpoint a teacher review before final delivery", async 
         checkpointed = true;
         return output([{ name: "review_consistency", args: { reviews: c.conflicts.map((g: any) => ({
           key: g.key, resolution: "different_context", explanation: "原件已核对，两人分别由不同教师任教",
-          checked_variants: g.variants.map((v: any) => ({ timetable_id: v.timetable_id, teacher: v.teacher })),
+          checked_variant_indices: g.variants.map((v: any) => v.index),
         })) } }]);
       }
       return output([{ name: "finish_import", args: {} }]);
@@ -918,6 +918,9 @@ test("coordinator can checkpoint a teacher review before final delivery", async 
   await upload(page);
   await expect.poll(async () => (await saved(page))?.status).toBe("review");
   expect((await saved(page)).importCheck.consistency_review).toHaveLength(1);
+  const review = (await saved(page)).importCheck.consistency_review[0];
+  expect(review.checked_variant_indices).toBeUndefined();
+  expect(review.checked_variants.map((v: any) => v.teacher).sort()).toEqual(["乙老师", "甲老师"].sort());
   expect(preloaded).toBe(true);
 });
 

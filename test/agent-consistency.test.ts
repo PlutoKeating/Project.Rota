@@ -106,3 +106,18 @@ it("reuses checkpointed reviews only while the corresponding facts still match",
   unrelated.key = "teacher:另一课程";
   expect(retainedConsistencyReviews([...groups, unrelated], saved)).toEqual([review]);
 });
+
+
+it("resolves compact variant indices to the complete persisted evidence", () => {
+  const group = courseConflicts(plans as any)[0];
+  const input: ConsistencyReview = { key: group.key, resolution: "different_context",
+    explanation: "已回看原件", checked_variants: [],
+    checked_variant_indices: group.variants.map((_, i) => i).reverse() };
+  const result = validateCheckedVariants(group, input);
+  expect(result.checked_variants).toEqual([...group.variants].reverse().map(({ timetable_id, teacher }) => ({ timetable_id, teacher })));
+  expect(result.checked_variant_indices).toBeUndefined();
+  expect(input.checked_variants).toEqual([]);
+  for (const indices of [[], [0, 0], [0, 199]])
+    expect(() => validateCheckedVariants(group, { ...input, checked_variant_indices: indices })).toThrow("核对编号");
+  expect(() => validateCheckedVariants(group, { ...input, checked_variants: result.checked_variants })).toThrow("不能同时");
+});

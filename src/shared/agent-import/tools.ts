@@ -181,7 +181,7 @@ export const toolSpecs = {
   },
   review_consistency: {
     description:
-      "分批保存当前 conflicts 的核对结论，每轮最多5组。checked_variants 必须逐项引用真实方案/教师；different_context 须已回看来源。结果持久化，相关事实变化自动失效。继续处理下一批，全部完成后 finish_import 无须重复输出。",
+      "分批保存当前 conflicts 的核对结论，每轮最多5组。优先用 checked_variant_indices 引用当前组每个变体的 index，避免重复长ID；或用 checked_variants 逐项引用真实方案/教师，两者不能同时提交；different_context 须已回看来源。结果持久化，相关事实变化自动失效。继续处理下一批，全部完成后 finish_import 无须重复输出。",
     schema: z.object({ reviews: z.array(consistencyReviewSchema).min(1).max(5) }),
   },
   finish_import: {

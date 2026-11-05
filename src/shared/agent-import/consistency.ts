@@ -5,6 +5,7 @@ export const consistencyReviewSchema = z.object({
   key: z.string().max(1000),
   resolution: z.enum(["different_context", "unresolved"]),
   explanation: z.string().min(1).max(2000),
+  checked_variant_indices: z.array(z.number().int().min(0).max(199)).max(200).optional(),
   checked_variants: z
     .array(z.object({ timetable_id: z.string(), teacher: z.string() }))
     .max(200)
@@ -78,11 +79,24 @@ export function validateCheckedVariants(
   const key = (v: { timetable_id: string; teacher: string }) =>
     JSON.stringify([v.timetable_id, v.teacher]);
   const expected = group.variants.map(key).sort();
+  if (review.checked_variant_indices !== undefined) {
+    const indices = review.checked_variant_indices;
+    if (review.checked_variants.length || indices.length !== group.variants.length ||
+        new Set(indices).size !== indices.length || indices.some((i) => !group.variants[i]))
+      throw Error("核对编号须完整且不重复地引用当前组的所有变体，不能同时提交 checked_variants");
+    const checked_variants = indices.map((i) => ({
+      timetable_id: group.variants[i].timetable_id,
+      teacher: group.variants[i].teacher,
+    }));
+    const { checked_variant_indices: _, ...rest } = review;
+    review = { ...rest, checked_variants };
+  }
   const actual = review.checked_variants.map(key).sort();
   if (canonical(expected) !== canonical(actual))
     throw Error(
       "核对结论须逐项引用当前真实的 timetable_id 与 teacher，不能编造或遗漏；请读取当前差异详情。",
     );
+  return review;
 }
 
 export type ConsistencyCheckpoints = Record<string, {

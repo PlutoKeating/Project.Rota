@@ -552,10 +552,10 @@ export class ImportRunner {
         if (new Set(submitted.map((r: { key: string }) => r.key)).size !== submitted.length)
           throw Error("同一批核对不能重复 key");
         const checkpoints = { ...session.consistencyCheckpoints };
-        for (const review of submitted) {
+        for (let review of submitted) {
           const group = conflicts.find((g) => g.key === review.key);
           if (!group) throw Error("核对项已不属于当前差异：" + review.key);
-          validateCheckedVariants(group, review);
+          review = validateCheckedVariants(group, review);
           if (review.resolution === "different_context") {
             const paths = [
               ...new Set(
@@ -683,7 +683,9 @@ export class ImportRunner {
           unresolved: t.unresolved,
         })),
       })),
-      conflicts: pending.slice(0, 5),
+      conflicts: pending.slice(0, 5).map((group) => ({
+        ...group, variants: group.variants.map((variant, index) => ({ ...variant, index })),
+      })),
       remainingConflictCount: pending.length,
       completedConsistencyKeys: reviewed.map((r) => r.key),
       issues: job.session!.issues,
