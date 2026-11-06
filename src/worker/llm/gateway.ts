@@ -127,7 +127,14 @@ export async function resolveProvider(
     );
   }
 
-  const baseUrl = (row.baseUrl ?? "").trim().replace(/\/+$/, "");
+  let baseUrl = (row.baseUrl ?? "").trim().replace(/\/+$/, "");
+  // Workers calling the China endpoint hit its WAF. The documented overseas
+  // endpoint accepts the same Kimi Code key; never rewrite custom hosts/paths.
+  const kimi = kimiCodeEndpoint(baseUrl);
+  if (kimi?.hostname === "api.kimi.com") {
+    kimi.hostname = "api.kimi.ai";
+    baseUrl = kimi.href;
+  }
   if (row.kind !== "cloudflare_ai" && !baseUrl) {
     throw new HttpError(
       500,
@@ -178,7 +185,9 @@ export async function complete(
     !!options.images?.length,
   );
   const temperature =
-    options.temperature ?? paramNumber(provider.params, "temperature") ?? 0.2;
+    provider.model === "kimi-for-coding" && kimiCodeEndpoint(provider.baseUrl)
+      ? 1
+      : options.temperature ?? paramNumber(provider.params, "temperature") ?? 0.2;
   if (provider.kind === "cloudflare_ai") {
     if (!env.AI)
       throw new HttpError(503, "llm_not_configured", "Workers AI 绑定尚未配置");
@@ -642,4 +651,18 @@ function errorText(error: unknown): string {
 function truncate(value: string, max = 300): string {
   const text = value.replace(/\s+/g, " ").trim();
   return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+/** Only official Kimi Code service roots; no redirects or arbitrary credential destinations. */
+function kimiCodeEndpoint(value: string): URL | null {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" &&
+      ["api.kimi.com", "api.kimi.ai"].includes(url.hostname) &&
+      !url.port && !url.username && !url.password && !url.search && !url.hash &&
+      /^\/coding(?:\/v1)?$/.test(url.pathname)
+      ? url : null;
+  } catch {
+    return null;
+  }
 }

@@ -50,3 +50,13 @@ Google 导入请求支持供应商 params.reasoningEffort（或 reasoning_effort
 人员工具新增 amend_timetable，仅按当前人员的课表 key 和原课程 index 局部修正字段，或更新 replace_weeks / unresolved。未提及字段不应用创建默认值，整份候选课表校验成功后才替换，非法索引不留下前半份改动；修正清空旧检查，仍须 finish_person 逐项复核。短课表 key 使用 main / fall 等标识，最多 30 字符。协议需前后端同步发布，无新增依赖、环境变量或数据库迁移。
 
 跨人核对新增 consistency 模式：待核对差异不少于两组时，按既有每批最多5组/通常8份来源划分，最多4个独立读取对象并行。各对象只可读取、保存本批核对结论或向本批涉及人员提出返工；不能修改日历、分派人员或交付导入。结论完成异步来源检查后合并检查点，避免并发覆盖。所有读取结束后按人合并返工说明、来源与重查索引；任一要求全量复核则合并为全量，不截断说明。部分失败保留已完成结论、待返工意见与未完成上下文，恢复不重跑已完成批次；暂停须等待在途请求结束，未执行工具可在刷新后继续。当前事实签名变化时丢弃过时读取任务，操作员新意见取消旧待执行意见。最终仍由协调器核对全局身份、日历、全部差异和提交条件，不减少检查组或放宽来源门槛。材料缺失/错放说明保留在各批上下文，避免遗漏跨目录证据。无新增依赖、环境变量、配置或迁移；前后端工具协议须同步构建发布。
+
+## Kimi Code 的 Worker 出站兼容
+
+2026-11-07实测同一已保存密钥：真实Cloudflare Worker调用`api.kimi.com/coding/v1/chat/completions`返回Cloudflare HTML 403，调用官方海外端点`api.kimi.ai/coding/v1/chat/completions`返回200。服务端统一解析供应商时，将官方HTTPS国内Coding根地址（`/coding`或`/coding/v1`）映射到官方海外同路径；连接测试与Agent SDK共用此解析，不改数据库配置或要求重新录入密钥。非默认端口、带查询/片段/用户信息、相似域名、其他路径及Moonshot开放平台地址不重写，不跟随重定向、不伪装客户端身份。
+
+`kimi-for-coding`在官方Coding端点仅接受temperature=1，旧连接测试固定0导致400；传统网关对该模型使用1，实际Agent调用保持不指定采样参数、由供应商采用默认值。自定义供应商即使使用同名模型也不覆盖采样设置。不切换模型、套餐或开放平台，不新增依赖、Secret、配置项或迁移；更新Worker即可使已有配置生效。
+
+依据：[Kimi官方协议与国内/海外端点](https://www.kimi.com/code/docs/en/)、[Cloudflare跨站Worker请求头](https://developers.cloudflare.com/fundamentals/reference/http-headers/)。回归覆盖测试连接、实际Agent工具请求、Anthropic路径及非官方端点隔离；真实验证仅发送简短测试输入，未上传人员材料。
+
+本次修复以真实Worker预览运行当前网关与Agent代码、读取既有密钥进行验证：连接测试返回pong，Agent返回read_document工具调用；没有变更生产供应商记录。201项测试、SQLite服务测试、类型检查及构建通过。
