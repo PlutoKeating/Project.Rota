@@ -16,7 +16,7 @@
 - GitHub 公开仓库：`PlutoKeating/Project.Rota`，AGPL-3.0-or-later。
 - Cloudflare Worker 已创建，生产认证已启用。
 - 业务数据库、设置、身份会话和文件已全部迁入 ECS 独立容器；Worker 已移除 D1/KV 绑定。真实地址、账号身份和秘密仅记录在私有运维侧。
-- GitHub Actions 检查与 ECS 自动部署已实测成功；Workers Builds 仍需控制台连接并验证 Git 推送触发 Worker 发布。
+- GitHub Actions 检查、ECS 自动部署和 Workers Builds 推送自动发布均已有成功记录；后续每次发布仍须核对对应提交的检查与线上资源。
 
 ## 验证边界
 
@@ -38,8 +38,7 @@ v1 明确不包含邮件/短信通知、通用排课、跨校多租户、全局�
 
 ## 待收口
 
-- Workers Builds 的 GitHub 连接尚未得到完成确认；目前发布由已登录 Wrangler 执行，不能称为已验证自动部署。
-- Cloudflare 控制台登录已由用户确认恢复，认证后的账户接口返回 200；Workers Builds 连接仍未完成。已准备独立构建令牌，但连接 API 返回 400，尚无成功构建或 Git 推送触发证据。现有 Wrangler 登录仍可手动发布。
+- Workers Builds 早期连接失败已由后续成功记录解决：提交 `e1efc8dfed78125e44675fa852767f70df191480` 的 `Workers Builds: project-rota` 检查成功；同提交 [Validate / deploy-data](https://github.com/PlutoKeating/Project.Rota/actions/runs/41683516437) 成功。该记录不替代新发布提交的验证。
 - 真实用户完成邮箱验证码或第三方登录后的回调验收尚待进行。
 
 ## ECS 数据迁移验证
