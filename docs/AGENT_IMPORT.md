@@ -152,7 +152,7 @@ Google 导入请求支持供应商 params.reasoningEffort（或 reasoning_effort
 
 生产实测每次模型请求在 Worker 内消耗 13–44 ms CPU，超过 Workers 免费版约 10 ms 的限制，并发时成批返回 Cloudflare 1102/503。导入页新增“模型”入口：开启“本机直连”后，浏览器直接调用操作员填写的供应商（OpenAI 兼容 / OpenAI Responses / Google / Anthropic），供应商、接口地址、模型、API Key 与推理强度只保存在本浏览器 `localStorage`（键 `rota:local-models`），可随时复用、排序、停用、删除和测试；服务器保存的密钥从不下发，本机密钥也不发送到服务器。关闭直连则继续走服务器模型。
 
-单轮执行逻辑（工具协议、候选回退、DeepSeek 思考模式规则、错误分类与 metrics）抽为 `src/shared/agent-import/turn.ts`，Worker 的 `agentTurn` 与浏览器的 `localTurn` 共用；浏览器失败时返回与服务器相同的 502 + metrics 结构，重试、限流与界面统计不变。实测 DeepSeek、Moonshot、OpenAI、Google 接口允许浏览器跨域；Anthropic 需 `anthropic-dangerous-direct-browser-access` 请求头，已自动添加。本机模式相关代码按需加载（约 141 KB gzip）。导入、租约、提交等其余接口仍在服务器，开销很小。租约每 45 秒续期只发送空请求体延长已持有的锁；只有首次取得、草稿修订号变化或锁已过期时才上传完整变更集（整批可达数百 KB，上行慢时完整上传会被 Cloudflare 以 408 中断）。提交回滚时 409 消息附带数据库原始原因，便于定位。
+单轮执行逻辑（工具协议、候选回退、DeepSeek 思考模式规则、错误分类与 metrics）抽为 `src/shared/agent-import/turn.ts`，Worker 的 `agentTurn` 与浏览器的 `localTurn` 共用；浏览器失败时返回与服务器相同的 502 + metrics 结构，重试、限流与界面统计不变。实测 DeepSeek、Moonshot、OpenAI、Google 接口允许浏览器跨域；Anthropic 需 `anthropic-dangerous-direct-browser-access` 请求头，已自动添加。本机模式相关代码按需加载（约 141 KB gzip）。导入、租约、提交等其余接口仍在服务器，开销很小。租约每 45 秒续期只发送空请求体延长已持有的锁；只有首次取得、草稿修订号变化或锁已过期时才上传完整变更集（整批可达数百 KB，上行慢时完整上传会被 Cloudflare 以 408 中断）。提交回滚时 409 消息附带数据库原始原因，便于定位。正式提交时，全部为新增的课表条目所对应的 timetable_event 由数据服务在同一事务内用 SQL（`GENERATE_EVENTS`，基于本事务刚写入的课表、学期和作息）展开，只传条目 ID；结果与 `materialize()` 逐行一致，由 `test/integration/agent-import-scale.test.ts` 按 19 人规模校验。此前整批展开的上万行事件以 JSON 发送（数 MB），经隧道超过 30 秒导致提交超时回滚。
 
 ## 调用预算与进展（2026-11-08）
 

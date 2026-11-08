@@ -98,6 +98,18 @@ function assert(
     [id, ...params],
   );
 }
+/** SQL twin of the timetable_event expansion in materialize(); kept equal by test. */
+export const GENERATE_EVENTS = `INSERT INTO "timetable_event" ("id","entry_id","person_id","term_id","week_index","weekday","period_index","starts_at","ends_at")
+SELECT 'event:' || e.id || ':' || w.value || ':' || json_extract(p.value,'$.index'), e.id, e.person_id, e.term_id, w.value, e.weekday, json_extract(p.value,'$.index'),
+  date(t.start_date, printf('%+d days', (w.value - 1) * 7 + e.weekday - 1)) || 'T' || json_extract(p.value,'$.start') || ':00+08:00',
+  date(t.start_date, printf('%+d days', (w.value - 1) * 7 + e.weekday - 1)) || 'T' || json_extract(p.value,'$.end') || ':00+08:00'
+FROM json_each(?) ids
+JOIN "timetable_entry" e ON e.id = ids.value
+JOIN "term" t ON t.id = e.term_id
+JOIN "timetable_profile" pr ON pr.id = e.profile_id
+JOIN json_each(e.weeks) w
+JOIN json_each(pr.periods) p
+WHERE json_extract(p.value,'$.index') >= e.period_from AND json_extract(p.value,'$.index') <= e.period_to`;
 function rowWrites(db: D1Database, before: Snapshot, after: Snapshot) {
   const deletes: D1PreparedStatement[] = [],
     writes: D1PreparedStatement[] = [];
@@ -163,6 +175,22 @@ function rowWrites(db: D1Database, before: Snapshot, after: Snapshot) {
           ),
         );
       else inserted.push(r);
+    }
+    if (t === "timetable_event") {
+      // A full batch expands to >10k events (several MB). Entries whose events are all
+      // new are expanded by the database from the rows written earlier in this same
+      // transaction, so only entry ids cross the network; the result matches materialize().
+      const total = new Map<unknown, number>(),
+        fresh = new Map<unknown, number>();
+      for (const r of after.timetable_event)
+        total.set(r.entry_id, (total.get(r.entry_id) ?? 0) + 1);
+      for (const r of inserted)
+        fresh.set(r.entry_id, (fresh.get(r.entry_id) ?? 0) + 1);
+      const generated = [...fresh].filter(([id, n]) => total.get(id) === n).map(([id]) => String(id));
+      const ids = new Set(generated);
+      for (let i = 0; i < generated.length; i += 500)
+        writes.push(statement(db, GENERATE_EVENTS, [JSON.stringify(generated.slice(i, i + 500))]));
+      inserted.splice(0, inserted.length, ...inserted.filter((r) => !ids.has(String(r.entry_id))));
     }
     // Bound SQL statement count without sacrificing the single database transaction.
     for (let i = 0; i < inserted.length; i += 300) {

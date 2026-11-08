@@ -9,7 +9,7 @@
 - `PUT/GET/DELETE <base>/imports/<id>/<filename>`：认证文件访问，单文件最大 5 MiB，拒绝路径穿越，临时文件写入后原子重命名，不列目录。
 - `GET <base>/health`：查询 SQLite，成功返回 `{ok:true}`。
 
-Worker 的 `remote-data.ts` 保持领域层 prepare/bind/first/all/run/batch 接口；类型名称 D1Database 仅作为兼容接口，不代表生产存在 Cloudflare D1 绑定。CONFIG 同样是 SQLite 设置适配器。请求禁止跟随重定向、超时 30 秒。生产必须 HTTPS，本地 development 允许 loopback HTTP。数据库错误只返回约束标记，不返回 SQL/参数。
+Worker 的 `remote-data.ts` 保持领域层 prepare/bind/first/all/run/batch 接口；类型名称 D1Database 仅作为兼容接口，不代表生产存在 Cloudflare D1 绑定。CONFIG 同样是 SQLite 设置适配器。请求禁止跟随重定向，超时 30 秒并按请求体大小每 50 KB 再加 1 秒（最多加 90 秒），照顾经隧道的大批提交。生产必须 HTTPS，本地 development 允许 loopback HTTP。数据库错误只返回约束标记，不返回 SQL/参数。
 
 SQLite 同步执行令每个请求的事务不会与其他请求交错；跨 HTTP 请求的业务流程并非全局事务。数据库与文件写入仍非原子事务，上传后业务写入失败由 Worker 尽力清理。单进程服务适合当前单组织规模，跨区域逐条查询有延迟，不应据此声称高并发性能。
 

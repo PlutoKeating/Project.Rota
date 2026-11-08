@@ -8,7 +8,9 @@ export function remoteData(env: Env) {
   if (!env.DATA_SERVICE_AUTHORIZATION) throw new Error('Data service credentials missing');
   async function request(path: string, method: string, body?: string) {
     const response = await fetch(base.href.replace(/\/$/, '') + path, {
-      method, body, redirect: 'manual', signal: AbortSignal.timeout(30_000),
+      method, body, redirect: 'manual',
+      // Large commits cross a slow tunnel; allow ~50 KB/s on top of the base budget.
+      signal: AbortSignal.timeout(30_000 + Math.min(90_000, Math.round((body?.length ?? 0) / 50))),
       headers: { Authorization: env.DATA_SERVICE_AUTHORIZATION!, 'Content-Type': 'application/json' },
     });
     if (!response.ok) {
