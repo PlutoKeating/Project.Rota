@@ -636,6 +636,38 @@ it("classifies a malformed native function response as recoverable model output,
   expect(error.metrics.attempts[0].code).toBe("invalid_tool_call");
 });
 
+it("returns a prose-only reply and an unknown tool name as recoverable feedback", async () => {
+  // DeepSeek thinking mode uses toolChoice=auto, so prose replies reach the runner.
+  const env = await setup("openai_compatible", "https://api.deepseek.com");
+  const reply = (message: Record<string, unknown>) =>
+    Response.json({
+      choices: [{ index: 0, message: { role: "assistant", ...message }, finish_reason: "stop" }],
+    });
+  vi.stubGlobal("fetch", vi.fn(async () => reply({ content: "没有工具能直接绑定日历。" })));
+  const prose = await agentTurn(
+    env,
+    { messages: [{ role: "user", content: "协调" }], context: "{}", mode: "reconcile" },
+    "batch",
+  );
+  expect(prose.calls).toEqual([]);
+  expect(prose.text).toContain("绑定日历");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      reply({
+        content: null,
+        tool_calls: [{ id: "c", type: "function", function: { name: "bind_calendar", arguments: "{}" } }],
+      }),
+    ),
+  );
+  const unknown = await agentTurn(
+    env,
+    { messages: [{ role: "user", content: "协调" }], context: "{}", mode: "reconcile" },
+    "batch",
+  );
+  expect(unknown.calls[0].validationError).toContain("save_calendars");
+});
+
 it("classifies a reset connection separately and exposes no transport message", async () => {
   const env = await setup("google", "https://google.example");
   vi.stubGlobal(

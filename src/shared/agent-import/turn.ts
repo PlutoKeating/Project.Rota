@@ -286,7 +286,10 @@ export async function runTurn(
       );
       if (result.finishReason === "length")
         throw Error("model_output_truncated");
-      if (!result.toolCalls.length) throw Error("invalid_tool_protocol");
+      // A prose-only reply is a model decision, not a transport failure: the
+      // runner feeds it back with a reminder. An empty reply still fails over.
+      if (!result.toolCalls.length && !result.text.trim())
+        throw Error("invalid_tool_protocol");
       // AI SDK can return invalid tool calls plus synthetic error results instead of throwing.
       // Malformed JSON is a protocol failure. Valid JSON with bad tool arguments is
       // a recoverable agent mistake: return feedback without executing it.
@@ -294,7 +297,6 @@ export async function runTurn(
       const calls = result.toolCalls.map((t) => {
         const spec = toolSpecs[t.toolName as keyof typeof toolSpecs];
         if (
-          !spec ||
           typeof t.input !== "object" ||
           t.input === null ||
           Array.isArray(t.input) ||
@@ -302,8 +304,10 @@ export async function runTurn(
         )
           throw Error("invalid_tool_protocol");
         ids.add(t.toolCallId);
-        const parsed = spec.schema.safeParse(t.input);
-        const validationError = !Object.hasOwn(tools, t.toolName)
+        const parsed = spec
+          ? spec.schema.safeParse(t.input)
+          : ({ success: false, error: { issues: [] } } as const);
+        const validationError = !spec || !Object.hasOwn(tools, t.toolName)
           ? "当前阶段不允许此工具。可用工具：" + Object.keys(tools).join("、")
           : !parsed.success
             ? JSON.stringify(parsed.error.issues)

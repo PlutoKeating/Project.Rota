@@ -430,6 +430,16 @@ export class ImportRunner {
         for (const calendar of args.calendars) {
           // Child-provided evidence is already source-validated, but the coordinator must read it before revising.
           await this.validateSources(agent, calendar.sources);
+          const tableIds = new Set(
+            Object.values(job.session?.people ?? {}).flatMap((p) =>
+              Object.keys(p.timetables).map((key) => p.id + ":" + key),
+            ),
+          );
+          const unknown = calendar.timetable_ids.filter((id: string) => !tableIds.has(id));
+          if (unknown.length)
+            throw Error(
+              `日历 ${calendar.id} 的 timetable_ids 含不存在的课表：${unknown.join("、")}；请使用 people[].tables[].id。`,
+            );
           if (calendar.term_id && !job.base.term.some((t) => t.id === calendar.term_id))
             throw Error(
               `日历 ${calendar.id} 的 term_id「${calendar.term_id}」不是已有学期；` +
@@ -1164,7 +1174,21 @@ export class ImportRunner {
           job.model = reply.model;
           agent.turns++;
           job.turns++;
-          if (!reply.calls?.length) throw Error("模型未返回工具调用");
+          if (!reply.calls?.length) {
+            // Thinking-mode models may answer in prose (e.g. "no tool can do this").
+            // Feed that back as a stalled turn instead of failing the whole batch.
+            agent.messages.push(...(reply.messages ?? []), {
+              role: "user",
+              content:
+                "上一轮没有调用任何工具，运行时只执行工具调用。请从可用工具中选择并调用；" +
+                (person
+                  ? "无法确定的事实写入 unresolved。"
+                  : "日历绑定用 save_calendars（timetable_ids 写入人员课表 id），无法处理的事项写入 finish_import 的 unresolved。"),
+            });
+            agent.stall = (agent.stall ?? 0) + 1;
+            await this.persist();
+            continue;
+          }
           if (new Set(reply.calls.map((c) => c.id)).size !== reply.calls.length)
             throw Error("模型返回重复调用编号");
           agent.messages.push(...reply.messages);

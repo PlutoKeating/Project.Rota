@@ -161,6 +161,14 @@ describe("person object projection", () => {
     expect(job.draft.term.some((t) => t.id === "cal:term")).toBe(true);
     expect(job.draft.term.some((t) => t.id === "2026-2027-1")).toBe(false);
   });
+  it("binds a table without a calendar when the coordinator lists it in timetable_ids", () => {
+    const job = jobFixture();
+    job.session!.people.a.timetables.fall.calendar_id = null;
+    job.calendars!.cal.timetable_ids = ["workspace:fall"];
+    projectPeople(job);
+    expect(job.session!.people.a.timetables.fall.calendar_id).toBe("cal");
+    expect(job.draft.timetable_entry.some((e) => e.id === "workspace:fall:0")).toBe(true);
+  });
   it("matches A, preserves existing information, replaces only the person's term B", () => {
     const job = jobFixture();
     projectPeople(job);

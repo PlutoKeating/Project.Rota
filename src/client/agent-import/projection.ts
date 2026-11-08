@@ -44,6 +44,13 @@ export function projectPeople(job: Job) {
   }
   const bindings = new Map<string, { termId: string; profileId: string }>();
   const calendars = structuredClone(job.calendars ?? {});
+  // timetable_ids is how the coordinator binds a table that has no calendar yet
+  // (e.g. operator: "bind 李佳 to the same term"); an explicit calendar_id wins.
+  for (const c of Object.values(calendars))
+    for (const p of Object.values(job.session.people))
+      for (const t of Object.values(p.timetables))
+        if (!t.calendar_id && c.timetable_ids.includes(p.id + ":" + t.key))
+          t.calendar_id = c.id;
   for (const proposed of Object.values(calendars)) {
     // Batches saved before save_calendars rejected invented ids: a reference to
     // a term that does not exist can only mean a new term described by this calendar.
