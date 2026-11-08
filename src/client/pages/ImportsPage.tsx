@@ -5,7 +5,7 @@ import { Icon } from "../components/Icon";
 import { Spinner } from "../components/Spinner";
 import { cx } from "../lib/cx";
 import { Stepper, LiveStatus, PeopleGrid } from "../agent-import/Progress";
-import type { PersonWorkspace } from "../../shared/agent-import/person-workspace";
+import { emptyAgent, type PersonWorkspace } from "../../shared/agent-import/person-workspace";
 import { Modal } from "../components/Modal";
 import { useSession } from "../components/AuthGate";
 import { api, messageOf } from "../lib/api";
@@ -102,6 +102,21 @@ export function ImportsPage() {
   const run = (value: Job) => {
     runner.current = new ImportRunner(value, update);
     void runner.current.run();
+  };
+  // An extraction stopped by its call budget can go straight to independent
+  // verification with what it saved; verification still rereads every source.
+  const verifyNow = async (key: string) => {
+    const value = current.current;
+    const person = value?.session?.people[key];
+    if (!value || !person || value.status === "running") return;
+    const turns = person.agent.turns;
+    person.status = "verifying";
+    person.resumeStatus = "verifying";
+    person.agent = emptyAgent();
+    person.agent.turns = turns;
+    await saveJob(value);
+    update(value);
+    run(value);
   };
   const upload = async (files: File[]) => {
     if (!files.length) return;
@@ -476,7 +491,14 @@ export function ImportsPage() {
           {job.error && <ErrorLine text={job.error} />}
           {error && <ErrorLine text={error} />}
 
-          {job.status !== "applied" && <PeopleGrid job={job} identity={identity} />}
+          {job.status !== "applied" && (
+            <PeopleGrid
+              job={job}
+              identity={identity}
+              onResume={editable && job.session ? () => run(job) : undefined}
+              onVerify={editable && job.session ? (key) => void verifyNow(key) : undefined}
+            />
+          )}
 
           {!!job.unresolved.length && (
             <details className="group rounded-xl bg-amber-50 text-sm text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">

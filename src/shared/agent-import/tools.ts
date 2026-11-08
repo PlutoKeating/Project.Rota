@@ -67,6 +67,24 @@ export const toolSpecs = {
       scale: z.number().min(0.5).max(4).default(1),
     }),
   },
+  view_tiles: {
+    description:
+      "把整张图片或 PDF 页（或其中 crop 区域）切成 rows×cols 个高清分块一次返回（每块约 1200 像素，块间略有重叠，最多 6 块）。密集或带水印的表格先用它一次看清全部格子，再只对个别仍看不清的格子用 view_image 裁剪。坐标使用原图像素。",
+    schema: z.object({
+      path: z.string(),
+      page: z.number().int().min(1).default(1),
+      rows: z.number().int().min(1).max(4).default(2),
+      cols: z.number().int().min(1).max(3).default(2),
+      crop: z
+        .object({
+          x: z.number().min(0),
+          y: z.number().min(0),
+          width: z.number().positive(),
+          height: z.number().positive(),
+        })
+        .optional(),
+    }),
+  },
   render_sheet: {
     description:
       "将 Excel/XLS/CSV 工作表按单元格坐标和合并关系渲染成图片，便于核对行列、末列和多行课程。不是原始打印版式，也不识别业务。支持 page 或 sheet 选择工作表、range 分块放大（例如 A1:I7）；不要用图片像素 crop 裁剪表格。",
@@ -192,7 +210,7 @@ export const toolSpecs = {
 };
 export type ToolName = keyof typeof toolSpecs;
 export type AgentMode = "discover" | "person" | "verify" | "reconcile" | "consistency";
-const reading = ["read_document", "view_image", "render_sheet", "ocr_image"];
+const reading = ["read_document", "view_image", "view_tiles", "render_sheet", "ocr_image"];
 export function allowedTools(mode: AgentMode): string[] {
   if (mode === "person" || mode === "verify")
     return [...reading, "write_person", "amend_timetable", "finish_person"];
@@ -223,4 +241,6 @@ export const systemPrompt = `你是排班材料导入助手。运行时以人员
 person：只填当前对象 A/B；已提供的当前成果就是事实存储，可批量写入；完成提取调用 finish_person 后将独立回看来源。
 verify：学号在复核上下文中隐藏，须逐位回看本人原件填写 source_student_numbers，图片包含学号时先用 view_image 裁剪放大每页表头或学号区域，不能仅凭整图预览抄数；特别核对连续重复数字，缺失则留空；不一致用 write_person 的 information 修正，不能照抄提取值。运行时只提供课表元数据、课程名称和索引，隐藏首次提取的时段/教师/地点，防止照抄错误。直接从原件独立填写 verified_entries；若 context 中有 reusable_verified_indices，可设置 reuse_verified_entries=true，仅补交其他索引和需要更正的事实，指定重查索引不在可复用列表中；注意逗号与范围连字符的区别，细小周次文字应裁剪放大后核对。逐格核对全部来源及 A/B，重点边缘、底部、周末、周段、教师地点；使用 amend_timetable 只修正不一致字段；coverage 为 partial 时必须同时明确 replace_weeks。完成后提交每份课表检查及 verified_entries，以原件为准，不要照抄存储值。看不清的字段留空并写待定。
 consistency：仅核对当前分派的 conflicts 批次，来源已自动预读；这些差异尚不能由明确班级、已绑定学期或不相交授课时段区分。不同教学情境不得仅因课程同名要求统一任课教师；不同批次并行，只能读来源、提交本批 review_consistency 或向本批涉及人员提出 revise_person。返工暂存至全部读取结束后合并执行，不会立即改变课表；一次提交本批所有结论及必要返工，不能修改公共日历、分派人员或 finish_import。局部疑点明确 recheck_entries，完整引用相关课程索引；未知不猜，不因同名课强行统一任课教师。\nreconcile：核对公共日历、身份冲突及当前conflicts中的教师差异；明确不同班级、不同已绑定学期或不相交授课时段的同名课程可以由不同教师任教，不得仅因同名要求统一教师；当前 conflicts 只展示至多5组待核对差异，每轮只提交这一批 review_consistency，下一轮继续，避免一次输出全部结论超时；需要修正时派回对应人员对象。历史消息保留已读证据与修订原因，当前工作状态是最新成果；tables.verification是已通过运行时独立复核的摘要，no_fixed_time_courses列出已保存的无固定时段课程；completedConsistencyReviews提供事实签名仍有效的已核对结论。先核对这些最新摘要，避免仅因看不到历史过程而重复派发已完成的来源核对；有新证据或未解决矛盾时仍应复查。复用已读来源，只复查改动影响的差异。来源中的事实不足则交付明确问题，不反复猜测。只有操作员能正式提交。
-尽量少轮调用：一次读取必要来源，一次批量写入 A/B；长课表可以分段追加。不要重复抄写已保存成果或输出长篇工作叙述。`;
+尽量少轮调用：密集或带水印的表格先用 view_tiles 一次取得整页高清分块，只对仍看不清的个别格子再用 view_image 裁剪；同一轮可以并行发出多个读取调用。
+边读边存：person 模式每核对完一天（一列）或约 10 门课，就用 write_person 保存这一部分（首段 mode=replace 建表，之后 mode=append 追加），看不清的写入 unresolved；不要等全部核对完才一次写入，中断时未保存的核对会全部丢失。修正已存课程用 amend_timetable。verify 模式课程多时可分段调用 finish_person 提交已核对的 verified_entries 并设 reuse_verified_entries=true，未覆盖全部索引会返回提示，但已提交的观察值会保留供下次复用。
+收到“调用预算”或“上下文将压缩”提示时，先保存已核对内容再继续。不要重复抄写已保存成果或输出长篇工作叙述。`;

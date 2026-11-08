@@ -187,7 +187,7 @@ export function revisionAgent(
 }
 export interface AgentState {
   runId: string;
-  pendingImages: { path: string; image: string }[];
+  pendingImages: { path: string; image: string; note?: string }[];
   messages: ModelMessage[];
   pending: {
     id: string;
@@ -205,7 +205,28 @@ export interface AgentState {
   failures: number;
   retryableFailure?: boolean;
   error?: string;
+  /** agent.turns when the current run of this actor began (budget is per run). */
+  runStartTurns?: number;
+  /** Consecutive turns whose tools produced no new evidence or saved facts. */
+  stall?: number;
+  /** Reader calls already made (name + canonical args), to tell new evidence from repeats. */
+  seen?: string[];
+  /** The "save what you have" notice was already injected this run. */
+  budgetWarned?: boolean;
+  /** Why this actor last stopped on a budget; it keeps its saved facts. */
+  budgetExhausted?: "budget" | "stall";
+  /** Number of times older context was compacted into a summary. */
+  compactions?: number;
+  /** The "save before compaction" notice is pending for the next compaction. */
+  compactWarned?: boolean;
 }
+
+/** Per-run model request cap per actor; a safety net only (stalls stop earlier). */
+export const TURN_BUDGET = { person: 96, other: 120 } as const;
+/** Consecutive no-progress turns that count as a runaway loop. */
+export const STALL_LIMIT = 8;
+/** Text context (without images) above which older turns are compacted. */
+export const CONTEXT_COMPACT_CHARS = 150000;
 export const emptyAgent = (): AgentState => ({
   runId: crypto.randomUUID(),
   pendingImages: [],

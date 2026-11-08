@@ -1,8 +1,9 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Icon } from "../components/Icon";
+import { Button } from "../components/Button";
 import { cx } from "../lib/cx";
 import type { Job } from "./store";
-import type { PersonWorkspace } from "../../shared/agent-import/person-workspace";
+import { TURN_BUDGET, type PersonWorkspace } from "../../shared/agent-import/person-workspace";
 
 const STEPS = ["识别材料", "逐人整理", "交叉核对", "复核导入"] as const;
 
@@ -129,6 +130,9 @@ const issuesOf = (p: PersonWorkspace) => [
 ];
 /** One short reason a finished person still needs the operator, or undefined. */
 export function attentionOf(p: PersonWorkspace): string | undefined {
+  // Stopped by the call budget or a stall: not a failure, saved facts are kept.
+  if (p.status === "failed" && p.agent.budgetExhausted)
+    return `${p.agent.budgetExhausted === "stall" ? "无新进展" : "调用用尽"} · 已存 ${coursesOf(p)} 门`;
   if (p.status !== "done") return undefined;
   const name = p.information?.full_name ?? splitLabel(p.label).name;
   const others = [
@@ -145,6 +149,7 @@ export function attentionOf(p: PersonWorkspace): string | undefined {
 function laneOf(job: Job, p: PersonWorkspace): Lane {
   const activity = job.activity?.[p.key]?.text;
   if (p.status === "done") return attentionOf(p) ? "check" : "done";
+  if (p.status === "failed" && p.agent.budgetExhausted) return "check";
   if (activity === "排队重试") return "retry";
   if (activity === "排队") return "queued";
   // A requeued person has a fresh agent (no error) until it starts again.
@@ -152,6 +157,11 @@ function laneOf(job: Job, p: PersonWorkspace): Lane {
     return job.status === "running" && !p.agent.error ? "retry" : "failed";
   if (p.status === "queued") return activity ? "working" : "queued";
   return "working";
+}
+
+/** Model requests used in this run of the person's current phase, and the cap. */
+function usageOf(p: PersonWorkspace) {
+  return { used: p.agent.turns - (p.agent.runStartTurns ?? p.agent.turns), cap: TURN_BUDGET.person };
 }
 
 /** Share of the person's sources read in the current pass (real, not a guess). */
@@ -238,7 +248,7 @@ export function LiveStatus({ job }: { job: Job }) {
             <div className="flex items-baseline gap-1.5">
               <dt className="text-slate-500">人员</dt>
               <dd className="font-semibold tabular-nums">
-                {counts.done + counts.check}
+                {people.filter((p) => p.status === "done").length}
                 <span className="font-normal text-slate-400">/{people.length}</span>
               </dd>
             </div>
@@ -333,9 +343,15 @@ const LANE_STYLE: Record<Lane, { bar: string; border: string; label: string }> =
 export function PeopleGrid({
   job,
   identity,
+  onResume,
+  onVerify,
 }: {
   job: Job;
   identity?: (person: PersonWorkspace) => ReactNode;
+  /** Paused batch only: run again (each stopped person gets a fresh budget). */
+  onResume?: () => void;
+  /** Paused batch only: send an extraction stopped by its budget straight to verification. */
+  onVerify?: (key: string) => void;
 }) {
   const running = job.status === "running";
   const now = useNow(running);
@@ -439,7 +455,20 @@ export function PeopleGrid({
                       </span>
                     )}
                   </span>
-                  <span className="shrink-0 tabular-nums">{courses} 门课</span>
+                  <span className="shrink-0 tabular-nums">
+                    {courses} 门课
+                    {(() => {
+                      const { used, cap } = usageOf(p);
+                      return running && lane === "working" && used >= cap / 2 ? (
+                        <span
+                          title="本轮模型调用次数"
+                          className={cx("ml-1.5", used >= cap * 0.75 ? "text-amber-600" : "text-slate-400")}
+                        >
+                          {used}/{cap}
+                        </span>
+                      ) : null;
+                    })()}
+                  </span>
                 </span>
               </button>
               {pick && <div className="px-3 pb-3">{pick}</div>}
@@ -447,7 +476,15 @@ export function PeopleGrid({
           );
         })}
       </ul>
-      {selected && <PersonDetail job={job} person={selected} onClose={() => setOpen(undefined)} />}
+      {selected && (
+        <PersonDetail
+          job={job}
+          person={selected}
+          onClose={() => setOpen(undefined)}
+          onResume={onResume}
+          onVerify={onVerify}
+        />
+      )}
     </div>
   );
 }
@@ -456,11 +493,17 @@ function PersonDetail({
   job,
   person,
   onClose,
+  onResume,
+  onVerify,
 }: {
   job: Job;
   person: PersonWorkspace;
   onClose: () => void;
+  onResume?: () => void;
+  onVerify?: (key: string) => void;
 }) {
+  const { used, cap } = usageOf(person);
+  const stopped = person.status === "failed" && person.agent.budgetExhausted;
   const prefix = [person.label + " · ", person.label + "："];
   const log = job.log
     .filter((item) => prefix.some((p) => item.text.startsWith(p)))
@@ -483,6 +526,26 @@ function PersonDetail({
           <Icon name="x" className="size-4" />
         </button>
       </header>
+      <p className="mt-1 text-slate-500 tabular-nums">
+        本轮调用 {used}/{cap}
+        {(person.agent.stall ?? 0) > 0 && ` · 连续 ${person.agent.stall} 轮无新进展`}
+        {(person.agent.compactions ?? 0) > 0 && ` · 上下文已压缩 ${person.agent.compactions} 次`}
+      </p>
+      {stopped && (onResume || onVerify) && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {onResume && (
+            <Button size="sm" variant="secondary" onClick={onResume}>
+              <Icon name="play" className="size-4" />
+              再给一轮预算继续
+            </Button>
+          )}
+          {onVerify && person.resumeStatus !== "verifying" && coursesOf(person) > 0 && (
+            <Button size="sm" variant="ghost" onClick={() => onVerify(person.key)}>
+              按已存 {coursesOf(person)} 门进入复核
+            </Button>
+          )}
+        </div>
+      )}
       {issuesOf(person).length > 0 && (
         <ul className="mt-2 space-y-1 rounded-lg bg-amber-50 px-3 py-2 text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
           {[...new Set(issuesOf(person))].map((issue) => (

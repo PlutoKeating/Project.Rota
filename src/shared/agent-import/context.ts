@@ -112,3 +112,48 @@ export function keepRecentImages(messages: ModelMessage[], keep: number): ModelM
   }
   return out;
 }
+
+/**
+ * Keep the task/preload head and the most recent turns within `target` text
+ * characters, replacing the middle with one note. Facts the agent saved live
+ * in the workspace (sent as context every turn), so dropping old reads loses
+ * only transcript, never results. The tail always starts at an assistant
+ * message so every tool result keeps its call. Returns undefined when nothing
+ * can be dropped.
+ */
+export function compactMessages(
+  messages: ModelMessage[],
+  target: number,
+): { messages: ModelMessage[]; dropped: number } | undefined {
+  const size = (m: ModelMessage) => JSON.stringify(withoutImages([m])).length;
+  const first = messages.findIndex((m) => m.role === "assistant");
+  if (first < 0) return undefined;
+  let total = 0;
+  let start = messages.length;
+  for (let i = messages.length - 1; i > first; i--) {
+    total += size(messages[i]);
+    if (total > target) break;
+    start = i;
+  }
+  while (start < messages.length && messages[start].role !== "assistant") start++;
+  if (start >= messages.length || start <= first) return undefined;
+  const dropped = messages.slice(first, start);
+  // Carry the latest dropped reasoning forward so the agent keeps its place.
+  const lastThought = [...dropped]
+    .reverse()
+    .flatMap((m) =>
+      m.role === "assistant" && Array.isArray(m.content)
+        ? m.content.flatMap((p) =>
+            (p.type === "reasoning" || p.type === "text") && p.text.trim() ? [p.text] : [],
+          )
+        : [],
+    )[0];
+  const note =
+    `为控制上下文，较早的 ${dropped.length} 条读取与推理记录已压缩。` +
+    "已保存的人员信息、课表与待确认项以当前工作状态为准；已读区域记录仍有效，需要时可重新查看原件。" +
+    (lastThought ? "\n压缩前最近一次推理要点：" + lastThought.slice(-1500) : "");
+  return {
+    messages: [...messages.slice(0, first), { role: "user", content: note }, ...messages.slice(start)],
+    dropped: dropped.length,
+  };
+}

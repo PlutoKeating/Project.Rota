@@ -74,7 +74,7 @@ describe("single-turn credential proxy", () => {
         expect(names).not.toContain("dispatch_people");
         expect(names).not.toContain("save_calendars");
       } else if (mode === "consistency") {
-        expect(names).toEqual(["read_document", "view_image", "render_sheet", "ocr_image", "revise_person", "review_consistency"]);
+        expect(names).toEqual(["read_document", "view_image", "view_tiles", "render_sheet", "ocr_image", "revise_person", "review_consistency"]);
       } else expect(names).toContain("dispatch_people");
     },
   );

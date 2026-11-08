@@ -290,3 +290,5 @@ Kimi Code连接测试沿用既有API：服务端将官方国内Coding端点解�
 DeepSeek官方端点的Agent请求在思考模式下使用`tool_choice=auto`并补齐跨供应商工具回合的推理字段；接口字段不变，详见Worker模块架构。
 
 本机直连模型开启时，浏览器不调用 `POST /api/agent-imports/:id/turn`，而在本地以相同请求体执行单轮并直接请求供应商；该接口保持不变，供未开启直连的用户使用。
+
+工具协议新增 `view_tiles`（path、page、rows 1–4、cols 1–3、可选 crop，rows×cols≤6），在浏览器本地切块渲染后以多张图片返回；Worker 与本机直连共用同一工具定义，前后端须同步发布。

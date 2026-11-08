@@ -1593,3 +1593,90 @@ test("fresh cached observations cannot certify a conflicting teacher value", asy
   expect(rejected).toBe(true);
   expect((await saved(page)).session.people.a.timetables.fall.entries[0].teacher).toBe("张老师");
 });
+
+test("a stalled extraction saves what it checked before stopping and keeps it for resume", async ({ page }) => {
+  let warned = false;
+  await setup(page, async (body) => {
+    if (body.mode === "discover") return discovery(["a"]);
+    if (body.mode === "person") {
+      const texts = body.messages.filter((m: any) => m.role === "user" && typeof m.content === "string").map((m: any) => m.content);
+      if (texts.some((t: string) => t.includes("调用预算提示"))) warned = true;
+      // Save-only close-out turn: write what was checked.
+      if (texts.at(-1)?.includes("本轮只允许"))
+        return output([{ name: "write_person", args: { information: { full_name: "甲", student_no: "a" }, timetables: [{ key: "fall", term_name: "秋季", calendar_id: "cal", entries: [{ name: "数学", weekday: 1, period_from: 1, period_to: 1, weeks: [1, 2] }], sources: evidence("a.txt") }] } }]);
+      // Otherwise keep re-reading the same thing: no new evidence.
+      return output([{ name: "read_document", args: { path: "a.txt" } }]);
+    }
+    return personReply(body);
+  });
+  await upload(page, ["a"]);
+  // A new batch is saved as "paused" before it starts: wait for the stall itself.
+  await expect.poll(async () => (await saved(page))?.session?.people?.a?.agent?.budgetExhausted, { timeout: 15000 }).toBe("stall");
+  await expect.poll(async () => (await saved(page))?.status, { timeout: 15000 }).toBe("paused");
+  const job = await saved(page);
+  const person = job.session.people.a;
+  expect(warned).toBe(true);
+  expect(person.status).toBe("failed");
+  expect(person.agent.budgetExhausted).toBe("stall");
+  expect(person.agent.error).toContain("没有新进展");
+  expect(person.agent.error).toContain("已保存 1 门课");
+  expect(person.timetables.fall.entries).toHaveLength(1);
+  // Not shown as a red failure: it is a "needs confirmation" stop with saved courses.
+  await expect(page.getByText("无新进展 · 已存 1 门")).toBeVisible();
+  // Operator sends the saved extraction straight to independent verification.
+  await page.getByRole("button", { name: /^a\b/ }).click();
+  await page.getByRole("button", { name: "按已存 1 门进入复核" }).click();
+  await expect.poll(async () => (await saved(page))?.status, { timeout: 15000 }).toBe("review");
+  const done = (await saved(page)).session.people.a;
+  expect(done.status).toBe("done");
+  expect(done.timetables.fall.entries).toHaveLength(1);
+});
+
+test("view_tiles returns every tile as an annotated image in one turn", async ({ page }) => {
+  let tileImages = 0, notes = 0;
+  const png = await (async () => {
+    await page.goto("about:blank");
+    return page.evaluate(() => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 600;
+      canvas.height = 900;
+      const ctx = canvas.getContext("2d")!;
+      // Noise so every tile differs (identical tiles would be deduplicated in transport).
+      const pixels = ctx.createImageData(600, 900);
+      let seed = 7;
+      for (let i = 0; i < pixels.data.length; i += 4) {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+        pixels.data[i] = pixels.data[i + 1] = pixels.data[i + 2] = seed & 255;
+        pixels.data[i + 3] = 255;
+      }
+      ctx.putImageData(pixels, 0, 0);
+      return canvas.toDataURL("image/png").split(",")[1];
+    });
+  })();
+  await setup(page, async (body) => {
+    if (body.mode === "discover")
+      return output([
+        { name: "read_document", args: { path: "a.txt" } },
+        { name: "dispatch_people", args: { people: [{ key: "a", label: "a", sources: ["a.txt", "a.png"] }] } },
+        { name: "save_calendars", args: { calendars: [calendar] } },
+        { name: "finish_discovery", args: {} },
+      ]);
+    if (body.mode === "person") {
+      const last = body.messages.at(-1);
+      const asked = body.messages.some((m: any) => m.role === "assistant" && JSON.stringify(m.content).includes("view_tiles"));
+      if (!asked) return output([{ name: "view_tiles", args: { path: "a.png", rows: 3, cols: 2 } }]);
+      const parts = body.messages.slice(-6).flatMap((m: any) => (Array.isArray(m.content) ? m.content : []));
+      tileImages = parts.filter((p: any) => p.type === "image").length;
+      notes = parts.filter((p: any) => p.type === "text" && p.text.startsWith("分块 ")).length;
+      void last;
+    }
+    return personReply(body);
+  });
+  await page.getByLabel("选择导入材料").setInputFiles([
+    { name: "a.txt", mimeType: "text/plain", buffer: Buffer.from("a 学号 a 数学 周一 第1节 第1-2周") },
+    { name: "a.png", mimeType: "image/png", buffer: Buffer.from(png, "base64") },
+  ]);
+  await expect.poll(async () => (await saved(page))?.status, { timeout: 15000 }).toBe("review");
+  expect(tileImages).toBe(6);
+  expect(notes).toBe(6);
+});

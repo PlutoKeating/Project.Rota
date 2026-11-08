@@ -15,6 +15,9 @@ import {
   writePersonSchema,
   personTableSchema,
   validateVerifiedEntries,
+  TURN_BUDGET,
+  STALL_LIMIT,
+  CONTEXT_COMPACT_CHARS,
   type AgentState,
   type PersonWorkspace,
   type ConsistencyWorkspace,
@@ -34,6 +37,7 @@ import { pendingTimedEntries } from "../../shared/agent-import/timetable";
 import { calendarMissing } from "../../shared/agent-import/calendar";
 import {
   withoutImages,
+  compactMessages,
   scopeSourceImages,
   type TurnMetrics,
 } from "../../shared/agent-import/context";
@@ -66,6 +70,7 @@ const readers = ["read_document", "view_image", "render_sheet", "ocr_image"];
 const TOOL_ACTIVITY: Record<string, string> = {
   read_document: "读取文件",
   view_image: "查看图片",
+  view_tiles: "分块查看",
   render_sheet: "渲染表格",
   ocr_image: "文字识别",
   tree: "浏览材料",
@@ -216,17 +221,56 @@ export class ImportRunner {
       }
     }
   }
-  private appendImage(agent: AgentState, path: string, image?: string) {
+  private appendImage(agent: AgentState, path: string, image?: string, note?: string) {
     if (image) {
       agent.evictedImageSources = agent.evictedImageSources?.filter((source) => source !== path);
       agent.messages.push({
         role: "user",
         content: [
+          // The tag text must stay exactly "来源图片（仅数据）：<path>" (scopeSourceImages parses it).
           { type: "text", text: "来源图片（仅数据）：" + path },
+          ...(note ? [{ type: "text" as const, text: note }] : []),
           { type: "image", image },
         ],
       });
     }
+  }
+  /** Split a page (or region) into ≤6 overlapping tiles rendered at ~1200 px each. */
+  private async viewTiles(
+    agent: AgentState,
+    args: { path: string; page: number; rows: number; cols: number; crop?: { x: number; y: number; width: number; height: number } },
+    person?: PersonWorkspace,
+  ) {
+    if (args.rows * args.cols > 6) throw Error("分块最多 6 块（rows×cols≤6）");
+    const whole = await this.read(agent, "view_image", { path: args.path, page: args.page, scale: 0.5 }, person);
+    const { width, height } = whole.result as { width: number; height: number };
+    const region = args.crop ?? { x: 0, y: 0, width, height };
+    const tileW = region.width / args.cols, tileH = region.height / args.rows;
+    const padX = tileW * 0.04, padY = tileH * 0.04;
+    const tiles: { tile: string; crop: { x: number; y: number; width: number; height: number } }[] = [];
+    const images: { image: string; note: string }[] = [];
+    for (let r = 0; r < args.rows; r++)
+      for (let c = 0; c < args.cols; c++) {
+        const x = Math.max(0, Math.floor(region.x + c * tileW - padX));
+        const y = Math.max(0, Math.floor(region.y + r * tileH - padY));
+        const crop = {
+          x,
+          y,
+          width: Math.min(width - x, Math.ceil(tileW + 2 * padX)),
+          height: Math.min(height - y, Math.ceil(tileH + 2 * padY)),
+        };
+        if (crop.width <= 0 || crop.height <= 0) continue;
+        const scale = Math.min(4, Math.max(0.5, 1200 / Math.max(crop.width, crop.height)));
+        const value = await this.read(agent, "view_image", { path: args.path, page: args.page, crop, scale }, person);
+        const tile = `第${r + 1}行第${c + 1}列`;
+        tiles.push({ tile, crop });
+        if (value.image)
+          images.push({ image: value.image, note: `分块 ${tile}，原图区域 x=${crop.x} y=${crop.y} w=${crop.width} h=${crop.height}` });
+      }
+    return {
+      result: { path: args.path, page: args.page, width, height, rows: args.rows, cols: args.cols, tiles },
+      images,
+    };
   }
   private async sourcesRead(agent: AgentState, paths: string[]) {
     const files = await materials(this.job.id);
@@ -263,12 +307,13 @@ export class ImportRunner {
     mode: AgentMode,
     person?: PersonWorkspace,
     reviewer?: ConsistencyWorkspace,
-  ): Promise<{ result: unknown; image?: string }> {
+  ): Promise<{ result: unknown; image?: string; images?: { image: string; note: string }[] }> {
     if (call.validationError) throw Error(call.validationError);
     if (!allowedTools(mode).includes(call.name))
       throw Error("当前对象不允许此工具");
     const spec = toolSpecs[call.name as ToolName];
     const args = spec.schema.parse(call.args) as any;
+    if (call.name === "view_tiles") return this.viewTiles(agent, args, person);
     if (readers.includes(call.name))
       return this.read(agent, call.name, args, person);
     const job = this.job,
@@ -987,7 +1032,15 @@ export class ImportRunner {
     agent.error = undefined;
     agent.retryableFailure = false;
     agent.failures = 0;
-    const initialTurns = agent.turns;
+    let initialTurns = agent.turns;
+    const resetBudget = (a: AgentState) => {
+      a.runStartTurns = a.turns;
+      a.stall = 0;
+      a.budgetWarned = false;
+      a.budgetExhausted = undefined;
+    };
+    resetBudget(agent);
+    const label = reviewer?.id ?? person?.label ?? "协调器";
     try {
       while (!this.stopped && job.status === "running") {
         if (reviewer && !agent.pending.length && (reviewer.revisions.length ||
@@ -1053,11 +1106,44 @@ export class ImportRunner {
             }
             if (this.stopped) break;
           }
-          if (agent.turns - initialTurns >= (person ? 32 : 60))
-            throw Error("达到当前对象调用预算，已保存进度，请检查后继续");
-          // Bound active context without throwing away unrecorded evidence or tool pairs.
-          if (JSON.stringify(withoutImages(agent.messages)).length > 180000)
-            throw Error("当前对象上下文过大，成果已保存，请缩小分派范围");
+          // A runaway loop is many turns without new evidence or saved facts;
+          // the turn cap is only a safety net. Either way, save before stopping.
+          const cap = person ? TURN_BUDGET.person : TURN_BUDGET.other;
+          const used = agent.turns - initialTurns;
+          const stall = agent.stall ?? 0;
+          if (used >= cap || stall >= STALL_LIMIT)
+            await this.closeOut(agent, mode, stall >= STALL_LIMIT ? "stall" : "budget", cap, person);
+          if (!agent.budgetWarned && (used >= Math.floor(cap * 0.75) || stall >= STALL_LIMIT - 3)) {
+            agent.budgetWarned = true;
+            agent.messages.push({
+              role: "user",
+              content:
+                (stall >= STALL_LIMIT - 3
+                  ? `调用预算提示：已连续 ${stall} 轮没有新的读取或保存。`
+                  : `调用预算提示：本轮已用 ${used}/${cap} 次模型请求。`) +
+                (person
+                  ? "请立即用 write_person（mode=append）保存已核对的课程，看不清的写入 unresolved，然后再继续剩余部分。"
+                  : "请先保存已得出的结论，再继续。"),
+            });
+          }
+          // Long careful reading grows the transcript: compact old turns instead of stopping.
+          const textSize = JSON.stringify(withoutImages(agent.messages)).length;
+          if (person && !agent.compactWarned && textSize > CONTEXT_COMPACT_CHARS * 0.75) {
+            agent.compactWarned = true;
+            agent.messages.push({
+              role: "user",
+              content: "上下文将压缩：请先用 write_person（mode=append）保存已核对的课程，压缩后较早的读取过程不再可见。",
+            });
+          } else if (textSize > CONTEXT_COMPACT_CHARS) {
+            const compacted = compactMessages(agent.messages, Math.floor(CONTEXT_COMPACT_CHARS * 0.4));
+            if (compacted) {
+              agent.messages = compacted.messages;
+              agent.compactions = (agent.compactions ?? 0) + 1;
+              agent.compactWarned = false;
+              this.log(`${label} · 上下文压缩，移除 ${compacted.dropped} 条较早记录`);
+            } else if (textSize > 180000)
+              throw Error("当前对象上下文过大且无法压缩，成果已保存，请缩小分派范围");
+          }
           job.phase = person
             ? "并行处理人员与逐人复核"
             : mode === "discover"
@@ -1083,6 +1169,7 @@ export class ImportRunner {
           await this.persist();
           if (this.stopped) break;
         }
+        let progressed = false;
         while (agent.pending.length && !this.stopped) {
           const call = agent.pending[0];
           const started = Date.now();
@@ -1090,10 +1177,19 @@ export class ImportRunner {
             reviewer?.id ?? person?.key ?? "coordinator",
             TOOL_ACTIVITY[call.name] ?? call.name,
           );
-          let value: { result: unknown; image?: string };
+          let value: { result: unknown; image?: string; images?: { image: string; note: string }[] };
           try {
             value = await this.execute(agent, call, mode, person, reviewer);
             agent.failures = 0;
+            // Progress = evidence not seen before, or any accepted non-read action.
+            if (readers.includes(call.name) || call.name === "view_tiles") {
+              const key = call.name + ":" + canonical(call.args);
+              if (!(agent.seen ??= []).includes(key)) {
+                agent.seen.push(key);
+                if (agent.seen.length > 500) agent.seen.splice(0, agent.seen.length - 500);
+                progressed = true;
+              }
+            } else progressed = true;
           } catch (e) {
             value = { result: { error: (e as Error).message } };
             agent.failures++;
@@ -1114,12 +1210,19 @@ export class ImportRunner {
               path: String((call.args as any)?.path ?? ""),
               image: value.image,
             });
+          for (const tile of value.images ?? [])
+            agent.pendingImages.push({
+              path: String((call.args as any)?.path ?? ""),
+              image: tile.image,
+              note: tile.note,
+            });
           agent.pending.shift();
           // All tool results must precede user image messages in a parallel-call turn.
           if (!agent.pending.length) {
             for (const item of agent.pendingImages)
-              this.appendImage(agent, item.path, item.image);
+              this.appendImage(agent, item.path, item.image, item.note);
             agent.pendingImages = [];
+            agent.stall = progressed ? 0 : (agent.stall ?? 0) + 1;
           }
           await archive(
             job.id,
@@ -1155,6 +1258,9 @@ export class ImportRunner {
             person.agent = emptyAgent();
             agent = person.agent;
             agent.turns = turns;
+            // Independent verification gets its own budget.
+            initialTurns = turns;
+            resetBudget(agent);
           }
           await this.persist();
           if (agent.failures >= 6) throw Error("连续工具错误，当前对象已暂停");
@@ -1179,6 +1285,63 @@ export class ImportRunner {
     } finally {
       this.activity(reviewer?.id ?? person?.key ?? "coordinator");
     }
+  }
+  /**
+   * Budget or stall reached. Extraction gets one save-only turn so facts the
+   * model has checked but not yet written are kept; then the actor stops with
+   * an honest summary. The person keeps everything saved and can resume.
+   */
+  private async closeOut(
+    agent: AgentState,
+    mode: AgentMode,
+    reason: "budget" | "stall",
+    cap: number,
+    person?: PersonWorkspace,
+  ): Promise<never> {
+    agent.budgetExhausted = reason;
+    const label = person?.label ?? "协调器";
+    if (person && mode === "person" && !this.stopped) {
+      agent.messages.push({
+        role: "user",
+        content:
+          (reason === "stall" ? "已连续多轮没有新进展" : "调用预算已用尽") +
+          "：本轮只允许用 write_person（已有课表用 mode=append，尚未建表用 replace）或 amend_timetable 保存已经核对的课程，看不清的写入 unresolved。不要再读取或调用其他工具。",
+      });
+      try {
+        const reply = await this.request(agent, mode, person);
+        if (reply.metrics) this.recordMetrics(reply.metrics, person.key);
+        agent.turns++;
+        this.job.turns++;
+        agent.messages.push(...reply.messages);
+        for (const call of reply.calls ?? []) {
+          let result: unknown;
+          if (["write_person", "amend_timetable"].includes(call.name)) {
+            try {
+              result = (await this.execute(agent, call, mode, person)).result;
+            } catch (e) {
+              result = { error: (e as Error).message };
+            }
+          } else result = { error: "调用预算已用尽，本轮只允许保存" };
+          agent.messages.push({
+            role: "tool",
+            content: [{ type: "tool-result", toolCallId: call.id, toolName: call.name, output: { type: "json", value: result as any } }],
+          });
+          this.log(`${label} · 收尾保存 · ${call.name}` + ((result as any)?.error ? " · 失败：" + String((result as any).error).slice(0, 60) : ""));
+        }
+        await this.persist();
+      } catch {
+        /* Keep whatever is already saved; the stop below still applies. */
+      }
+    }
+    const courses = person
+      ? Object.values(person.timetables).reduce((n, t) => n + t.entries.length, 0)
+      : 0;
+    throw Error(
+      (reason === "stall"
+        ? `连续 ${STALL_LIMIT} 轮没有新进展，已停止`
+        : `调用预算已用尽（本轮 ${cap} 次）`) +
+        (person ? `；已保存 ${courses} 门课，继续处理会再给一轮预算` : "；继续处理会再给一轮预算"),
+    );
   }
   private async runConsistency() {
     const job = this.job, session = job.session!;

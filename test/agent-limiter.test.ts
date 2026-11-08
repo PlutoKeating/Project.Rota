@@ -76,3 +76,29 @@ it("sends pixels only for the most recent images and leaves a re-view pointer fo
   expect(out[0].content[1].text).toContain("view_image");
   expect(messages[0].content[1].type).toBe("image");
 });
+
+it("compacts the middle of a long transcript without splitting tool call/result pairs", async () => {
+  const { compactMessages } = await import("../src/shared/agent-import/context");
+  const pad = "x".repeat(1000);
+  const messages: any[] = [
+    { role: "user", content: "任务" },
+    { role: "user", content: "预读来源" },
+  ];
+  for (let i = 0; i < 20; i++)
+    messages.push(
+      { role: "assistant", content: [{ type: "reasoning", text: "思考" + i }, { type: "tool-call", toolCallId: "c" + i, toolName: "view_image", input: { path: "a", pad } }] },
+      { role: "tool", content: [{ type: "tool-result", toolCallId: "c" + i, toolName: "view_image", output: { type: "json", value: { pad } } }] },
+    );
+  const out = compactMessages(messages, 5000)!;
+  expect(out.dropped).toBeGreaterThan(0);
+  expect(out.messages[0].content).toBe("任务");
+  expect(out.messages[1].content).toBe("预读来源");
+  expect(out.messages[2].role).toBe("user");
+  expect(String(out.messages[2].content)).toContain("思考");
+  expect(out.messages[3].role).toBe("assistant");
+  const calls = new Set(out.messages.flatMap((m: any) => m.role === "assistant" ? m.content.filter((p: any) => p.type === "tool-call").map((p: any) => p.toolCallId) : []));
+  const results = out.messages.flatMap((m: any) => m.role === "tool" ? m.content.map((p: any) => p.toolCallId) : []);
+  expect(results.every((id: string) => calls.has(id))).toBe(true);
+  expect(JSON.stringify(out.messages).length).toBeLessThan(JSON.stringify(messages).length / 2);
+  expect(compactMessages(messages.slice(0, 2), 5000)).toBeUndefined();
+});
