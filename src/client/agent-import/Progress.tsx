@@ -111,18 +111,40 @@ export function splitLabel(label: string): { name: string; tag?: string } {
   return m ? { name: m[1], tag: m[2] } : { name: label };
 }
 
-type Lane = "done" | "working" | "retry" | "failed" | "queued";
+type Lane = "done" | "check" | "working" | "retry" | "failed" | "queued";
 const LANES: { lane: Lane; label: string; color: string }[] = [
   { lane: "done", label: "完成", color: "bg-emerald-600" },
+  { lane: "check", label: "需确认", color: "bg-amber-500" },
   { lane: "working", label: "处理中", color: "bg-indigo-600" },
-  { lane: "retry", label: "等待重试", color: "bg-amber-500" },
+  { lane: "retry", label: "等待重试", color: "bg-indigo-300 dark:bg-indigo-400/60" },
   { lane: "failed", label: "失败", color: "bg-rose-600" },
   { lane: "queued", label: "排队", color: "bg-slate-300 dark:bg-slate-700" },
 ];
 
+const coursesOf = (p: PersonWorkspace) =>
+  Object.values(p.timetables).reduce((n, t) => n + t.entries.length, 0);
+const issuesOf = (p: PersonWorkspace) => [
+  ...p.unresolved,
+  ...Object.values(p.timetables).flatMap((t) => t.unresolved),
+];
+/** One short reason a finished person still needs the operator, or undefined. */
+export function attentionOf(p: PersonWorkspace): string | undefined {
+  if (p.status !== "done") return undefined;
+  const name = p.information?.full_name ?? splitLabel(p.label).name;
+  const others = [
+    ...new Set(
+      Object.values(p.checks).flatMap((c) => c.source_person_names ?? []),
+    ),
+  ].filter((n) => n && n !== name);
+  if (others.length) return `材料是 ${others.join("、")} 的课表`;
+  if (!coursesOf(p)) return "未找到本人课表";
+  const issues = new Set(issuesOf(p)).size;
+  return issues ? `${issues} 项待确认` : undefined;
+}
+
 function laneOf(job: Job, p: PersonWorkspace): Lane {
   const activity = job.activity?.[p.key]?.text;
-  if (p.status === "done") return "done";
+  if (p.status === "done") return attentionOf(p) ? "check" : "done";
   if (activity === "排队重试") return "retry";
   if (activity === "排队") return "queued";
   // A requeued person has a fresh agent (no error) until it starts again.
@@ -216,7 +238,7 @@ export function LiveStatus({ job }: { job: Job }) {
             <div className="flex items-baseline gap-1.5">
               <dt className="text-slate-500">人员</dt>
               <dd className="font-semibold tabular-nums">
-                {counts.done}
+                {counts.done + counts.check}
                 <span className="font-normal text-slate-400">/{people.length}</span>
               </dd>
             </div>
@@ -301,8 +323,9 @@ export function LiveStatus({ job }: { job: Job }) {
 
 const LANE_STYLE: Record<Lane, { bar: string; border: string; label: string }> = {
   done: { bar: "bg-emerald-600", border: "border-slate-200 dark:border-slate-800", label: "完成" },
+  check: { bar: "bg-amber-500", border: "border-amber-300 dark:border-amber-500/40", label: "需确认" },
   working: { bar: "bg-indigo-600", border: "border-slate-200 dark:border-slate-800", label: "处理中" },
-  retry: { bar: "bg-amber-500", border: "border-amber-300 dark:border-amber-500/40", label: "等待重试" },
+  retry: { bar: "bg-indigo-300 dark:bg-indigo-400/60", border: "border-slate-200 dark:border-slate-800", label: "等待重试" },
   failed: { bar: "bg-rose-600", border: "border-rose-300 dark:border-rose-500/40", label: "失败" },
   queued: { bar: "bg-slate-300 dark:bg-slate-700", border: "border-slate-200 dark:border-slate-800", label: "排队" },
 };
@@ -319,7 +342,8 @@ export function PeopleGrid({
   const [open, setOpen] = useState<string>();
   // Once everything is ready for review, only people needing a decision stay on screen.
   const people = Object.values(job.session?.people ?? {}).filter(
-    (p) => job.status !== "review" || p.status !== "done" || !!identity?.(p),
+    (p) =>
+      job.status !== "review" || p.status !== "done" || !!identity?.(p) || !!attentionOf(p),
   );
   if (!people.length)
     return running && stepOf(job) === 0 ? (
@@ -377,6 +401,8 @@ export function PeopleGrid({
                   </span>
                   {lane === "done" ? (
                     <Icon name="check" className="rota-pop size-4 shrink-0 text-emerald-600" />
+                  ) : lane === "check" ? (
+                    <Icon name="alert" className="size-4 shrink-0 text-amber-600" />
                   ) : lane === "failed" ? (
                     <Icon name="alert" className="size-4 shrink-0 text-rose-600" />
                   ) : null}
@@ -396,12 +422,14 @@ export function PeopleGrid({
                     className={cx(
                       "truncate",
                       lane === "failed" && "text-rose-700 dark:text-rose-300",
-                      lane === "retry" && "text-amber-700 dark:text-amber-300",
+                      lane === "check" && "text-amber-700 dark:text-amber-300",
                     )}
-                    title={p.agent.error}
+                    title={p.agent.error ?? issuesOf(p).join("\n")}
                   >
                     {error
                       ? friendlyError(error)
+                      : lane === "check"
+                        ? attentionOf(p)
                       : activity
                         ? activity.text
                         : style.label}
@@ -455,6 +483,15 @@ function PersonDetail({
           <Icon name="x" className="size-4" />
         </button>
       </header>
+      {issuesOf(person).length > 0 && (
+        <ul className="mt-2 space-y-1 rounded-lg bg-amber-50 px-3 py-2 text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
+          {[...new Set(issuesOf(person))].map((issue) => (
+            <li key={issue} className="break-words">
+              {issue}
+            </li>
+          ))}
+        </ul>
+      )}
       {person.agent.error && (
         <p className="mt-2 break-words rounded-lg bg-rose-50 px-3 py-2 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300">
           {person.agent.error}
