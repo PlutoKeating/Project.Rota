@@ -217,7 +217,7 @@ function runWorker(
         worker.onerror = () => {
           clearTimeout(timeout);
           healthy = false;
-          reject(Error("本地文档工具加载失败，请刷新后重试"));
+          reject(Error("本地文档工具加载失败：页面版本可能已更新，请暂停后刷新页面再继续"));
         };
         worker.postMessage(
           {

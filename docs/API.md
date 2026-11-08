@@ -235,7 +235,7 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 
 协调器工具负责材料分派、公共组织/日历和最终核对；人员模式仅开放本人来源阅读、write_person 与 finish_person。具体 schema 以 `src/shared/agent-import/tools.ts` 和 `person-workspace.ts` 为准。工具只写本地对象，正式写入继续使用上述 apply 事务接口。新旧前端/Worker 不能混用工具协议，须同步部署。
 
-模型凭据仍仅在 Worker。每候选最多90秒，候选窗口120秒；浏览器截止130秒加按100 KB/s估算的上传时间（最多再加170秒），SDK隐式重试关闭。浏览器放弃请求时（`enable_request_signal`）Worker 中止当前上游调用且不再尝试后续候选。DeepSeek 官方端点未配置 reasoning_effort 时，person 模式默认 low，其他模式保持默认。metrics 保存 requestId、purpose、durationMs、token用量与逐供应商尝试状态；浏览器另标记 actorId。网络错误独立退避，额度耗尽不立即重试。原始上游错误和密钥不返回。
+模型凭据仍仅在 Worker。每候选最多90秒，候选窗口120秒；浏览器截止130秒加按100 KB/s估算的上传时间（最多再加170秒），SDK隐式重试关闭。turn 请求体超过 16 MB 时在解析前按 Content-Length 返回 413。浏览器放弃请求时（`enable_request_signal`）Worker 中止当前上游调用且不再尝试后续候选。DeepSeek 官方端点未配置 reasoning_effort 时，person 模式默认 low，其他模式保持默认。metrics 保存 requestId、purpose、durationMs、token用量与逐供应商尝试状态；浏览器另标记 actorId。网络错误独立退避，额度耗尽不立即重试。原始上游错误和密钥不返回。
 
 人员查询和编辑支持 className、major。apply 可携带 `review: {version:1,timetables,calendars,checks,consistency_review?,unresolved}`，最大2MB，与业务数据同事务保存并纳入幂等摘要。`GET /agent-imports` 返回本人最近20个已提交批次；`GET /agent-imports/:id/report` 返回 review 或 null，仍检查批次归属。审核报告不包含原件、模型对话和凭据。
 

@@ -1,10 +1,13 @@
 import type { ModelMessage } from "ai";
-import { dropDuplicateImages } from "../../shared/agent-import/context";
+import { dropDuplicateImages, keepRecentImages } from "../../shared/agent-import/context";
+
+// Most recent images sent with each request; older ones are re-viewable on demand.
+export const RECENT_IMAGES = 6;
 
 // Originals remain in the material store. Bound only the model transport copies,
 // including images restored from checkpoints created before this budget existed.
-export async function fitImagePayload(messages: ModelMessage[], total = 8000000): Promise<ModelMessage[]> {
-  messages = dropDuplicateImages(messages);
+export async function fitImagePayload(messages: ModelMessage[], total = 3000000): Promise<ModelMessage[]> {
+  messages = keepRecentImages(dropDuplicateImages(messages), RECENT_IMAGES);
   const count = messages.reduce((n, m) => n + (m.role === "user" && Array.isArray(m.content)
     ? m.content.filter((p) => p.type === "image" && typeof p.image === "string" && p.image.startsWith("data:")).length : 0), 0);
   if (!count) return messages;
@@ -20,7 +23,7 @@ export async function fitImagePayload(messages: ModelMessage[], total = 8000000)
       const bitmap = await createImageBitmap(await (await fetch(p.image)).blob());
       try {
         const canvas = document.createElement("canvas");
-        let scale = Math.min(1, 4096 / Math.max(bitmap.width, bitmap.height));
+        let scale = Math.min(1, 2000 / Math.max(bitmap.width, bitmap.height));
         let encoded = "";
         do {
           canvas.width = Math.max(1, Math.floor(bitmap.width * scale));

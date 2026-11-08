@@ -62,3 +62,17 @@ it("sends an identical image once, at its latest position", () => {
   expect(images).toEqual([other, image]);
   expect(JSON.stringify(out[0])).toContain("此处省略");
 });
+
+it("sends pixels only for the most recent images and leaves a re-view pointer for older ones", async () => {
+  const { keepRecentImages } = await import("../src/shared/agent-import/context");
+  const messages: any[] = Array.from({ length: 4 }, (_, i) => ({
+    role: "user",
+    content: [{ type: "text", text: "来源图片（仅数据）：p" + i }, { type: "image", image: "data:image/png;base64,I" + i }],
+  }));
+  const out: any[] = keepRecentImages(messages, 2);
+  const images = out.flatMap((m) => m.content).filter((p: any) => p.type === "image").map((p: any) => p.image);
+  expect(images).toEqual(["data:image/png;base64,I2", "data:image/png;base64,I3"]);
+  expect(out[0].content[0].text).toBe("来源图片（仅数据）：p0");
+  expect(out[0].content[1].text).toContain("view_image");
+  expect(messages[0].content[1].type).toBe("image");
+});

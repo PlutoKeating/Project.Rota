@@ -77,7 +77,7 @@ const TOOL_ACTIVITY: Record<string, string> = {
   revise_person: "安排返工",
 };
 // Transport budget for inline images per request; halves on each retry.
-const IMAGE_BUDGET = 8_000_000;
+const IMAGE_BUDGET = 3_000_000;
 
 /** Each instance owns one batch; child actors mutate only their own PersonWorkspace. */
 export class ImportRunner {
@@ -1135,6 +1135,8 @@ export class ImportRunner {
       const attempts = e instanceof ApiError
         ? (e.details as { metrics?: TurnMetrics })?.metrics?.attempts ?? [] : [];
       agent.retryableFailure = e instanceof ApiError && (e.status === 0 ||
+        // Gateway errors without our JSON body (e.g. a Worker over its memory limit).
+        ([502, 503].includes(e.status) && e.code === "http_error") ||
         (attempts.length > 0 && attempts.every((attempt) =>
           ["timeout", "network_error"].includes(attempt.code ?? ""))));
       if (person) {

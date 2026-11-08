@@ -60,12 +60,6 @@ export async function agentTurn(
       cooldowns: z.record(z.string(), z.number()).optional(),
     })
     .parse(input);
-  if (JSON.stringify(body).length > 20 * 1024 * 1024)
-    throw new HttpError(
-      413,
-      "too_large",
-      "本轮上下文过大，请缩小图片或整理上下文",
-    );
   const rows = await env.DB.prepare(
     "SELECT id,params FROM llm_provider WHERE enabled=1 ORDER BY name,id",
   ).all<{ id: string; params: string | null }>();

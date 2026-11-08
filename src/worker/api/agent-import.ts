@@ -215,6 +215,10 @@ app.get("/:id/report", async (c) => {
 app.post("/:id/turn", async (c) => {
   const row = await batchOwner(c.env.DB, c.req.param("id"), c.get("user").id);
   if (row.status !== "draft") fail("批次已结束", 409);
+  // Reject oversized turns before parsing: several multi-MB bodies parsed and
+  // re-serialized at once exhaust the isolate's 128 MB and fail every request in it.
+  if (Number(c.req.header("content-length") ?? 0) > 16 * 1024 * 1024)
+    fail("本轮上下文过大，请缩小图片或整理上下文", 413);
   try {
     return c.json(
       await agentTurn(

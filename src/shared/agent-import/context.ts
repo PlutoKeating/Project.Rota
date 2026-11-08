@@ -83,3 +83,32 @@ export function dropDuplicateImages(messages: ModelMessage[]): ModelMessage[] {
     };
   });
 }
+
+/**
+ * Transport-only: send pixels for the most recent `keep` images and replace older
+ * ones with a pointer. Context grows by every view, and resending all of them
+ * each turn overloads both the upload link and the Worker's memory.
+ */
+export function keepRecentImages(messages: ModelMessage[], keep: number): ModelMessage[] {
+  let seen = 0;
+  const out = [...messages];
+  for (let i = out.length - 1; i >= 0; i--) {
+    const m = out[i];
+    if (m.role !== "user" || !Array.isArray(m.content)) continue;
+    if (!m.content.some((p) => p.type === "image")) continue;
+    const images = m.content.filter((p) => p.type === "image").length;
+    if (seen + images <= keep) {
+      seen += images;
+      continue;
+    }
+    out[i] = {
+      ...m,
+      content: m.content.map((p) =>
+        p.type === "image"
+          ? { type: "text" as const, text: "（较早查看的图片本轮未发送；如需再看，请重新调用 view_image）" }
+          : p,
+      ),
+    };
+  }
+  return out;
+}
