@@ -82,11 +82,19 @@ export function ImportsPage() {
   }, [owner]);
   useEffect(() => {
     if (!job || !["running", "review"].includes(job.status)) return;
+    // Locks last 180 s; one failed 45 s keep-alive (deploy, network blip) is retried
+    // on the next tick, and only two in a row stop the run.
+    let failures = 0;
     const timer = setInterval(() => {
-      void renewLease(current.current!).catch((e) => {
-        runner.current?.stop();
-        setError("相关数据锁续期失败：" + messageOf(e));
-      });
+      void renewLease(current.current!)
+        .then(() => {
+          failures = 0;
+        })
+        .catch((e) => {
+          if (++failures < 2) return;
+          runner.current?.stop();
+          setError("相关数据锁续期失败：" + messageOf(e));
+        });
     }, 45000);
     return () => clearInterval(timer);
   }, [job?.id, job?.status]);
