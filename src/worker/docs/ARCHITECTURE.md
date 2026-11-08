@@ -65,3 +65,7 @@ Google 导入请求支持供应商 params.reasoningEffort（或 reasoning_effort
 ## DeepSeek 思考模式下的工具调用
 
 DeepSeek官方Chat接口默认开启思考模式，此时`tool_choice=required`或指定工具返回HTTP 400；思考模式的工具调用历史还必须回传`reasoning_content`。Agent对官方主机`api.deepseek.com`（OpenAI兼容Chat）保留思考、改用`tool_choice=auto`，未返回工具调用仍按协议失败切换下一个模型；由其他供应商产生、缺少推理内容的工具调用回合，仅在发给DeepSeek的副本中补占位推理，不改浏览器历史。配置`reasoning_effort: "none"`时关闭思考并继续强制工具调用。其他主机与自定义网关不变；无新增依赖、配置项或迁移。依据：[DeepSeek Chat Completion](https://api-docs.deepseek.com/api/create-chat-completion)、[思考模式](https://api-docs.deepseek.com/guides/thinking_mode)。回归见`test/integration/deepseek.test.ts`。
+
+## 断开中止与 DeepSeek 推理深度（2026-11-08）
+
+`wrangler.jsonc` 增加兼容标志 `enable_request_signal`。`/api/agent-imports/:id/turn` 把 `request.signal` 传入 `agentTurn`：浏览器超时或断开后，当前上游调用通过 `AbortSignal.any` 中止，不再尝试后续候选，避免无人接收的模型调用继续计费并占用供应商限流。DeepSeek 官方端点未配置 `reasoning_effort` 时，`person`（首轮提取）模式使用 `low` 以缩短思考延迟；`verify` 等复核模式保持默认深度。

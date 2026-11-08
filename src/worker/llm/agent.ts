@@ -42,7 +42,13 @@ async function deadline<T>(operation: Promise<T>, ms: number): Promise<T> {
     clearTimeout(timer!);
   }
 }
-export async function agentTurn(env: Env, input: unknown, sessionId: string) {
+export async function agentTurn(
+  env: Env,
+  input: unknown,
+  sessionId: string,
+  // Aborts when the browser gives up, so no orphaned upstream call keeps billing.
+  signal?: AbortSignal,
+) {
   const body = z
     .object({
       messages: z.array(z.unknown()).min(1).max(1000),
@@ -99,7 +105,7 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
   };
   const failures: string[] = [];
   for (const row of candidates) {
-    if (Date.now() - started >= 110000) break;
+    if (Date.now() - started >= 110000 || signal?.aborted) break;
     const attemptStart = Date.now();
     let modelId = "unknown";
     try {
@@ -232,7 +238,10 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
           ? configuredEffort
           : /minimax.*m3[.-]1/i.test(p.model)
             ? "medium"
-            : undefined;
+            : url.hostname === "api.deepseek.com" && body.mode === "person"
+              ? // Bulk first-pass extraction; independent verification keeps the default depth.
+                "low"
+              : undefined;
       // DeepSeek enables thinking by default and rejects tool_choice=required
       // (or a named tool) in thinking mode with HTTP 400. Keep thinking and
       // let the model choose; a reply without tool calls still fails over.
@@ -295,7 +304,9 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
                   ? { compatible: { reasoningEffort: effort } }
                   : undefined,
           maxRetries: 0,
-          abortSignal: AbortSignal.timeout(remaining),
+          abortSignal: signal
+            ? AbortSignal.any([AbortSignal.timeout(remaining), signal])
+            : AbortSignal.timeout(remaining),
         }),
         remaining,
       );
@@ -416,6 +427,7 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
           ? (error as any).cause.code
           : undefined,
       });
+      if (signal?.aborted) break;
       failures.push(
         `${modelId}：${code === "quota_exhausted" ? "供应商额度已用尽，请恢复额度或选择其他模型" : code}${status ? " (" + status + ")" : ""}`,
       );

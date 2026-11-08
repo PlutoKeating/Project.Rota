@@ -61,3 +61,20 @@ it("leaves other OpenAI-compatible hosts unchanged", async () => {
   expect(bodies[0].tool_choice).toBe("required");
   expect(bodies[0].messages.find((m: any) => m.role === "assistant").reasoning_content).toBeUndefined();
 });
+
+it("uses low reasoning effort for DeepSeek first-pass extraction only", async () => {
+  const bodies = upstream();
+  await agentTurn(await fixture(), { mode: "person", context: "{}", messages: [{ role: "user", content: "ping" }] }, "batch");
+  await agentTurn(await fixture(), { mode: "verify", context: "{}", messages: [{ role: "user", content: "ping" }] }, "batch");
+  expect(bodies[0].reasoning_effort).toBe("low");
+  expect(bodies[1].reasoning_effort).toBeUndefined();
+});
+
+it("stops trying providers once the browser has disconnected", async () => {
+  const bodies = upstream();
+  const controller = new AbortController();
+  controller.abort();
+  await expect(agentTurn(await fixture(), { mode: "discover", context: "{}", messages: [{ role: "user", content: "ping" }] }, "batch", controller.signal))
+    .rejects.toThrow();
+  expect(bodies).toHaveLength(0);
+});

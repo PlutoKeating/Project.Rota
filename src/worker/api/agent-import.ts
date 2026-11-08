@@ -217,7 +217,12 @@ app.post("/:id/turn", async (c) => {
   if (row.status !== "draft") fail("批次已结束", 409);
   try {
     return c.json(
-      await agentTurn(c.env, await c.req.json(), c.req.param("id")),
+      await agentTurn(
+        c.env,
+        await c.req.json(),
+        c.req.param("id"),
+        c.req.raw.signal,
+      ),
     );
   } catch (e) {
     if (e instanceof AgentTurnError)
