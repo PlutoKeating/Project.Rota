@@ -218,7 +218,7 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 | POST | `/agent-imports` | 创建批次，返回 `{id}`，不写业务数据 |
 | GET | `/agent-imports/:id` | 本人批次状态及提交摘要 |
 | POST | `/agent-imports/:id/turn` | `{messages,context,mode?,preferredProvider?,cooldowns?}`；单轮模型调用，返回 `{messages,calls,text,model,providerId,usage,metrics}`，工具由浏览器执行 |
-| POST | `/agent-imports/:id/lease` | `{changes}`；检查原值并取得/续期 180 秒相关数据锁 |
+| POST | `/agent-imports/:id/lease` | `{changes}`：检查原值并取得 180 秒相关数据锁；`{}`：仅把本批已持有且未过期的锁续期 180 秒，锁已过期返回 409，客户端随后带 `{changes}` 重新取得 |
 | POST | `/agent-imports/:id/apply` | `{changes,summary?}`；服务端重新校验，单事务提交，批次幂等 |
 | POST | `/agent-imports/:id/release` | 释放本批租约 |
 | POST | `/agent-imports/:id/cancel` | 取消尚未提交批次并释放租约 |

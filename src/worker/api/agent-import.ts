@@ -242,7 +242,21 @@ app.post("/:id/lease", async (c) => {
     id = c.req.param("id");
   const row = await batchOwner(db, id, c.get("user").id);
   if (row.status !== "draft") fail("批次已结束", 409);
-  const body = await readRequest(c);
+  const raw = (await c.req.json()) as { changes?: unknown };
+  // Keep-alive: extend the locks already held without re-uploading the change set
+  // (hundreds of KB for a full batch; slow uplinks hit Cloudflare's 408).
+  if (raw?.changes === undefined) {
+    const expires = Math.floor(Date.now() / 1000) + 180;
+    const result = await db
+      .prepare(
+        "UPDATE agent_lock SET expires_at=? WHERE batch_id=? AND expires_at>unixepoch()",
+      )
+      .bind(expires, id)
+      .run();
+    if (!result.meta.changes) fail("相关数据锁已过期，需要重新取得", 409);
+    return c.json({ expiresAt: expires * 1000 });
+  }
+  const body = requestSchema.parse(raw);
   const current = await snapshot(db);
   let final: Snapshot;
   try {
@@ -361,9 +375,12 @@ app.post("/:id/apply", async (c) => {
         ],
       ),
     ]);
-  } catch {
+  } catch (e) {
+    // The database's own reason (constraint name, limit) is what makes a rollback diagnosable.
+    const cause = String((e as Error)?.message ?? "").slice(0, 200);
     fail(
-      "提交已回滚：数据变化、锁已过期或数据库约束冲突。请重新校验后重试",
+      "提交已回滚：数据变化、锁已过期或数据库约束冲突。请重新校验后重试" +
+        (cause ? "（" + cause + "）" : ""),
       409,
     );
   }

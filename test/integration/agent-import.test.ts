@@ -120,7 +120,14 @@ describe("browser Agent import transactional boundary", () => {
       (await request(e, "POST", `/agent-imports/${id}/apply`, payload)).status,
     ).toBe(409);
     expect(
+      (await request(e, "POST", `/agent-imports/${id}/lease`, {})).status,
+    ).toBe(409);
+    expect(
       (await request(e, "POST", `/agent-imports/${id}/lease`, payload)).status,
+    ).toBe(200);
+    // Keep-alive extends the held locks without re-sending the change set.
+    expect(
+      (await request(e, "POST", `/agent-imports/${id}/lease`, {})).status,
     ).toBe(200);
     const applied = await request(
       e,

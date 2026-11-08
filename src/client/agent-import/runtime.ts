@@ -1,4 +1,4 @@
-import { api } from "../lib/api";
+import { api, type ApiError } from "../lib/api";
 import {
   applyChanges,
   canonical,
@@ -148,10 +148,25 @@ export async function rebase(job: Job) {
   job.draft = next;
   await saveJob(job);
 }
-export async function renewLease(job: Job) {
-  return api.post(`/agent-imports/${job.id}/lease`, {
-    changes: changesFor(job),
-  });
+// Revision whose change set currently holds the server locks, per batch.
+const leased = new Map<string, number>();
+/**
+ * Takes the locks with the full change set once per draft revision; later
+ * keep-alives only extend them. Falls back to a full lease when they expired.
+ */
+export async function renewLease(job: Job, full = false) {
+  const url = `/agent-imports/${job.id}/lease`;
+  const timeoutMs = (bytes: number) => 30000 + bytes / 10;
+  if (!full && leased.get(job.id) === job.revision)
+    try {
+      return await api.post(url, {});
+    } catch (e) {
+      if ((e as ApiError).status !== 409) throw e;
+    }
+  leased.delete(job.id);
+  const result = await api.post(url, { changes: changesFor(job) }, { timeoutMs });
+  leased.set(job.id, job.revision);
+  return result;
 }
 export async function checkJob(job: Job) {
   const changes = changesFor(job);
@@ -335,7 +350,7 @@ async function applyJobUnlocked(job: Job) {
   const result = await checkJob(job);
   if (result.issues.length)
     throw Error(result.issues.map((x) => x.message).join("；"));
-  await renewLease(job);
+  await renewLease(job, true);
   const committedSummary = reviewSummary(job, true);
   await api.post(`/agent-imports/${job.id}/apply`, {
     changes: changesFor(job),

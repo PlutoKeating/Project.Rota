@@ -28,10 +28,10 @@ class Statement {
     results: unknown[];
   } {
     const stmt = this.db.prepare(this.sql);
-    const results = /^\s*(SELECT|WITH)\b/i.test(this.sql)
-      ? stmt.all(...this.params)
-      : (stmt.run(...this.params), []);
-    return { success: true, meta: {}, results };
+    if (/^\s*(SELECT|WITH)\b/i.test(this.sql))
+      return { success: true, meta: {}, results: stmt.all(...this.params) };
+    const info = stmt.run(...this.params);
+    return { success: true, meta: { changes: Number(info.changes) }, results: [] };
   }
 
   async first<T>(column?: string): Promise<T | null> {
