@@ -59,3 +59,27 @@ export function scopeSourceImages(messages: ModelMessage[], keep: string[]) {
   });
   return { messages: scoped, evicted: [...evicted] };
 }
+
+// Cached tool results make repeated reads return the identical data URL; send
+// such a duplicate once (its latest occurrence) and leave a pointer elsewhere.
+export function dropDuplicateImages(messages: ModelMessage[]): ModelMessage[] {
+  const last = new Map<string, number>();
+  messages.forEach((m, i) => {
+    if (m.role === "user" && Array.isArray(m.content))
+      for (const p of m.content)
+        if (p.type === "image" && typeof p.image === "string") last.set(p.image, i);
+  });
+  return messages.map((m, i) => {
+    if (m.role !== "user" || !Array.isArray(m.content)) return m;
+    if (!m.content.some((p) => p.type === "image" && typeof p.image === "string" && last.get(p.image) !== i))
+      return m;
+    return {
+      ...m,
+      content: m.content.map((p) =>
+        p.type === "image" && typeof p.image === "string" && last.get(p.image) !== i
+          ? { type: "text" as const, text: "（同一图片在后文再次提供，此处省略）" }
+          : p,
+      ),
+    };
+  });
+}

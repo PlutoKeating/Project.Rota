@@ -1,12 +1,14 @@
 import type { ModelMessage } from "ai";
+import { dropDuplicateImages } from "../../shared/agent-import/context";
 
 // Originals remain in the material store. Bound only the model transport copies,
 // including images restored from checkpoints created before this budget existed.
-export async function fitImagePayload(messages: ModelMessage[]): Promise<ModelMessage[]> {
+export async function fitImagePayload(messages: ModelMessage[], total = 8000000): Promise<ModelMessage[]> {
+  messages = dropDuplicateImages(messages);
   const count = messages.reduce((n, m) => n + (m.role === "user" && Array.isArray(m.content)
     ? m.content.filter((p) => p.type === "image" && typeof p.image === "string" && p.image.startsWith("data:")).length : 0), 0);
   if (!count) return messages;
-  const budget = Math.floor(Math.min(1500000, 12000000 / count));
+  const budget = Math.floor(Math.min(1500000, total / count));
   return Promise.all(messages.map(async (m): Promise<ModelMessage> => {
     if (m.role !== "user" || !Array.isArray(m.content)) return m;
     const content = [];

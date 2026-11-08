@@ -499,21 +499,24 @@ test("large restored image context fits the transport budget without dropping ev
     const { fitImagePayload } = await import(
       "/src/client/agent-import/image-payload.ts"
     );
-    const canvas = document.createElement("canvas");
-    canvas.width = canvas.height = 2048;
-    const ctx = canvas.getContext("2d")!;
-    const pixels = ctx.createImageData(2048, 2048);
-    let seed = 123456;
-    for (let i = 0; i < pixels.data.length; i += 4) {
-      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
-      pixels.data[i] = seed & 255;
-      pixels.data[i + 1] = (seed >>> 8) & 255;
-      pixels.data[i + 2] = (seed >>> 16) & 255;
-      pixels.data[i + 3] = 255;
-    }
-    ctx.putImageData(pixels, 0, 0);
-    const image = canvas.toDataURL("image/png");
-    const messages = Array.from({ length: 3 }, (_, i) => ({
+    const noise = (start: number) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 2048;
+      const ctx = canvas.getContext("2d")!;
+      const pixels = ctx.createImageData(2048, 2048);
+      let seed = start;
+      for (let i = 0; i < pixels.data.length; i += 4) {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+        pixels.data[i] = seed & 255;
+        pixels.data[i + 1] = (seed >>> 8) & 255;
+        pixels.data[i + 2] = (seed >>> 16) & 255;
+        pixels.data[i + 3] = 255;
+      }
+      ctx.putImageData(pixels, 0, 0);
+      return canvas.toDataURL("image/png");
+    };
+    const originals = [noise(1), noise(2), noise(3)];
+    const messages = originals.map((image, i) => ({
       role: "user" as const,
       content: [
         { type: "text" as const, text: "source:" + i },
@@ -533,7 +536,7 @@ test("large restored image context fits the transport budget without dropping ev
       sources: parts.filter(
         (p) => p.type === "text" && p.text.startsWith("source:"),
       ).length,
-      originalUnchanged: messages.every((m) => m.content[1].image === image),
+      originalUnchanged: messages.every((m, i) => m.content[1].image === originals[i]),
       warns: parts.filter(
         (p) => p.type === "text" && p.text.includes("按原图坐标裁剪"),
       ).length,

@@ -65,4 +65,6 @@ export interface Job {
   metrics?: TurnMetrics[];
   phase?: string;
   requestStartedAt?: number;
+  /** Live per-actor activity (person key, reviewer id or "coordinator"); cleared when a run ends. */
+  activity?: Record<string, { text: string; at: number }>;
 }

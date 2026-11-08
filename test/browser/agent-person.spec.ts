@@ -259,16 +259,12 @@ test("large batches bound concurrency and retain every person's verified result"
   let active = 0;
   let peak = 0;
   const verified = new Set<string>();
-  let release!: () => void;
-  const firstWave = new Promise<void>((resolve) => { release = resolve; });
   await setup(page, async (body) => {
     if (body.mode === "discover") return discovery(keys);
-    if (body.mode === "person") {
+    if (body.mode === "person" || body.mode === "verify") {
       active++;
       peak = Math.max(peak, active);
-      if (active === 16) release();
-      await firstWave;
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 80));
       active--;
     }
     if (body.mode === "verify") verified.add(JSON.parse(body.context).person.key);
@@ -277,7 +273,9 @@ test("large batches bound concurrency and retain every person's verified result"
   await upload(page, keys);
   await expect.poll(async () => (await saved(page))?.status, { timeout: 10000 }).toBe("review");
   const job = await saved(page);
-  expect(peak).toBe(16);
+  // Adaptive window: starts at 4 in-flight model requests, never above the batch cap of 8.
+  expect(peak).toBeGreaterThanOrEqual(4);
+  expect(peak).toBeLessThanOrEqual(8);
   expect(verified.size).toBe(18);
   expect(Object.keys(job.timetables)).toHaveLength(18);
   expect(job.draft.person).toHaveLength(18);

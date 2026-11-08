@@ -51,6 +51,7 @@ import {
 import { projectPeople } from "./projection";
 import { importSignature, reviewSummary } from "./readiness";
 import { alreadyApplied, rebase, checkJob } from "./runtime";
+import { AdaptiveGate } from "./limiter";
 
 type Reply = {
   messages: ModelMessage[];
@@ -60,25 +61,77 @@ type Reply = {
   metrics?: TurnMetrics;
 };
 const readers = ["read_document", "view_image", "render_sheet", "ocr_image"];
+/** Short user-facing labels for what an actor is doing right now. */
+const TOOL_ACTIVITY: Record<string, string> = {
+  read_document: "读取文件",
+  view_image: "查看图片",
+  render_sheet: "渲染表格",
+  ocr_image: "文字识别",
+  tree: "浏览材料",
+  unpack: "解包",
+  write_person: "保存课表",
+  finish_person: "提交复核",
+  dispatch_people: "分派人员",
+  save_calendars: "保存日历",
+  review_consistency: "核对差异",
+  revise_person: "安排返工",
+};
+// Transport budget for inline images per request; halves on each retry.
+const IMAGE_BUDGET = 8_000_000;
 
 /** Each instance owns one batch; child actors mutate only their own PersonWorkspace. */
 export class ImportRunner {
   private stopped = false;
   private busy = false;
-  private saving: Promise<unknown> = Promise.resolve();
+  private dirty = false;
+  private flushing?: Promise<void>;
+  private updateTimer?: ReturnType<typeof setTimeout>;
+  // Model requests share upload bandwidth and provider capacity: start small and
+  // widen on success, halve on timeouts/overload. Actors keep reading meanwhile.
+  private modelGate: AdaptiveGate;
   constructor(
     readonly job: Job,
     private update: (job: Job) => void,
-  ) {}
+  ) {
+    const max = Math.max(1, job.session?.concurrency ?? 8);
+    this.modelGate = new AdaptiveGate(1, max, Math.min(4, max));
+  }
   // Drain already-started requests before allowing another runner or human edit.
   stop() {
     this.stopped = true;
   }
-  private persist() {
-    const snapshot = structuredClone(this.job);
-    this.saving = this.saving.catch(() => {}).then(() => saveJob(snapshot));
-    this.update({ ...this.job });
-    return this.saving;
+  /**
+   * Coalesced checkpoint: at most one IndexedDB write in flight; writes issued
+   * meanwhile collapse into one follow-up write of the latest state. The
+   * returned promise resolves after a write that includes the caller's changes.
+   */
+  private persist(): Promise<void> {
+    this.dirty = true;
+    this.refresh();
+    this.flushing ??= (async () => {
+      try {
+        while (this.dirty) {
+          this.dirty = false;
+          await saveJob(this.job);
+        }
+      } finally {
+        this.flushing = undefined;
+      }
+    })();
+    return this.flushing;
+  }
+  /** Throttled UI refresh; React only needs a few frames per second here. */
+  private refresh() {
+    this.updateTimer ??= setTimeout(() => {
+      this.updateTimer = undefined;
+      this.update({ ...this.job });
+    }, 200);
+  }
+  private activity(actor: string, text?: string) {
+    const map = (this.job.activity ??= {});
+    if (text) map[actor] = { text, at: Date.now() };
+    else delete map[actor];
+    this.refresh();
   }
   private log(text: string) {
     this.job.log.push({ at: Date.now(), text });
@@ -808,19 +861,32 @@ export class ImportRunner {
   ): Promise<Reply> {
     let networkRetries = 0,
       modelRetries = 0;
+    const actor = reviewer?.id ?? person?.key ?? "coordinator";
     for (;;) {
       try {
-        return await api.post<Reply>(
-          `/agent-imports/${this.job.id}/turn`,
-          {
-            mode,
-            messages: await fitImagePayload(agent.messages),
-            context: await this.context(person, reviewer),
-            preferredProvider: this.job.preferredProvider,
-            cooldowns: this.job.cooldowns,
+        // Retries resend a smaller image payload instead of the same request.
+        const budget = IMAGE_BUDGET / 2 ** (networkRetries + modelRetries);
+        const body = {
+          mode,
+          messages: await fitImagePayload(agent.messages, budget),
+          context: await this.context(person, reviewer),
+          preferredProvider: this.job.preferredProvider,
+          cooldowns: this.job.cooldowns,
+        };
+        const reply = await this.modelGate.run(
+          () => {
+            this.activity(actor, "等待模型");
+            if (!person && !reviewer) this.job.requestStartedAt = Date.now();
+            return api.post<Reply>(`/agent-imports/${this.job.id}/turn`, body, {
+              // Server budget is 120 s after the body arrives; allow upload time
+              // at a conservative 100 KB/s on top, capped at 5 minutes.
+              timeoutMs: (bytes) => 130000 + Math.min(170000, bytes / 100),
+            });
           },
-          { timeoutMs: 130000 },
+          () => this.activity(actor, "排队等模型"),
         );
+        this.modelGate.success();
+        return reply;
       } catch (error) {
         const metrics =
           error instanceof ApiError
@@ -842,17 +908,25 @@ export class ImportRunner {
           error instanceof ApiError &&
           [0, 429, 502, 503, 504].includes(error.status);
         if (
+          error instanceof ApiError &&
+          (error.code === "timeout" ||
+            [429, 503, 504].includes(error.status) ||
+            attempts.some((a) => a.code === "timeout"))
+        )
+          this.modelGate.overload();
+        if (
           this.stopped ||
           quota ||
           !transient ||
           (network ? networkRetries++ >= 3 : modelRetries++ >= 1)
         )
           throw error;
-        agent.messages.push({
-          role: "user",
-          content:
-            "上一请求未返回有效结果，未执行写入。继续当前对象，长课表分段保存；无需重复已有成果。",
-        });
+        const notice =
+          "上一请求未返回有效结果，未执行写入。继续当前对象，长课表分段保存；无需重复已有成果。";
+        // One notice is enough; stacking them only grows the resent context.
+        if (agent.messages.at(-1)?.content !== notice)
+          agent.messages.push({ role: "user", content: notice });
+        this.activity(actor, "稍后重试");
         await this.persist();
         await new Promise((resolve) =>
           setTimeout(
@@ -916,8 +990,10 @@ export class ImportRunner {
                   : "提取 A/B，保留未知事实。")
               : "按当前状态完成材料分派或公共事实协调。",
           });
-          if (person)
+          if (person) {
+            this.activity(person.key, "读取材料");
             await this.preloadSources(agent, [...person.sources], mode, person);
+          }
           else if (mode === "discover") await this.preloadDiscovery(agent);
           await this.persist();
         }
@@ -956,8 +1032,6 @@ export class ImportRunner {
             : mode === "discover"
               ? "识别人员与公共日历"
               : "协调公共日历与跨人差异";
-          job.requestStartedAt = Date.now();
-          this.update({ ...job });
           const reply = await this.request(agent, mode, person, reviewer);
           if (reply.metrics)
             this.recordMetrics(reply.metrics, reviewer?.id ?? person?.key ?? "coordinator");
@@ -981,6 +1055,10 @@ export class ImportRunner {
         while (agent.pending.length && !this.stopped) {
           const call = agent.pending[0];
           const started = Date.now();
+          this.activity(
+            reviewer?.id ?? person?.key ?? "coordinator",
+            TOOL_ACTIVITY[call.name] ?? call.name,
+          );
           let value: { result: unknown; image?: string };
           try {
             value = await this.execute(agent, call, mode, person, reviewer);
@@ -1029,8 +1107,10 @@ export class ImportRunner {
               durationMs: Date.now() - started,
             },
           );
+          const failed = (value.result as { error?: unknown } | null)?.error;
           this.log(
-            `${reviewer?.id ?? person?.label ?? "协调器"} · ${call.name} · ${Date.now() - started} ms`,
+            `${reviewer?.id ?? person?.label ?? "协调器"} · ${call.name} · ${Date.now() - started} ms` +
+              (failed ? " · 失败：" + String(failed).slice(0, 80) : ""),
           );
           if (person && ["done"].includes(person.status) && !agent.pending.length)
             agent.messages = withoutImages(agent.messages);
@@ -1063,6 +1143,8 @@ export class ImportRunner {
       } else if (!reviewer) throw e;
       this.log((reviewer?.id ?? person?.label ?? "协调器") + "：" + agent.error);
       await this.persist();
+    } finally {
+      this.activity(reviewer?.id ?? person?.key ?? "coordinator");
     }
   }
   private async runConsistency() {
@@ -1161,6 +1243,7 @@ export class ImportRunner {
             person.agent = emptyAgent();
             person.agent.turns = turns;
             queue.push(person);
+            this.activity(person.key, "排队重试");
             this.log(`${person.label}：连接/超时失败，已加入队尾补跑（仅一次，重新读取来源）`);
             await this.persist();
           }
@@ -1231,6 +1314,7 @@ export class ImportRunner {
           if (!lock) throw Error("该批次正在其他标签页运行");
           const latest = await loadJob(this.job.id);
           if (latest) Object.assign(this.job, latest);
+          this.job.activity = {};
           try {
             await work();
           } catch (e) {
@@ -1238,7 +1322,10 @@ export class ImportRunner {
           } finally {
             if (this.job.status === "running") this.job.status = "paused";
             this.job.requestStartedAt = undefined;
+            this.job.activity = {};
             await this.persist();
+            clearTimeout(this.updateTimer);
+            this.updateTimer = undefined;
           }
         },
       );

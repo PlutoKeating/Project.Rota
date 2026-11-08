@@ -80,7 +80,7 @@ async function request<T>(
   method: string,
   path: string,
   body?: unknown,
-  options?: { timeoutMs?: number },
+  options?: { timeoutMs?: number | ((bodyBytes: number) => number) },
 ): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   let payload: BodyInit | undefined;
@@ -93,6 +93,11 @@ async function request<T>(
     payload = JSON.stringify(body);
   }
 
+  // A size-aware deadline lets large uploads finish before the server budget starts.
+  const timeoutMs =
+    typeof options?.timeoutMs === "function"
+      ? options.timeoutMs(typeof payload === "string" ? payload.length : 0)
+      : options?.timeoutMs;
   let response: Response;
   try {
     response = await fetch(apiUrl(path), {
@@ -100,16 +105,14 @@ async function request<T>(
       headers,
       body: payload,
       credentials: "same-origin",
-      signal: options?.timeoutMs
-        ? AbortSignal.timeout(options.timeoutMs)
-        : undefined,
+      signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
     });
   } catch (e) {
     if (
       e instanceof DOMException &&
       (e.name === "TimeoutError" || e.name === "AbortError")
     )
-      throw new ApiError(0, "timeout", `请求超时：${path}；进度已保留`);
+      throw new ApiError(0, "timeout", "请求超时，进度已保留");
     throw new ApiError(0, "network", "网络不可达，请检查连接后重试");
   }
 
@@ -149,7 +152,7 @@ export const api = {
   post<T>(
     path: string,
     body?: unknown,
-    options?: { timeoutMs?: number },
+    options?: { timeoutMs?: number | ((bodyBytes: number) => number) },
   ): Promise<T> {
     return request<T>("POST", path, body, options);
   },
