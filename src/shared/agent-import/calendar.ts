@@ -15,7 +15,13 @@ export const calendarSchema = z
   .object({
     id: z.string().min(1).max(60),
     name: z.string().min(1).max(200),
-    term_id: z.string().min(1).max(100).nullable().default(null),
+    term_id: z
+      .string()
+      .min(1)
+      .max(100)
+      .nullable()
+      .default(null)
+      .describe("只能填 existingCalendars.terms 里已有的学期 id；新学期或不确定时必须为 null，不要自拟编号。"),
     start_date: z.iso.date().nullable(),
     week_count: z.number().int().min(1).max(30).nullable(),
     minimum_weeks: z.number().int().min(1).max(30).nullable().default(null),

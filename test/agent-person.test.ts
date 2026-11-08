@@ -154,6 +154,13 @@ describe("person object projection", () => {
     expect(job.draft.term.find((t) => t.id === "cal:term")?.week_count).toBe(18);
     expect(job.draft.timetable_entry.find((e) => e.id === "workspace:fall:0")?.weeks).toBe("[18]");
   });
+  it("treats a calendar naming a term that does not exist as a new term", () => {
+    const job = jobFixture();
+    job.calendars!.cal.term_id = "2026-2027-1";
+    projectPeople(job);
+    expect(job.draft.term.some((t) => t.id === "cal:term")).toBe(true);
+    expect(job.draft.term.some((t) => t.id === "2026-2027-1")).toBe(false);
+  });
   it("matches A, preserves existing information, replaces only the person's term B", () => {
     const job = jobFixture();
     projectPeople(job);

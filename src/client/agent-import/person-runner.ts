@@ -430,6 +430,14 @@ export class ImportRunner {
         for (const calendar of args.calendars) {
           // Child-provided evidence is already source-validated, but the coordinator must read it before revising.
           await this.validateSources(agent, calendar.sources);
+          if (calendar.term_id && !job.base.term.some((t) => t.id === calendar.term_id))
+            throw Error(
+              `日历 ${calendar.id} 的 term_id「${calendar.term_id}」不是已有学期；` +
+                (job.base.term.length
+                  ? "已有学期 id：" + job.base.term.map((t) => t.id).join("、") + "。"
+                  : "系统里还没有任何学期。") +
+                "新学期请把 term_id 设为 null。",
+            );
         }
         for (const calendar of args.calendars)
           (job.calendars ??= {})[calendar.id] = calendar;

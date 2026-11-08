@@ -19,7 +19,7 @@
 
 ## 工具与对象权限
 
-协调器可用 tree/unpack、阅读工具、dispatch_people、save_calendars、mark_material、finish_discovery；全批协调可重新分派或移除重复人员对象、revise_person、save_calendars、finish_import。
+协调器可用 tree/unpack、阅读工具、dispatch_people、save_calendars、mark_material、finish_discovery；全批协调可重新分派或移除重复人员对象、revise_person、save_calendars、finish_import。save_calendars 的 term_id 只能引用库中已有学期，自拟的学期编号会被拒绝并提示改为 null（新学期）；旧批次里已保存的不存在学期引用在投影时按新学期处理。
 
 人员子智能体只有 read_document/view_image/render_sheet/ocr_image、write_person、amend_timetable、finish_person。write_person 绑定当前人员，不接受他人对象 ID；A/B 可一次批量写入，长课表按 key 追加。对子智能体未分派的文件和公共日历写入均拒绝。Office 派生附件继承父来源的阅读范围。
 

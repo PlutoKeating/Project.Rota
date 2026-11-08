@@ -45,6 +45,10 @@ export function projectPeople(job: Job) {
   const bindings = new Map<string, { termId: string; profileId: string }>();
   const calendars = structuredClone(job.calendars ?? {});
   for (const proposed of Object.values(calendars)) {
+    // Batches saved before save_calendars rejected invented ids: a reference to
+    // a term that does not exist can only mean a new term described by this calendar.
+    if (proposed.term_id && !draft.term.some((t) => t.id === proposed.term_id))
+      proposed.term_id = null;
     const tables = Object.values(job.session.people)
       .filter((p) => p.status === "done")
       .flatMap((p) => Object.values(p.timetables))
