@@ -288,3 +288,5 @@ finish_person 会一次反馈当前人员的课程事实、原件姓名、覆盖
 Kimi Code连接测试沿用既有API：服务端将官方国内Coding端点解析为官方海外端点，且对`kimi-for-coding`使用temperature=1。已保存配置和返回配置内容不改写；实际Agent请求共用相同端点解析。自定义地址不改写，无新增HTTP字段、依赖或迁移，详见Worker模块架构。
 
 DeepSeek官方端点的Agent请求在思考模式下使用`tool_choice=auto`并补齐跨供应商工具回合的推理字段；接口字段不变，详见Worker模块架构。
+
+本机直连模型开启时，浏览器不调用 `POST /api/agent-imports/:id/turn`，而在本地以相同请求体执行单轮并直接请求供应商；该接口保持不变，供未开启直连的用户使用。

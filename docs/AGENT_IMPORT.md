@@ -147,3 +147,9 @@ Google 导入请求支持供应商 params.reasoningEffort（或 reasoning_effort
 ## 执行效率修复（2026-11-08）
 
 生产运行中 19 人批次有 12 人同时出现浏览器端请求超时，`read_document`/`render_sheet` 达到 90 秒工具上限。原因是 16 路并发同时上传含图片的完整上下文、全局串行的文档工具队列，以及超时后原样重发。修复：新批次并发上限降为 8，模型请求自适应限流；文档工具改为 Worker 池与结果缓存并行执行；重试时图片预算减半、重复图片只发一次；浏览器超时计入上传时间；Worker 在浏览器断开时中止上游调用；DeepSeek 首轮提取默认 `reasoning_effort: low`。界面增加每人当前动作、计时、真实进度、等待重试状态与详情。整包真实速度需在生产重新验收。
+
+## 本机直连模型（2026-11-08）
+
+生产实测每次模型请求在 Worker 内消耗 13–44 ms CPU，超过 Workers 免费版约 10 ms 的限制，并发时成批返回 Cloudflare 1102/503。导入页新增“模型”入口：开启“本机直连”后，浏览器直接调用操作员填写的供应商（OpenAI 兼容 / OpenAI Responses / Google / Anthropic），供应商、接口地址、模型、API Key 与推理强度只保存在本浏览器 `localStorage`（键 `rota:local-models`），可随时复用、排序、停用、删除和测试；服务器保存的密钥从不下发，本机密钥也不发送到服务器。关闭直连则继续走服务器模型。
+
+单轮执行逻辑（工具协议、候选回退、DeepSeek 思考模式规则、错误分类与 metrics）抽为 `src/shared/agent-import/turn.ts`，Worker 的 `agentTurn` 与浏览器的 `localTurn` 共用；浏览器失败时返回与服务器相同的 502 + metrics 结构，重试、限流与界面统计不变。实测 DeepSeek、Moonshot、OpenAI、Google 接口允许浏览器跨域；Anthropic 需 `anthropic-dangerous-direct-browser-access` 请求头，已自动添加。本机模式相关代码按需加载（约 141 KB gzip）。导入、租约、提交等其余接口仍在服务器，开销很小。

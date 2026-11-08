@@ -80,3 +80,9 @@ Worker `llm/agent.ts` 保留已有 AI SDK 与供应商适配，只开放 discove
 - Cloudflare 1102（Worker 超出 CPU/内存限制）：生产抓包确认 1.3 MB 请求在 1.3 秒内被 1102 终止，符合 Workers 免费版每请求约 10 ms CPU 的限制。Worker 在交给 AI SDK 前把 data URL 拆为纯 base64 与 mediaType，避免 SDK 对整串执行 `new URL()` 往返（实测 6 张约 1 MB 图片的 SDK CPU 由 23 ms 降至 15 ms）；浏览器单次图片总预算 2 MB、单张最长边 1600 px（DeepSeek 自身缩至约 1300 px）。网关 502/503 按网络错误处理（最多 3 次退避重试并减半模型并发），在模型统计中计为“Cloudflare 网关”失败。根治需 Workers Paid（默认每请求 CPU 30 秒）。
 - 恢复运行时，待重跑人员显示“排队”并清除上一轮残留错误（日志保留原文）；协调器“准备材料”状态在同步完成后清除。
 - 已完成但需要操作员处理的人员（来源表头姓名与本人不符、0 门课或存在待确认项）在进度条与卡片中单列为“需确认”，不再显示为绿色完成；复核阶段同样保留，详情列出待确认原文。
+
+## 本机直连模型（2026-11-08）
+
+生产实测每次模型请求在 Worker 内消耗 13–44 ms CPU，超过 Workers 免费版约 10 ms 的限制，并发时成批返回 Cloudflare 1102/503。导入页新增“模型”入口：开启“本机直连”后，浏览器直接调用操作员填写的供应商（OpenAI 兼容 / OpenAI Responses / Google / Anthropic），供应商、接口地址、模型、API Key 与推理强度只保存在本浏览器 `localStorage`（键 `rota:local-models`），可随时复用、排序、停用、删除和测试；服务器保存的密钥从不下发，本机密钥也不发送到服务器。关闭直连则继续走服务器模型。
+
+单轮执行逻辑（工具协议、候选回退、DeepSeek 思考模式规则、错误分类与 metrics）抽为 `src/shared/agent-import/turn.ts`，Worker 的 `agentTurn` 与浏览器的 `localTurn` 共用；浏览器失败时返回与服务器相同的 502 + metrics 结构，重试、限流与界面统计不变。实测 DeepSeek、Moonshot、OpenAI、Google 接口允许浏览器跨域；Anthropic 需 `anthropic-dangerous-direct-browser-access` 请求头，已自动添加。本机模式相关代码按需加载（约 141 KB gzip）。导入、租约、提交等其余接口仍在服务器，开销很小。

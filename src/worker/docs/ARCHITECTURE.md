@@ -73,3 +73,7 @@ DeepSeek官方Chat接口默认开启思考模式，此时`tool_choice=required`�
 ## Worker CPU 与图片传输（2026-11-08）
 
 生产在 1.3 MB 的 turn 请求上返回 Cloudflare 1102（Worker exceeded resource limits）。`agentTurn` 现在在校验后把图片 data URL 拆成 base64 与 mediaType 再交给 AI SDK，避免 SDK 对每张多 MB 的字符串执行 `new URL()` 与回写；上游收到的仍是相同的 data URL。若账户为 Workers 免费版（每请求约 10 ms CPU），大图请求仍可能偶发 1102，根治需升级 Workers Paid。
+
+## 共享单轮执行（2026-11-08）
+
+`agentTurn` 只负责读取启用的服务器模型、解密密钥并构造 Workers AI 绑定，单轮执行交给共享的 `src/shared/agent-import/turn.ts`（`runTurn`、`createChatModel`、`orderCandidates`、`TurnFailure`）。浏览器本机直连模式使用同一模块，因此两条路径的工具、回退与错误规则一致。

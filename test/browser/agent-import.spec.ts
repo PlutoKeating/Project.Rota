@@ -563,3 +563,33 @@ async function documentRoutes(page: import("@playwright/test").Page) {
   );
   await page.goto("/#/imports");
 }
+
+test("direct local models call the provider from the browser with the locally stored key", async ({ page }) => {
+  await documentRoutes(page);
+  const upstream: { auth: string | null; body: any }[] = [];
+  let serverTurns = 0;
+  await page.route("**/api/agent-imports/*/turn", (route) => {
+    serverTurns++;
+    return route.fulfill({ status: 500, json: {} });
+  });
+  await page.route("https://api.deepseek.com/**", async (route) => {
+    const request = route.request();
+    if (request.method() === "OPTIONS") return route.fulfill({ status: 204, headers: { "access-control-allow-origin": "*", "access-control-allow-headers": "*" } });
+    upstream.push({ auth: request.headers()["authorization"] ?? null, body: request.postDataJSON() });
+    return route.fulfill({
+      headers: { "access-control-allow-origin": "*" },
+      json: { id: "r", object: "chat.completion", created: 1, model: "deepseek-flash", choices: [{ index: 0, message: { role: "assistant", content: null, reasoning_content: "ok", tool_calls: [{ id: "c1", type: "function", function: { name: "tree", arguments: '{"prefix":"","offset":0}' } }] }, finish_reason: "tool_calls" }], usage: { prompt_tokens: 1, completion_tokens: 1 } },
+    });
+  });
+  const result = await page.evaluate(async () => {
+    const { saveLocalModels, activeLocalModels, localTurn } = await import("/src/client/agent-import/local-models.ts");
+    saveLocalModels({ direct: true, models: [{ id: "a", name: "DeepSeek", kind: "openai_compatible", baseUrl: "https://api.deepseek.com", model: "deepseek-flash", apiKey: "sk-local-123", enabled: true }] });
+    const reply: any = await localTurn({ mode: "discover", context: "{}", messages: [{ role: "user", content: "hi" }] });
+    return { active: activeLocalModels().length, call: reply.calls[0].name, model: reply.model, stored: localStorage.getItem("rota:local-models")?.includes("sk-local-123") };
+  });
+  expect(result).toEqual({ active: 1, call: "tree", model: "DeepSeek / deepseek-flash", stored: true });
+  expect(upstream).toHaveLength(1);
+  expect(upstream[0].auth).toBe("Bearer sk-local-123");
+  expect(upstream[0].body.tool_choice).toBe("auto");
+  expect(serverTurns).toBe(0);
+});

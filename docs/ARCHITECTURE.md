@@ -146,3 +146,9 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 依据：[Kimi官方协议与国内/海外端点](https://www.kimi.com/code/docs/en/)、[Cloudflare跨站Worker请求头](https://developers.cloudflare.com/fundamentals/reference/http-headers/)。回归覆盖测试连接、实际Agent工具请求、Anthropic路径及非官方端点隔离；真实验证仅发送简短测试输入，未上传人员材料。
 
 静态资源缓存由 `public/_headers` 声明（构建后位于 `dist/client/_headers`，Workers 静态资源读取）：哈希资源永久缓存，OCR 资源缓存 7 天。
+
+## 本机直连模型（2026-11-08）
+
+生产实测每次模型请求在 Worker 内消耗 13–44 ms CPU，超过 Workers 免费版约 10 ms 的限制，并发时成批返回 Cloudflare 1102/503。导入页新增“模型”入口：开启“本机直连”后，浏览器直接调用操作员填写的供应商（OpenAI 兼容 / OpenAI Responses / Google / Anthropic），供应商、接口地址、模型、API Key 与推理强度只保存在本浏览器 `localStorage`（键 `rota:local-models`），可随时复用、排序、停用、删除和测试；服务器保存的密钥从不下发，本机密钥也不发送到服务器。关闭直连则继续走服务器模型。
+
+单轮执行逻辑（工具协议、候选回退、DeepSeek 思考模式规则、错误分类与 metrics）抽为 `src/shared/agent-import/turn.ts`，Worker 的 `agentTurn` 与浏览器的 `localTurn` 共用；浏览器失败时返回与服务器相同的 502 + metrics 结构，重试、限流与界面统计不变。实测 DeepSeek、Moonshot、OpenAI、Google 接口允许浏览器跨域；Anthropic 需 `anthropic-dangerous-direct-browser-access` 请求头，已自动添加。本机模式相关代码按需加载（约 141 KB gzip）。导入、租约、提交等其余接口仍在服务器，开销很小。

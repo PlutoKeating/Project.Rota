@@ -52,6 +52,7 @@ import { projectPeople } from "./projection";
 import { importSignature, reviewSummary } from "./readiness";
 import { alreadyApplied, rebase, checkJob } from "./runtime";
 import { AdaptiveGate } from "./limiter";
+import { activeLocalModels, localTurn } from "./local-models";
 
 type Reply = {
   messages: ModelMessage[];
@@ -878,6 +879,9 @@ export class ImportRunner {
           () => {
             this.activity(actor, "等待模型");
             if (!person && !reviewer) this.job.requestStartedAt = Date.now();
+            // Operator-entered keys: call the provider straight from this browser.
+            const local = activeLocalModels();
+            if (local.length) return localTurn(body, local) as Promise<Reply>;
             return api.post<Reply>(`/agent-imports/${this.job.id}/turn`, body, {
               // Server budget is 120 s after the body arrives; allow upload time
               // at a conservative 100 KB/s on top, capped at 5 minutes.

@@ -28,6 +28,7 @@ import {
   chooseIdentity,
 } from "../agent-import/runtime";
 import { HistoryPanel } from "../agent-import/HistoryPanel";
+import { ModelModeButton } from "../agent-import/LocalModels";
 import { Review } from "../agent-import/Review";
 import { documentTool } from "../agent-import/documents";
 
@@ -279,6 +280,10 @@ export function ImportsPage() {
       />
       {!job ? (
         <div className="space-y-10">
+          <div className="space-y-3">
+          <div className="flex justify-end">
+            <ModelModeButton />
+          </div>
           <section
             onDragOver={(e) => {
               e.preventDefault();
@@ -330,6 +335,7 @@ export function ImportsPage() {
               </p>
             </div>
           </section>
+          </div>
           {error && <ErrorLine text={error} />}
           {jobs.length > 0 && (
             <section aria-labelledby="recent-imports">
@@ -398,6 +404,7 @@ export function ImportsPage() {
             </h2>
             <StatusChip status={job.status} />
             <div className="flex w-full flex-wrap gap-2 sm:w-auto">
+              <ModelModeButton />
               {job.status === "running" && (
                 <Button
                   variant="secondary"
