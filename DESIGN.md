@@ -141,7 +141,7 @@ Inter variable 字体自托管，字重 100–900，`font-display: swap`；中�
 
 日常卡片以边框和底色分层，不附加卡片阴影。按钮与输入使用 Tailwind `shadow-sm`，账号菜单 `shadow-lg`，弹层 `shadow-2xl`；弹层遮罩为 `slate-900` 的 35% 透明度。主导航和页眉为 z-40，弹层 z-50，跳过导航链接聚焦时 z-90。
 
-控件沿用 Tailwind 默认 transition（150ms，cubic-bezier(0.4, 0, 0.2, 1)）。`prefers-reduced-motion: reduce` 关闭动画与过渡，并恢复即时滚动。未添加装饰性入场动画。
+控件沿用 Tailwind 默认 transition（150ms，cubic-bezier(0.4, 0, 0.2, 1)）。动效只用于表达进行中与完成：导入页当前步骤与请求状态脉冲（`rota-ping`）、进行中的进度扫光（`rota-shimmer`）、完成打勾回弹（`rota-pop`，320ms）与新结果淡入（`rota-enter`，360ms），曲线 cubic-bezier(0.16, 1, 0.3, 1)。`prefers-reduced-motion: reduce` 关闭动画与过渡，并恢复即时滚动。
 
 ## Shapes
 
@@ -156,6 +156,14 @@ Button 提供 primary、secondary、ghost、danger 四种样式；默认 8px × 
 ### Cards and badges
 
 Card 可选标题、说明和动作，标题区与正文分开；默认正文 16px/20px 内边距。Badge 为紧凑状态描述，使用 neutral、success、warning、danger、info，不模拟可点击按钮。
+
+### Header
+
+页面只显示标题，不加副标题或标语。页眉右侧依次为搜索框（窄屏仅放大镜图标）、明暗切换图标按钮、头像首字与姓名的账号菜单（管理、退出登录）。图标统一来自 `Icon.tsx` 的 1.7 描边线性图标，不用字符或 emoji 代替。
+
+### Import progress
+
+导入以四步进度条、单行实时状态和人员卡片网格展示，不用大段文字解释过程。模型失败切换以红/绿胶囊链表示；诊断信息收进“运行记录”折叠面板。复核阶段操作集中在底部吸附栏：一句话修改与“确认导入”。
 
 ### Navigation and management
 

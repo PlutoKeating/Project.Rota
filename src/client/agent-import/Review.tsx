@@ -224,7 +224,7 @@ export function Review({
       key={p.id}
       className="border-t border-slate-200 py-3 dark:border-slate-700"
     >
-      <summary className="cursor-pointer font-medium">
+      <summary className="font-medium">
         {display(p)}{" "}
         <span className="text-xs font-normal text-slate-500">
           {String(p.class_name ?? "")} {String(p.major ?? "")}{" "}
@@ -446,7 +446,7 @@ export function Review({
       open={depth === 0}
       className="border-t border-slate-200 py-4 dark:border-slate-700"
     >
-      <summary className="cursor-pointer font-semibold">
+      <summary className="font-semibold">
         {display(o)}
         {changed.has("organization:" + o.id) ? " · 有变更" : ""}
       </summary>
@@ -518,7 +518,7 @@ export function Review({
     </details>
   );
   return (
-    <div className="space-y-5">
+    <div className="rota-review space-y-4">
       <div className="flex flex-wrap gap-3">
         {!all.term.length && (
           <p className="text-sm text-slate-500">
@@ -630,7 +630,7 @@ export function Review({
           </div>
         ))}
       </details>
-      <div>
+      <div className="rounded-xl border border-slate-200 bg-white px-4 dark:border-slate-800 dark:bg-slate-900 [&>details:first-child]:border-t-0">
         {all.organization.filter((o) => !o.parent_id).map((o) => org(o))}
         {all.person
           .filter(
@@ -641,7 +641,7 @@ export function Review({
           .map(person)}
       </div>
       <details>
-        <summary className="cursor-pointer text-sm">
+        <summary className="text-sm">
           逐项变更对照 · {changes.length} 项
         </summary>
         <div className="mt-3 divide-y divide-slate-200">

@@ -193,7 +193,7 @@ test("independent people overlap model requests and commit only after human revi
   ]));
 
   await page
-    .getByRole("button", { name: "确认导入已知内容并保存待补清单" })
+    .getByRole("button", { name: "确认导入" })
     .click();
   await expect.poll(() => applied.length).toBe(1);
   expect(applied[0].review.timetables).toHaveLength(2);
@@ -250,7 +250,7 @@ test("an unset semester total derives course coverage and permits reviewed submi
   const job = await saved(page);
   expect(job.draft.term[0].week_count).toBe(2);
   expect(Object.values(job.timetables).every((t: any) => t.bound)).toBe(true);
-  await page.getByRole("button", { name: "确认导入已知内容并保存待补清单" }).click();
+  await page.getByRole("button", { name: "确认导入" }).click();
   await expect.poll(() => applied.length).toBe(1);
 });
 
@@ -300,7 +300,7 @@ test("missing public calendar yields review with structured courses but prohibit
   });
   expect(applied).toHaveLength(0);
   await expect(
-    page.getByRole("button", { name: "确认导入已知内容并保存待补清单" }),
+    page.getByRole("button", { name: "确认导入" }),
   ).toBeDisabled();
 });
 test("a child cannot read another person's material or change shared calendars", async ({
@@ -600,7 +600,6 @@ test("failure is isolated, successful people remain saved and resume does not re
     .toBe("done");
   failing = false;
   await page.reload();
-  await page.getByText(/本机最近导入/).click();
   await page.getByRole("button", { name: /a.txt/ }).click();
   await page.getByRole("button", { name: "继续处理", exact: true }).click();
   await expect.poll(async () => (await saved(page))?.status).toBe("review");
@@ -626,12 +625,11 @@ test("pause preserves pending model calls and resume executes them without a sec
   });
   await upload(page, ["a"]);
   await expect.poll(() => entered).toBe(true);
-  await page.getByRole("button", { name: "完成当前步骤后暂停" }).click();
+  await page.getByRole("button", { name: "暂停" }).click();
   release();
   await expect.poll(async () => (await saved(page))?.status).toBe("paused");
   expect((await saved(page)).session.people.a.agent.pending).toHaveLength(2);
   await page.reload();
-  await page.getByText(/本机最近导入/).click();
   await page.getByRole("button", { name: /a.txt/ }).click();
   await page.getByRole("button", { name: "继续处理", exact: true }).click();
   await expect.poll(async () => (await saved(page))?.status).toBe("review");
@@ -978,7 +976,7 @@ test("verified missing timetable permits personnel-only submission without inven
     return r.checkJob((await s.loadJob(id))!);
   }, job.id);
   expect(validation.issues).toEqual([]);
-  await page.getByRole("button", { name: "确认导入已知内容并保存待补清单" }).click();
+  await page.getByRole("button", { name: "确认导入" }).click();
   await expect.poll(() => applied.length).toBe(1);
   expect(Object.values(applied[0].review.checks).map((check: any) => check.coverage)).toEqual(["missing"]);
 });
@@ -1009,7 +1007,7 @@ test("verified partial times persist in review while only known sessions are sub
   expect(job.draft.timetable_entry).toHaveLength(1);
   expect(job.summary).toContain("1 项时段待补");
   expect(job.unresolved.join(" ")).toContain("不能据此判定有空");
-  await page.getByRole("button", { name: "确认导入已知内容并保存待补清单" }).click();
+  await page.getByRole("button", { name: "确认导入" }).click();
   await expect.poll(() => applied.length).toBe(1);
   expect(applied[0].review.timetables[0].entries[1]).toMatchObject(unknown);
   expect(applied[0].review.unresolved.join(" ")).toContain("待补课程");
@@ -1280,12 +1278,11 @@ test("paused parallel readers persist pending calls and resume them after reload
   });
   await upload(page);
   await expect.poll(() => calls).toBe(2);
-  await page.getByRole("button", { name: "完成当前步骤后暂停" }).click();
+  await page.getByRole("button", { name: "暂停" }).click();
   release();
   await expect.poll(async () => (await saved(page))?.status).toBe("paused");
   expect((await saved(page)).session.consistencyWorkers.map((worker: any) => worker.agent.pending.length)).toEqual([1, 1]);
   await page.reload();
-  await page.getByText(/本机最近导入/).click();
   await page.getByRole("button", { name: /a.txt/ }).click();
   await page.getByRole("button", { name: "继续处理", exact: true }).click();
   await expect.poll(async () => (await saved(page))?.status).toBe("review");

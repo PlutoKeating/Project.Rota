@@ -23,36 +23,43 @@ export function CalendarReview({
   return (
     <div className="space-y-4">
       {Object.values(job.calendars ?? {}).map((c) => (
-        <section key={c.id} className="border-t border-slate-200 py-3 text-sm">
-          <p className="font-medium">{c.name} · 日历证据</p>
-          <p>
-            首周周一：{c.start_date ?? "待定"}；覆盖周数：{c.week_count ?? c.minimum_weeks ?? "按课程确定"}
-            {c.minimum_weeks ? `（课程已知至第 ${c.minimum_weeks} 周）` : ""}
-          </p>
-          <p className="text-xs text-slate-500">
-            适用：
-            {c.timetable_ids
-              .map((id) => job.timetables?.[id]?.person.full_name ?? id)
-              .join("、") || "尚待判断"}
-          </p>
-          <div className="my-2 flex flex-wrap gap-3">
+        <section
+          key={c.id}
+          className="rounded-xl border border-slate-200 bg-white p-4 text-sm dark:border-slate-800 dark:bg-slate-900"
+        >
+          <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+            <p className="font-semibold">{c.name}</p>
+            <p className="text-xs tabular-nums text-slate-500">
+              首周 {c.start_date ?? "待定"} · {c.week_count ?? c.minimum_weeks ?? "按课程"} 周
+              {c.minimum_weeks ? `（课程至第 ${c.minimum_weeks} 周）` : ""}
+            </p>
+          </div>
+          <div className="my-3 flex flex-wrap gap-1.5">
             {c.periods.map((p) => (
-              <span key={p.index}>
+              <span
+                key={p.index}
+                className="rounded-md bg-slate-100 px-2 py-1 text-xs tabular-nums text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+              >
                 第{p.index}节 {p.start ?? "上课待定"}–{p.end ?? "下课待定"}
               </span>
             ))}
           </div>
+          <p className="truncate text-xs text-slate-500">
+            {c.timetable_ids
+              .map((id) => job.timetables?.[id]?.person.full_name ?? id)
+              .join("、") || "适用人员待判断"}
+          </p>
           {!!calendarMissing(c).length && (
             <p className="text-amber-700">
               待补：{calendarMissing(c).join("、")}
             </p>
           )}
           {c.unresolved.map((x, i) => (
-            <p key={i} className="text-amber-700">
+            <p key={i} className="mt-1 text-xs text-amber-700 dark:text-amber-300">
               {x}
             </p>
           ))}
-          <details>
+          <details className="mt-2 text-xs text-slate-500">
             <summary>来源与判断</summary>
             {c.sources.map((s, i) => (
               <p key={i}>

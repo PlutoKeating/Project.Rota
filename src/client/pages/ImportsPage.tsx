@@ -1,7 +1,11 @@
 import { SavedReports } from "../agent-import/SavedReports";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "../components/Button";
-import { Textarea } from "../components/Field";
+import { Icon } from "../components/Icon";
+import { Spinner } from "../components/Spinner";
+import { cx } from "../lib/cx";
+import { Stepper, LiveStatus, PeopleGrid } from "../agent-import/Progress";
+import type { PersonWorkspace } from "../../shared/agent-import/person-workspace";
 import { Modal } from "../components/Modal";
 import { useSession } from "../components/AuthGate";
 import { api, messageOf } from "../lib/api";
@@ -36,6 +40,8 @@ export function ImportsPage() {
     [error, setError] = useState(""),
     [comment, setComment] = useState(""),
     [dragging, setDragging] = useState(false),
+    [stopping, setStopping] = useState(false),
+    [sending, setSending] = useState(false),
     [source, setSource] = useState<{
       path: string;
       image?: string;
@@ -83,6 +89,9 @@ export function ImportsPage() {
     }, 45000);
     return () => clearInterval(timer);
   }, [job?.id, job?.status]);
+  useEffect(() => {
+    if (job?.status !== "running") setStopping(false);
+  }, [job?.status]);
   useEffect(() => {
     if (!job || job.status === "running") return;
     void checkJob(job)
@@ -198,8 +207,68 @@ export function ImportsPage() {
       setBusy(false);
     }
   };
+  const pause = () => {
+    setStopping(true);
+    runner.current?.stop();
+  };
+  const back = () => {
+    setJob(null);
+    setIssues([]);
+    setError("");
+  };
+  const sendFeedback = async () => {
+    if (!job || !comment.trim()) return;
+    setSending(true);
+    try {
+      await feedback(job, comment);
+      setComment("");
+      run(job);
+    } catch (e) {
+      setError(messageOf(e));
+    } finally {
+      setSending(false);
+    }
+  };
+  const identity = (p: PersonWorkspace) =>
+    job &&
+    p.match &&
+    !p.match.id &&
+    p.match.candidates.length > 0 &&
+    job.status !== "running" ? (
+      <select
+        aria-label={`确认${p.label}身份`}
+        className="mt-2 w-full rounded-lg border border-rose-300 bg-white px-2 py-1.5 text-xs dark:border-rose-500/40 dark:bg-slate-900"
+        value=""
+        onChange={(e) => {
+          void chooseIdentity(
+            job,
+            p.key,
+            e.target.value === "new" ? null : e.target.value,
+          )
+            .then(() => update(job))
+            .catch((e) => setError(messageOf(e)));
+        }}
+      >
+        <option value="" disabled>
+          确认是谁…
+        </option>
+        {p.match.candidates.map((id) => {
+          const row = job.base.person.find((row) => row.id === id);
+          return (
+            <option key={id} value={id}>
+              {[row?.full_name, row?.student_no, row?.class_name]
+                .filter(Boolean)
+                .map(String)
+                .join(" · ")}
+            </option>
+          );
+        })}
+        <option value="new">另一位新人员</option>
+      </select>
+    ) : null;
+  const editable = job && ["paused", "review"].includes(job.status);
   return (
-    <div className="mx-auto max-w-5xl space-y-8 pb-8">
+    <div className="max-w-5xl pb-8">
       <input
         ref={input}
         type="file"
@@ -209,223 +278,209 @@ export function ImportsPage() {
         onChange={(e) => void upload(Array.from(e.target.files ?? []))}
       />
       {!job ? (
-        <section
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragging(true);
-          }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setDragging(false);
-            void upload(Array.from(e.dataTransfer.files));
-          }}
-          className={`grid min-h-72 place-items-center rounded-2xl border border-dashed px-6 py-12 text-center ${dragging ? "border-indigo-600 bg-indigo-50" : "border-slate-300 bg-white dark:border-slate-700 dark:bg-slate-900"}`}
-        >
-          <div>
-            <h2 className="text-lg font-medium">拖入一个压缩包，或选择文件</h2>
-            <p className="mx-auto mt-3 max-w-lg text-sm leading-6 text-slate-500">
-              课表、名单、说明文档都可以。保留原来的文件夹和文件名，无需提前整理。
-            </p>
-            <Button
-              className="mt-6"
-              loading={busy}
-              onClick={() => input.current?.click()}
-            >
-              选择材料
-            </Button>
-            <p className="mt-4 text-xs text-slate-500">
-              支持 ZIP、RAR、7z、TAR/GZ、图片及 Office/PDF · 单次最多 100 MB
-            </p>
-          </div>
-        </section>
-      ) : (
-        <section className="space-y-6">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="min-w-0">
-              <h2 className="break-all text-lg font-medium">{job.title}</h2>
-              <p
-                role="status"
-                aria-live="polite"
-                className="mt-2 text-sm text-slate-500"
-              >
-                {
-                  {
-                    running: "正在整理材料，尚未写入正式数据",
-                    paused: "进度已保存，可以继续处理",
-                    review: "整理完成，请复核后导入",
-                    applied: "已导入，材料将在完成后 8 小时清理",
-                    cancelled: "已取消，材料将在 8 小时后清理",
-                  }[job.status]
-                }
-              </p>
-            </div>
-            <Button
-              variant="ghost"
-              disabled={job.status === "running" || busy}
-              onClick={() => {
-                setJob(null);
-                setIssues([]);
-                setError("");
-              }}
-            >
-              返回导入
-            </Button>
-          </div>
-          {job.status === "running" && (
-            <div className="border-y border-slate-200 py-5 dark:border-slate-700">
-              <p className="text-sm">
-                {job.phase || "正在查看材料与现有数据…"}
-              </p>
-              <p className="mt-2 text-xs text-slate-500">
-                {job.model ? `${job.model} · ` : ""}已完成 {job.turns} 轮 ·
-                已保存 {Object.keys(job.timetables ?? {}).length} 份课表方案（
-                {Object.values(job.timetables ?? {}).reduce(
-                  (sum, t) => sum + t.entries.length,
-                  0,
-                )}{" "}
-                条课程记录）。关闭页面会暂停，重新打开后可恢复。
-                {job.requestStartedAt && (
-                  <RequestClock startedAt={job.requestStartedAt} />
+        <div className="space-y-10">
+          <section
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragging(true);
+            }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragging(false);
+              void upload(Array.from(e.dataTransfer.files));
+            }}
+            className={cx(
+              "group relative grid min-h-80 place-items-center rounded-2xl border-2 border-dashed px-6 py-14 text-center transition-colors duration-200",
+              dragging
+                ? "border-indigo-600 bg-indigo-50 dark:bg-indigo-600/10"
+                : "border-slate-300 bg-white hover:border-slate-400 dark:border-slate-700 dark:bg-slate-900",
+            )}
+          >
+            <div className="flex flex-col items-center">
+              <span
+                className={cx(
+                  "grid size-14 place-items-center rounded-2xl transition duration-300 ease-out",
+                  dragging
+                    ? "-translate-y-1 scale-110 bg-indigo-600 text-white"
+                    : "bg-indigo-50 text-indigo-600 dark:bg-indigo-600/15",
                 )}
+              >
+                {busy ? (
+                  <Spinner />
+                ) : (
+                  <Icon name="imports" className="size-7" />
+                )}
+              </span>
+              <h2 className="mt-5 text-lg font-semibold">
+                {busy ? "正在打开材料" : dragging ? "松开即可开始" : "拖入材料"}
+              </h2>
+              <p className="mt-1.5 text-sm text-slate-500">
+                压缩包、课表、名单都行，无需整理
               </p>
               <Button
-                className="mt-4"
-                variant="secondary"
-                onClick={() => runner.current?.stop()}
-              >
-                完成当前步骤后暂停
-              </Button>
-            </div>
-          )}
-          {job.session && (
-            <div
-              className="grid gap-2 sm:grid-cols-2"
-              aria-label="人员处理进度"
-            >
-              {Object.values(job.session.people).map((p) => (
-                <div
-                  key={p.key}
-                  className="rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-700"
-                >
-                  <p>
-                    {p.information?.full_name ?? p.label} ·{" "}
-                    {
-                      {
-                        queued: "等待处理",
-                        extracting: "填写信息与课表",
-                        verifying: "回看核对",
-                        done: "已完成",
-                        failed: "已暂停",
-                      }[p.status]
-                    }
-                  </p>
-                  <p className="text-xs text-slate-500">
-                    {Object.values(p.timetables).reduce(
-                      (n, t) => n + t.entries.length,
-                      0,
-                    )}{" "}
-                    项课程 · {p.agent.turns} 次调用
-                  </p>
-                  {p.agent.error && (
-                    <p className="text-xs text-rose-600">{p.agent.error}</p>
-                  )}
-                  {p.match && <p className="text-xs">{p.match.reason}</p>}
-                  {p.match &&
-                    !p.match.id &&
-                    p.match.candidates.length > 0 &&
-                    job.status !== "running" && (
-                      <select
-                        aria-label={`确认${p.label}身份`}
-                        className="mt-2 w-full rounded border p-2 dark:bg-slate-900"
-                        value=""
-                        onChange={(e) => {
-                          void chooseIdentity(
-                            job,
-                            p.key,
-                            e.target.value === "new" ? null : e.target.value,
-                          )
-                            .then(() => update(job))
-                            .catch((e) => setError(messageOf(e)));
-                        }}
-                      >
-                        <option value="" disabled>
-                          确认身份…
-                        </option>
-                        {p.match.candidates.map((id) => (
-                          <option key={id} value={id}>
-                            {String(
-                              job.base.person.find((row) => row.id === id)
-                                ?.full_name,
-                            )}{" "}
-                            ·{" "}
-                            {String(
-                              job.base.person.find((row) => row.id === id)
-                                ?.student_no ?? "无学号",
-                            )}{" "}
-                            ·{" "}
-                            {String(
-                              job.base.person.find((row) => row.id === id)
-                                ?.class_name ?? "无班级",
-                            )}
-                          </option>
-                        ))}
-                        <option value="new">确认为另一位新人员</option>
-                      </select>
-                    )}
-                </div>
-              ))}
-            </div>
-          )}
-          {!job.session && (
-            <p role="alert">
-              旧版批次原件与成果保留，只读查看；请返回导入，用原材料新建批次。
-            </p>
-          )}
-          {job.error && (
-            <p
-              role="alert"
-              className="text-sm text-rose-700 dark:text-rose-300"
-            >
-              {job.error}
-            </p>
-          )}
-          {["paused", "review"].includes(job.status) && (
-            <div className="flex flex-wrap gap-3">
-              <Button
-                variant="secondary"
-                disabled={busy}
-                onClick={() => run(job)}
-              >
-                {job.status === "review" ? "继续自查" : "继续处理"}
-              </Button>
-              <Button
-                variant="ghost"
-                disabled={busy}
+                className="mt-6"
+                loading={busy}
                 onClick={() => input.current?.click()}
               >
-                补充材料
+                选择文件
               </Button>
-              <Button
-                variant="ghost"
-                disabled={busy}
-                onClick={() => void cancel()}
-              >
-                取消本次导入
+              <p className="mt-5 text-xs text-slate-400">
+                ZIP · RAR · 7z · Office · PDF · 图片 · ≤100 MB
+              </p>
+            </div>
+          </section>
+          {error && <ErrorLine text={error} />}
+          {jobs.length > 0 && (
+            <section aria-labelledby="recent-imports">
+              <h2 id="recent-imports" className="mb-3 text-sm font-semibold">
+                最近导入
+              </h2>
+              <ul className="divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white dark:divide-slate-800 dark:border-slate-800 dark:bg-slate-900">
+                {jobs.map((j) => (
+                  <li key={j.id} className="group/row flex items-center">
+                    <button
+                      className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left transition hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                      onClick={() => {
+                        if (j.status === "running") j.status = "paused";
+                        update(j);
+                      }}
+                    >
+                      <Icon name="file" className="size-4 shrink-0 text-slate-400" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm">{j.title}</span>
+                        <span className="text-xs text-slate-400">
+                          {new Date(j.createdAt).toLocaleString("zh-CN", {
+                            month: "numeric",
+                            day: "numeric",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </span>
+                      </span>
+                      <StatusChip status={j.status} />
+                    </button>
+                    {["applied", "cancelled"].includes(j.status) && (
+                      <button
+                        aria-label={`清理 ${j.title}`}
+                        title="立即清理"
+                        className="mr-2 grid size-8 place-items-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/10"
+                        onClick={async () => {
+                          await deleteJob(j.id);
+                          setJobs(await listJobs(owner));
+                        }}
+                      >
+                        <Icon name="trash" className="size-4" />
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+          <SavedReports />
+        </div>
+      ) : (
+        <section className="space-y-5">
+          <header className="flex flex-wrap items-center gap-3">
+            <button
+              aria-label="返回导入"
+              title="返回"
+              disabled={job.status === "running" || busy}
+              onClick={back}
+              className="grid size-9 place-items-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 disabled:opacity-40 dark:hover:bg-slate-800"
+            >
+              <Icon name="chevron-left" />
+            </button>
+            <h2 className="min-w-0 flex-1 truncate text-lg font-semibold">
+              {job.title}
+            </h2>
+            <StatusChip status={job.status} />
+            <div className="flex w-full flex-wrap gap-2 sm:w-auto">
+              {job.status === "running" && (
+                <Button
+                  variant="secondary"
+                  loading={stopping}
+                  onClick={pause}
+                >
+                  {!stopping && <Icon name="pause" className="size-4" />}
+                  {stopping ? "正在暂停" : "暂停"}
+                </Button>
+              )}
+              {editable && (
+                <>
+                  <Button
+                    variant="ghost"
+                    disabled={busy}
+                    onClick={() => void cancel()}
+                  >
+                    取消导入
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    disabled={busy}
+                    onClick={() => input.current?.click()}
+                  >
+                    <Icon name="plus" className="size-4" />
+                    补充材料
+                  </Button>
+                  <Button
+                    variant={job.status === "paused" ? "primary" : "secondary"}
+                    disabled={busy || !job.session}
+                    onClick={() => run(job)}
+                  >
+                    <Icon name="play" className="size-4" />
+                    {job.status === "review" ? "继续自查" : "继续处理"}
+                  </Button>
+                </>
+              )}
+            </div>
+          </header>
+
+          {job.status === "applied" ? (
+            <div className="grid place-items-center rounded-2xl border border-slate-200 bg-white px-6 py-14 text-center dark:border-slate-800 dark:bg-slate-900">
+              <span className="rota-pop grid size-14 place-items-center rounded-full bg-emerald-600 text-white">
+                <Icon name="check" className="size-7" />
+              </span>
+              <p className="mt-4 text-lg font-semibold">已导入</p>
+              <Button className="mt-6" variant="secondary" onClick={back}>
+                新的导入
               </Button>
             </div>
+          ) : (
+            job.status !== "cancelled" && (
+              <div className="space-y-5 rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 dark:border-slate-800 dark:bg-slate-900">
+                <Stepper job={job} />
+                {job.session && (
+                  <div className="border-t border-slate-100 pt-4 dark:border-slate-800">
+                    <LiveStatus job={job} />
+                  </div>
+                )}
+              </div>
+            )
           )}
-          {job.summary && (
-            <p className="max-w-3xl whitespace-pre-wrap text-sm leading-7">
-              {job.summary}
+
+          {!job.session && (
+            <p role="alert" className="text-sm text-slate-500">
+              旧版批次，仅可查看。请用原材料重新导入。
             </p>
           )}
+          {job.error && <ErrorLine text={job.error} />}
+          {error && <ErrorLine text={error} />}
+
+          {job.status !== "applied" && <PeopleGrid job={job} identity={identity} />}
+
           {!!job.unresolved.length && (
-            <details className="rounded-lg bg-amber-50 p-4 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-200">
-              <summary className="cursor-pointer font-medium">
-                材料缺项与待确认事项 · {new Set(job.unresolved).size} 项
+            <details className="group rounded-xl bg-amber-50 text-sm text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
+              <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 font-medium [&::-webkit-details-marker]:hidden">
+                <Icon name="alert" className="size-4" />
+                待补 {new Set(job.unresolved).size} 项
+                <Icon
+                  name="chevron-down"
+                  className="ml-auto size-4 transition group-open:rotate-180"
+                />
               </summary>
-              <ul className="mt-2 list-disc space-y-1 pl-5">
+              <ul className="list-disc space-y-1 px-4 pb-4 pl-9">
                 {[...new Set(job.unresolved)].map((x, i) => (
                   <li key={i}>{x}</li>
                 ))}
@@ -442,130 +497,66 @@ export function ImportsPage() {
               onSource={(path) => void onSource(path)}
             />
           )}
-          {!!issues.length && (
-            <div
-              role="alert"
-              className="text-sm text-rose-700 dark:text-rose-300"
-            >
-              <p>提交前需要解决：</p>
-              <ul className="mt-2 list-disc pl-5">
-                {issues.slice(0, 20).map((x, i) => (
-                  <li key={i}>{x}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {["paused", "review"].includes(job.status) && (
-            <div className="space-y-3 border-t border-slate-200 pt-5">
-              <label htmlFor="import-feedback" className="text-sm font-medium">
-                补充说明或修改意见
-              </label>
-              <Textarea
-                id="import-feedback"
-                value={comment}
-                onChange={(e) => setComment(e.target.value)}
-                placeholder="例如：这两张图是同一个人；第一周从 9 月 7 日开始。"
-                rows={3}
-              />
-              <div className="flex flex-wrap justify-between gap-3">
-                <Button
-                  variant="secondary"
-                  disabled={!comment.trim() || busy}
-                  onClick={async () => {
-                    await feedback(job, comment);
-                    setComment("");
-                    run(job);
-                  }}
-                >
-                  让 Agent 修改
-                </Button>
+
+          {editable && (
+            <div className="sticky bottom-14 z-10 -mx-4 border-t border-slate-200 bg-slate-50/95 px-4 py-3 backdrop-blur md:bottom-0 md:mx-0 md:rounded-xl md:border dark:border-slate-800 dark:bg-slate-950/95">
+              {!!issues.length && (
+                <div role="alert" className="mb-3 flex gap-2 text-xs text-rose-700 dark:text-rose-300">
+                  <Icon name="alert" className="mt-px size-4 shrink-0" />
+                  <ul className="space-y-0.5">
+                    {issues.slice(0, 4).map((x, i) => (
+                      <li key={i}>{x}</li>
+                    ))}
+                    {issues.length > 4 && <li>还有 {issues.length - 4} 项</li>}
+                  </ul>
+                </div>
+              )}
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                <div className="flex flex-1 items-end gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-900">
+                  <label htmlFor="import-feedback" className="sr-only">
+                    修改意见
+                  </label>
+                  <textarea
+                    id="import-feedback"
+                    rows={1}
+                    value={comment}
+                    onChange={(e) => setComment(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                        e.preventDefault();
+                        void sendFeedback();
+                      }
+                    }}
+                    placeholder="告诉 Agent 要改什么，例如：第一周从 9 月 7 日开始"
+                    className="field-sizing-content max-h-32 min-h-7 flex-1 resize-none bg-transparent py-1 text-sm outline-none placeholder:text-slate-400"
+                  />
+                  <button
+                    aria-label="让 Agent 修改"
+                    title="发送（Enter）"
+                    disabled={!comment.trim() || busy || sending}
+                    onClick={() => void sendFeedback()}
+                    className="grid size-7 shrink-0 place-items-center rounded-md text-indigo-600 transition hover:bg-indigo-50 disabled:text-slate-300 disabled:hover:bg-transparent dark:hover:bg-indigo-600/15 dark:disabled:text-slate-700"
+                  >
+                    {sending ? <Spinner size="sm" /> : <Icon name="send" className="size-4" />}
+                  </button>
+                </div>
                 {job.status === "review" && (
                   <Button
                     loading={busy}
                     disabled={!!issues.length || !job.session}
                     onClick={() => void finish()}
+                    className="sm:py-2.5"
                   >
-                    确认导入已知内容并保存待补清单
+                    {!busy && <Icon name="check" className="size-4" />}
+                    确认导入
                   </Button>
                 )}
               </div>
             </div>
           )}
           <HistoryPanel job={job} />
-          <details className="text-xs text-slate-500">
-            <summary className="cursor-pointer">
-              处理记录 · {job.log.length} 条
-            </summary>
-            <ol className="mt-3 max-h-64 space-y-2 overflow-auto">
-              {job.log.map((item, i) => (
-                <li key={i} className="break-words">
-                  <time>{new Date(item.at).toLocaleTimeString()}</time>{" "}
-                  {item.text}
-                </li>
-              ))}
-            </ol>
-          </details>
         </section>
       )}
-      {error && (
-        <p role="alert" className="text-sm text-rose-700 dark:text-rose-300">
-          {error}
-        </p>
-      )}
-      {!job && jobs.length > 0 && (
-        <details>
-          <summary className="cursor-pointer text-sm text-slate-600 dark:text-slate-300">
-            本机最近导入 · {jobs.length} 批
-          </summary>
-          <ul className="mt-4 divide-y divide-slate-200 dark:divide-slate-700">
-            {jobs.map((j) => (
-              <li
-                key={j.id}
-                className="flex items-center justify-between gap-3 py-3"
-              >
-                <button
-                  className="min-w-0 text-left text-sm underline-offset-4 hover:underline"
-                  onClick={() => {
-                    if (j.status === "running") j.status = "paused";
-                    update(j);
-                  }}
-                >
-                  <span className="block break-all">{j.title}</span>
-                  <span className="text-xs text-slate-500">
-                    {new Date(j.createdAt).toLocaleString()} ·{" "}
-                    {
-                      {
-                        paused: "已暂停",
-                        running: "可恢复",
-                        review: "待复核",
-                        applied: "已导入",
-                        cancelled: "已取消",
-                      }[j.status]
-                    }
-                  </span>
-                </button>
-                {["applied", "cancelled"].includes(j.status) && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={async () => {
-                      await deleteJob(j.id);
-                      setJobs(await listJobs(owner));
-                    }}
-                  >
-                    立即清理
-                  </Button>
-                )}
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
-      {!job && <SavedReports />}
-      <p className="text-xs leading-5 text-slate-500">
-        材料在本机处理，模型按需读取内容。正式数据仅在你确认后写入。完成或取消后保留
-        8 小时；浏览器关闭期间到期的材料，下次打开时清理。
-      </p>
       {source && (
         <Modal onClose={() => setSource(null)} title="查看来源" size="lg">
           <p className="mb-3 break-all text-sm">{source?.path}</p>
@@ -581,8 +572,8 @@ export function ImportsPage() {
               >
                 上一页
               </Button>
-              <span className="text-sm">
-                第 {source.page} / {source.pages} 页
+              <span className="text-sm tabular-nums">
+                {source.page} / {source.pages}
               </span>
               <Button
                 size="sm"
@@ -613,15 +604,31 @@ export function ImportsPage() {
   );
 }
 
-function RequestClock({ startedAt }: { startedAt: number }) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [startedAt]);
+const STATUS_CHIP: Record<Job["status"], [string, string]> = {
+  running: ["处理中", "bg-indigo-50 text-indigo-700 dark:bg-indigo-600/15 dark:text-indigo-300"],
+  paused: ["已暂停", "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"],
+  review: ["待确认", "bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300"],
+  applied: ["已导入", "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"],
+  cancelled: ["已取消", "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"],
+};
+
+function StatusChip({ status }: { status: Job["status"] }) {
+  const [label, tone] = STATUS_CHIP[status];
   return (
-    <span className="mt-1 block">
-      本次请求已等待 {Math.max(0, Math.floor((now - startedAt) / 1000))} 秒
+    <span className={cx("shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium", tone)}>
+      {label}
     </span>
+  );
+}
+
+function ErrorLine({ text }: { text: string }) {
+  return (
+    <p
+      role="alert"
+      className="flex gap-2 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:bg-rose-500/10 dark:text-rose-300"
+    >
+      <Icon name="alert" className="mt-0.5 size-4 shrink-0" />
+      <span className="min-w-0 break-words">{text}</span>
+    </p>
   );
 }

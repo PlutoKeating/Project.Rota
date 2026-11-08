@@ -116,3 +116,99 @@ input[type="range"] {
     translate: 0 0;
   }
 }
+
+/* Import progress: a live pulse, an indeterminate sweep, and a settle-in for new results. */
+@keyframes rota-ping {
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  80%,
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+.rota-ping {
+  animation: rota-ping 1.6s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+@keyframes rota-shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+.rota-shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in oklab, var(--color-indigo-400) 35%, transparent),
+    transparent
+  );
+  animation: rota-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes rota-pop {
+  from {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.rota-pop {
+  animation: rota-pop 320ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes rota-enter {
+  from {
+    opacity: 0;
+    translate: 0 6px;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+.rota-enter {
+  animation: rota-enter 360ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Review disclosures share one drawn chevron instead of browser triangles. */
+.rota-review summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  list-style: none;
+}
+.rota-review summary::-webkit-details-marker {
+  display: none;
+}
+.rota-review summary::before {
+  content: "";
+  flex: none;
+  width: 14px;
+  height: 14px;
+  background: currentColor;
+  opacity: 0.45;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  rotate: -90deg;
+  transition: rotate 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.rota-review details[open] > summary::before {
+  rotate: 0deg;
+}
+.rota-review > details {
+  border: 1px solid var(--color-slate-200);
+  border-radius: 12px;
+  background: white;
+  padding: 12px 16px;
+}
+[data-theme="dark"] .rota-review > details {
+  border-color: var(--color-slate-800);
+  background: var(--color-slate-900);
+}

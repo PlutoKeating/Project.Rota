@@ -329,7 +329,6 @@ test("calendar review shows known clocks, accepts missing fields, and creates a 
     await s.saveJob(job);
   });
   await page.reload();
-  await page.getByText("本机最近导入", { exact: false }).click();
   await page.getByRole("button", { name: /日历界面测试/ }).click();
   await expect(
     page.getByText("第1节 08:30–下课待定", { exact: false }),
