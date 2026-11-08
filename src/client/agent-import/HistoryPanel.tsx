@@ -109,7 +109,13 @@ export function HistoryPanel({ job }: { job: Job }) {
           {tab === "log" && (
             <ol className="space-y-1">
               {[...job.log].reverse().map((item, i) => (
-                <li key={i} className="flex gap-3">
+                <li
+                  key={i}
+                  className={cx(
+                    "flex gap-3",
+                    /失败|超时/.test(item.text) && "text-rose-700 dark:text-rose-300",
+                  )}
+                >
                   <time className="shrink-0 tabular-nums text-slate-400">
                     {new Date(item.at).toLocaleTimeString("zh-CN", { hour12: false })}
                   </time>

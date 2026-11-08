@@ -382,7 +382,8 @@ export function ImportsPage() {
         </div>
       ) : (
         <section className="space-y-5">
-          <header className="flex flex-wrap items-center gap-3">
+          {/* Controls stay reachable while scrolling a long people grid. */}
+          <header className="sticky top-16 z-20 -mx-4 flex flex-wrap items-center gap-3 bg-slate-50/90 px-4 py-2 backdrop-blur md:-mx-8 md:px-8 dark:bg-slate-950/90">
             <button
               aria-label="返回导入"
               title="返回"
