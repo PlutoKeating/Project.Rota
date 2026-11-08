@@ -1293,6 +1293,8 @@ export class ImportRunner {
       // Show "running" immediately; unpacking a large archive can take a while
       // before the first checkpoint.
       this.activity("coordinator", "准备材料");
+      // Background download; on slow links it would otherwise stall the first OCR call.
+      void import("./ocr").then((m) => m.warmOcr()).catch(() => {});
       await this.persist();
       await rebase(job);
       if (job.session.phase === "review") {
