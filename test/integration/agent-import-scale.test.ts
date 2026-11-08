@@ -92,20 +92,23 @@ it("commits a 19-person batch through the data service without shipping expanded
 
     // The people list computes term free time over all those events: same result as the
     // naive pairwise overlap, without the quadratic cost that hit the Worker CPU limit.
-    const slots = db.prepare("SELECT id,starts_at,ends_at FROM slot WHERE term_id='term'").all() as { id: string; starts_at: string; ends_at: string }[];
-    const naive = new Map<string, number>();
-    for (let p = 0; p < 19; p++) {
-      const events = actual.filter((e) => e.person_id === "p" + p) as { starts_at: string; ends_at: string }[];
-      let free = 0;
-      for (const slot of slots)
-        if (!events.some((e) => Date.parse(e.starts_at) < Date.parse(slot.ends_at) && Date.parse(e.ends_at) > Date.parse(slot.starts_at)))
-          free += (Date.parse(slot.ends_at) - Date.parse(slot.starts_at)) / 60_000;
-      naive.set("p" + p, Math.round(free));
-    }
+    // Call the API first: a long synchronous check would let the data service's
+    // keep-alive socket expire (ECONNRESET on slower CI runners).
     const started = performance.now();
     const people = await call("GET", "/persons?termId=term&pageSize=100");
     const elapsed = performance.now() - started;
     expect(people.status).toBe(200);
+    const ms = (iso: unknown) => Date.parse(String(iso));
+    const slots = (db.prepare("SELECT id,starts_at,ends_at FROM slot WHERE term_id='term'").all() as Record<string, unknown>[])
+      .map((r) => ({ start: ms(r.starts_at), end: ms(r.ends_at) }));
+    const naive = new Map<string, number>();
+    for (let p = 0; p < 19; p++) {
+      const events = actual.filter((e) => e.person_id === "p" + p).map((e) => ({ start: ms(e.starts_at), end: ms(e.ends_at) }));
+      let free = 0;
+      for (const slot of slots)
+        if (!events.some((e) => e.start < slot.end && e.end > slot.start)) free += (slot.end - slot.start) / 60_000;
+      naive.set("p" + p, Math.round(free));
+    }
     const listed = new Map((people.data.items as { id: string; freeMinutes: number }[]).map((p) => [p.id, p.freeMinutes]));
     expect(listed).toEqual(naive);
     expect(elapsed).toBeLessThan(2000);
