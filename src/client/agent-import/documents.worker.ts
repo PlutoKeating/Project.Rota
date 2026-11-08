@@ -2,6 +2,7 @@ import { outsideTableText } from "../../shared/agent-import/html";
 import { decodeDocumentText } from "../../shared/agent-import/encoding";
 import SevenZip from "7z-wasm";
 import wasmUrl from "7z-wasm/7zz.wasm?url";
+let wasm: Promise<ArrayBuffer> | undefined;
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
 import mammoth from "mammoth";
@@ -57,7 +58,14 @@ scope.onmessage = async ({ data }) => {
     const assets: { path: string; bytes: Uint8Array; mime: string }[] = [];
     if (action === "unpack") {
       const lines: string[] = [];
+      // Fetch the 1.6 MB engine once per pooled worker, not once per archive.
+      wasm ??= fetch(wasmUrl).then((r) => {
+        if (!r.ok) throw Error("解包组件加载失败，请刷新后重试");
+        return r.arrayBuffer();
+      });
+      wasm.catch(() => (wasm = undefined));
       const seven = await SevenZip({
+        wasmBinary: (await wasm).slice(0),
         locateFile: () => wasmUrl,
         print: (line: string) => lines.push(line),
         printErr: (line: string) => lines.push(line),

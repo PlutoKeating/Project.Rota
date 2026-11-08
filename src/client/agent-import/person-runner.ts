@@ -197,6 +197,7 @@ export class ImportRunner {
     const roots = (await materials(this.job.id)).filter((f) => f.origin === "用户上传").slice(0, 6);
     for (const file of roots) {
       if (this.stopped) break;
+      this.activity("coordinator", /\.(zip|7z|rar)$/i.test(file.path) ? "解包材料" : "读取材料");
       if (!/\.(zip|7z|rar)$/i.test(file.path)) {
         await this.preloadSources(agent, [file.path], "discover");
         continue;
@@ -1287,9 +1288,13 @@ export class ImportRunner {
           "旧版批次原件和成果仍保留，仅供查看；请用原材料新建人员对象批次",
         );
       if (await alreadyApplied(job)) return;
-      await rebase(job);
       job.status = "running";
       job.error = undefined;
+      // Show "running" immediately; unpacking a large archive can take a while
+      // before the first checkpoint.
+      this.activity("coordinator", "准备材料");
+      await this.persist();
+      await rebase(job);
       if (job.session.phase === "review") {
         job.session.phase = "reconcile";
         // Current context supplies edited facts; retain prior source evidence.

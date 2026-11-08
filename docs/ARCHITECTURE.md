@@ -144,3 +144,5 @@ OpenCode Go 可选型号取 models.dev 与官方 `https://opencode.ai/inference/
 `kimi-for-coding`在官方Coding端点仅接受temperature=1，旧连接测试固定0导致400；传统网关对该模型使用1，实际Agent调用保持不指定采样参数、由供应商采用默认值。自定义供应商即使使用同名模型也不覆盖采样设置。不切换模型、套餐或开放平台，不新增依赖、Secret、配置项或迁移；更新Worker即可使已有配置生效。
 
 依据：[Kimi官方协议与国内/海外端点](https://www.kimi.com/code/docs/en/)、[Cloudflare跨站Worker请求头](https://developers.cloudflare.com/fundamentals/reference/http-headers/)。回归覆盖测试连接、实际Agent工具请求、Anthropic路径及非官方端点隔离；真实验证仅发送简短测试输入，未上传人员材料。
+
+静态资源缓存由 `public/_headers` 声明（构建后位于 `dist/client/_headers`，Workers 静态资源读取）：哈希资源永久缓存，OCR 资源缓存 7 天。

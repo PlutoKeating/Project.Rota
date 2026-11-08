@@ -1,0 +1,12 @@
+# Hashed build output never changes under the same name: cache it permanently so
+# workers, wasm and chunks load from disk instead of re-downloading on slow links.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# OCR engine and language data (~10 MB, unhashed names): cache for a week,
+# revalidating in the background.
+/vendor/*
+  Cache-Control: public, max-age=604800, stale-while-revalidate=86400
+
+/fonts/*
+  Cache-Control: public, max-age=2592000
