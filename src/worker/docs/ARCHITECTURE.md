@@ -69,3 +69,7 @@ DeepSeek官方Chat接口默认开启思考模式，此时`tool_choice=required`�
 ## 断开中止与 DeepSeek 推理深度（2026-11-08）
 
 `wrangler.jsonc` 增加兼容标志 `enable_request_signal`。`/api/agent-imports/:id/turn` 把 `request.signal` 传入 `agentTurn`：浏览器超时或断开后，当前上游调用通过 `AbortSignal.any` 中止，不再尝试后续候选，避免无人接收的模型调用继续计费并占用供应商限流。DeepSeek 官方端点未配置 `reasoning_effort` 时，`person`（首轮提取）模式使用 `low` 以缩短思考延迟；`verify` 等复核模式保持默认深度。
+
+## Worker CPU 与图片传输（2026-11-08）
+
+生产在 1.3 MB 的 turn 请求上返回 Cloudflare 1102（Worker exceeded resource limits）。`agentTurn` 现在在校验后把图片 data URL 拆成 base64 与 mediaType 再交给 AI SDK，避免 SDK 对每张多 MB 的字符串执行 `new URL()` 与回写；上游收到的仍是相同的 data URL。若账户为 Workers 免费版（每请求约 10 ms CPU），大图请求仍可能偶发 1102，根治需升级 Workers Paid。

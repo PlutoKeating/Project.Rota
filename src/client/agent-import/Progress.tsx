@@ -93,6 +93,7 @@ export function friendlyError(text: string): string {
     [/请求超时|模型请求超时|timeout/i, "模型响应超时"],
     [/文件工具运行超时|OCR 超时/, "读取文件超时"],
     [/网络不可达|network/i, "网络中断"],
+    [/50[23]/, "服务器繁忙，自动重试"],
     [/额度/, "模型额度用尽"],
     [/本轮模型调用未完成/, "模型暂时不可用"],
     [/调用预算/, "调用次数已达上限"],
@@ -123,6 +124,7 @@ function laneOf(job: Job, p: PersonWorkspace): Lane {
   const activity = job.activity?.[p.key]?.text;
   if (p.status === "done") return "done";
   if (activity === "排队重试") return "retry";
+  if (activity === "排队") return "queued";
   // A requeued person has a fresh agent (no error) until it starts again.
   if (p.status === "failed")
     return job.status === "running" && !p.agent.error ? "retry" : "failed";

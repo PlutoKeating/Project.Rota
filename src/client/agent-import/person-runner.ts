@@ -77,7 +77,7 @@ const TOOL_ACTIVITY: Record<string, string> = {
   revise_person: "安排返工",
 };
 // Transport budget for inline images per request; halves on each retry.
-const IMAGE_BUDGET = 3_000_000;
+const IMAGE_BUDGET = 2_000_000;
 
 /** Each instance owns one batch; child actors mutate only their own PersonWorkspace. */
 export class ImportRunner {
@@ -901,9 +901,35 @@ export class ImportRunner {
             (a) =>
               a.code === "quota_exhausted" || (a.retryAfterMs ?? 0) > 30000,
           );
+        // Cloudflare gateway errors (e.g. 1102 Worker over its CPU limit) come
+        // without our JSON body and no model attempt: retry them like the network.
+        const gateway =
+          error instanceof ApiError &&
+          [502, 503].includes(error.status) &&
+          error.code === "http_error";
+        if (gateway)
+          this.recordMetrics(
+            {
+              requestId: crypto.randomUUID(),
+              durationMs: 0,
+              purpose: mode,
+              attempts: [
+                {
+                  providerId: "gateway",
+                  model: "Cloudflare 网关",
+                  durationMs: 0,
+                  status: "error",
+                  code: "gateway",
+                  httpStatus: (error as ApiError).status,
+                },
+              ],
+            },
+            actor,
+          );
         const network =
           error instanceof ApiError &&
           (error.status === 0 ||
+            gateway ||
             attempts.some((a) => a.code === "network_error"));
         const transient =
           error instanceof ApiError &&
@@ -1210,6 +1236,12 @@ export class ImportRunner {
       (p) => p.status !== "done",
     );
     const queue = [...pending], retried = new Set<string>();
+    // Failures from an earlier run are being retried now: show them as waiting,
+    // not with the stale error (the log keeps it).
+    for (const p of pending) {
+      if (p.status === "failed") p.agent.error = undefined;
+      this.activity(p.key, "排队");
+    }
     let index = 0;
     const active = new Set<string>();
     let routing = Promise.resolve();
@@ -1299,6 +1331,7 @@ export class ImportRunner {
       void import("./ocr").then((m) => m.warmOcr()).catch(() => {});
       await this.persist();
       await rebase(job);
+      this.activity("coordinator");
       if (job.session.phase === "review") {
         job.session.phase = "reconcile";
         // Current context supplies edited facts; retain prior source evidence.

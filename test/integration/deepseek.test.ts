@@ -78,3 +78,11 @@ it("stops trying providers once the browser has disconnected", async () => {
     .rejects.toThrow();
   expect(bodies).toHaveLength(0);
 });
+
+it("forwards inline images as data URLs without the SDK reparsing them", async () => {
+  const bodies = upstream();
+  const image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  await agentTurn(await fixture(), { mode: "discover", context: "{}", messages: [{ role: "user", content: [{ type: "text", text: "看图" }, { type: "image", image }] }] }, "batch");
+  const parts = bodies[0].messages.find((m: any) => m.role === "user").content;
+  expect(parts.find((p: any) => p.type === "image_url").image_url.url).toBe(image);
+});

@@ -116,8 +116,8 @@ export async function agentTurn(
         headers["x-opencode-session"] = sessionId;
       }
       // Disallow redirects and URLs in model messages; browser only submits inline images.
-      const messages = body.messages as ModelMessage[];
-      for (const m of messages) {
+      const raw = body.messages as ModelMessage[];
+      for (const m of raw) {
         if (!["user", "assistant", "tool"].includes(m.role))
           throw Error("消息角色无效");
         if (Array.isArray(m.content))
@@ -131,6 +131,26 @@ export async function agentTurn(
               throw Error("只接受本地图片");
           }
       }
+      // Hand the SDK bare base64 + media type. Given a data URL it runs the whole
+      // multi-MB string through new URL() and back (~5 ms CPU per image), which
+      // pushed turns past the Worker CPU limit (Cloudflare error 1102).
+      const messages = raw.map((m) =>
+        m.role === "user" && Array.isArray(m.content)
+          ? {
+              ...m,
+              content: m.content.map((part) => {
+                if (part.type !== "image" || typeof part.image !== "string")
+                  return part;
+                const comma = part.image.indexOf(",");
+                return {
+                  ...part,
+                  image: part.image.slice(comma + 1),
+                  mediaType: part.image.slice(5, part.image.indexOf(";")),
+                };
+              }),
+            }
+          : m,
+      ) as ModelMessage[];
       const guardedFetch: typeof fetch = (input, init) =>
         fetch(input, { ...init, redirect: "manual" });
       const bindingFetch: typeof fetch = async (_input, init) => {
