@@ -15,38 +15,23 @@ import { TasksPage } from "./pages/TasksPage";
 import { TermsPage } from "./pages/TermsPage";
 import { TimetablePage } from "./pages/TimetablePage";
 
-const PAGE_META: Record<string, { title: string; subtitle: string }> = {
-  "": {
-    title: "排班",
-    subtitle: "查看本周安排，处理缺员，随时开始一项新工作。",
-  },
-  terms: {
-    title: "学期与节次",
-    subtitle: "校历网格的起点：开学日、周数、节次",
-  },
-  people: { title: "人员与组织", subtitle: "成员、部门、角色与可排时长" },
-  timetable: { title: "课表", subtitle: "7 天 × 节次网格，课程与请假一目了然" },
-  tasks: { title: "任务", subtitle: "一件活、它的班次与按周生成规则" },
-  schedule: { title: "排班", subtitle: "试排、确认分配、整任务自动排" },
-  fairness: { title: "公平账本", subtitle: "按次数升序，谁最亏谁在前" },
-  imports: { title: "导入", subtitle: "交给 Agent 整理，复核后统一导入" },
-  settings: { title: "管理", subtitle: "校历、排班规则与服务配置" },
+const PAGE_TITLES: Record<string, string> = {
+  "": "排班",
+  terms: "学期与节次",
+  people: "人员与组织",
+  timetable: "课表",
+  tasks: "任务",
+  schedule: "排班",
+  fairness: "公平账本",
+  imports: "导入",
+  settings: "管理",
 };
 
-function metaFor(segments: string[]): { title: string; subtitle: string } {
+function metaFor(segments: string[]): { title: string } {
   const head = segments[0] ?? "";
-  if (head === "tasks" && segments[1]) {
-    return { title: "任务详情", subtitle: "班次列表、添加班次与按周生成" };
-  }
-  if (head === "imports" && segments[1]) {
-    return { title: "导入详情", subtitle: "材料整理与复核" };
-  }
-  return (
-    PAGE_META[head] ?? {
-      title: "页面不存在",
-      subtitle: "检查一下地址，或从左侧导航进入",
-    }
-  );
+  if (head === "tasks" && segments[1]) return { title: "任务详情" };
+  if (head === "imports" && segments[1]) return { title: "导入详情" };
+  return { title: PAGE_TITLES[head] ?? "页面不存在" };
 }
 
 function renderPage(segments: string[]) {
@@ -99,7 +84,7 @@ function RoutedApp() {
   }, [route.path]);
 
   return (
-    <Layout title={meta.title} subtitle={meta.subtitle} path={route.path}>
+    <Layout title={meta.title} path={route.path}>
       <ErrorBoundary key={route.path}>
         {renderPage(route.segments)}
       </ErrorBoundary>

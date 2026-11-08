@@ -5,6 +5,7 @@ import { api } from "../lib/api";
 import { Modal } from "./Modal";
 import { TextInput } from "./Field";
 import { Button } from "./Button";
+import { Icon } from "./Icon";
 import { TimetablePage } from "../pages/TimetablePage";
 export function QuickSearch() {
   const [open, setOpen] = useState(false),
@@ -24,9 +25,16 @@ export function QuickSearch() {
   }, [q, open]);
   return (
     <>
-      <Button variant="ghost" size="sm" onClick={() => setOpen(true)}>
-        搜索
-      </Button>
+      <button
+        type="button"
+        aria-label="搜索"
+        title="搜索人员或任务"
+        onClick={() => setOpen(true)}
+        className="flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-slate-500 transition hover:border-slate-300 hover:text-slate-900 sm:w-56 dark:border-slate-800 dark:bg-slate-950 dark:hover:text-slate-100"
+      >
+        <Icon name="search" className="size-4" />
+        <span className="hidden text-sm sm:inline">搜索</span>
+      </button>
       {open && (
         <Modal
           title="搜索人员、任务或操作"

@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { cx } from "../lib/cx";
 
-export type IconName = "overview" | "terms" | "people" | "timetable" | "tasks" | "schedule" | "fairness" | "imports" | "settings";
+export type IconName = "overview" | "terms" | "people" | "timetable" | "tasks" | "schedule" | "fairness" | "imports" | "settings" | "search" | "sun" | "moon" | "chevron-down" | "chevron-left" | "check" | "x" | "pause" | "play" | "plus" | "alert" | "send" | "trash" | "file" | "logout";
 
 const PATHS: Record<IconName, ReactNode> = {
   overview: (
@@ -61,6 +61,41 @@ const PATHS: Record<IconName, ReactNode> = {
       <path d="M4.5 15.5v3a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5v-3" />
     </>
   ),
+  search: (
+    <>
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="m16 16 4 4" />
+    </>
+  ),
+  sun: (
+    <>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4" />
+    </>
+  ),
+  moon: <path d="M19.5 14.5A7.5 7.5 0 0 1 9.5 4.5a7.5 7.5 0 1 0 10 10Z" />,
+  "chevron-down": <path d="m6 9 6 6 6-6" />,
+  "chevron-left": <path d="m15 6-6 6 6 6" />,
+  check: <path d="m5 12.5 4.5 4.5L19 7.5" />,
+  x: <path d="M6 6l12 12M18 6 6 18" />,
+  pause: <path d="M9 5.5v13M15 5.5v13" />,
+  play: <path d="M7.5 5v14l11-7Z" />,
+  plus: <path d="M12 5v14M5 12h14" />,
+  alert: (
+    <>
+      <path d="M12 4 2.8 19.5h18.4Z" />
+      <path d="M12 10v4.5M12 17.2v.1" />
+    </>
+  ),
+  send: <path d="M4.5 12 20 4.5l-4.5 15.5-3.5-6.5Z M12 13.5l3.5-3.5" />,
+  trash: <path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 12.5h9l1-12.5" />,
+  file: (
+    <>
+      <path d="M6 3.5h8l4 4v13H6Z" />
+      <path d="M14 3.5v4h4" />
+    </>
+  ),
+  logout: <path d="M14 4.5H6v15h8M10.5 12H20M16.5 8.5 20 12l-3.5 3.5" />,
   settings: (
     <>
       <path d="M4 7h9M17 7h3M4 12h3M11 12h9M4 17h9M17 17h3" />

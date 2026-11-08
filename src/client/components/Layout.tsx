@@ -10,12 +10,10 @@ const NAV: { path: string; label: string; icon: IconName }[] = [
 ];
 export function Layout({
   title,
-  subtitle,
   path,
   children,
 }: {
   title: string;
-  subtitle?: string;
   path: string;
   children: ReactNode;
 }) {
@@ -74,28 +72,42 @@ export function Layout({
           </span>
           <span>Project.Rota</span>
         </a>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1.5 sm:gap-2">
           <QuickSearch />
           <button
-            aria-label="切换明暗主题"
-            className="rounded-lg px-2 py-2 text-xs"
+            aria-label={theme === "dark" ? "切换到浅色" : "切换到深色"}
+            title={theme === "dark" ? "浅色" : "深色"}
+            className="grid size-9 place-items-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-slate-800 dark:hover:text-slate-100"
             onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
           >
-            {theme === "dark" ? "浅色" : "深色"}
+            <Icon name={theme === "dark" ? "sun" : "moon"} className="size-[18px]" />
           </button>
-          <details className="relative">
-            <summary className="cursor-pointer rounded-lg p-2 text-sm">
-              {session?.user?.name ?? "账号"}
+          <details className="group relative">
+            <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg py-1 pl-1 pr-2 transition hover:bg-slate-100 dark:hover:bg-slate-800 [&::-webkit-details-marker]:hidden">
+              <span
+                aria-hidden="true"
+                className="grid size-7 place-items-center rounded-full bg-slate-200 text-xs font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200"
+              >
+                {(session?.user?.name ?? "账").slice(0, 1).toUpperCase()}
+              </span>
+              <span className="hidden max-w-32 truncate text-sm sm:inline">
+                {session?.user?.name ?? "账号"}
+              </span>
+              <Icon
+                name="chevron-down"
+                className="size-4 text-slate-400 transition group-open:rotate-180"
+              />
             </summary>
-            <div className="absolute right-0 mt-3 w-48 rounded-xl border border-slate-200 bg-white p-2 shadow-lg dark:border-slate-800 dark:bg-slate-900">
+            <div className="absolute right-0 mt-2 w-44 rounded-xl border border-slate-200 bg-white p-1.5 text-sm shadow-lg dark:border-slate-800 dark:bg-slate-900">
               <a
-                className="block rounded-lg p-3 hover:bg-slate-100 dark:hover:bg-slate-800"
+                className="flex items-center gap-2.5 rounded-lg px-3 py-2.5 hover:bg-slate-100 dark:hover:bg-slate-800"
                 href="#/settings"
               >
+                <Icon name="settings" className="size-4 text-slate-500" />
                 管理
               </a>
               <button
-                className="w-full p-3 text-left"
+                className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left hover:bg-slate-100 dark:hover:bg-slate-800"
                 onClick={async () => {
                   try {
                     await api.post("/auth/logout");
@@ -105,9 +117,14 @@ export function Layout({
                   }
                 }}
               >
+                <Icon name="logout" className="size-4 text-slate-500" />
                 退出登录
               </button>
-              {error && <p role="alert">{error}</p>}
+              {error && (
+                <p role="alert" className="px-3 py-2 text-xs text-rose-700 dark:text-rose-300">
+                  {error}
+                </p>
+              )}
             </div>
           </details>
         </div>
@@ -118,9 +135,6 @@ export function Layout({
         </nav>
         <div className="mt-auto">
           {link({ path: "/settings", label: "管理", icon: "settings" })}
-          <p className="px-4 pt-5 text-xs text-slate-500">
-            把合适的人，安排到位。
-          </p>
         </div>
       </aside>
       <main
@@ -131,9 +145,6 @@ export function Layout({
         <div className="mx-auto max-w-[1440px]">
           <div className="mb-6">
             <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-            {subtitle && (
-              <p className="mt-2 text-sm text-slate-500">{subtitle}</p>
-            )}
           </div>
           {children}
         </div>
