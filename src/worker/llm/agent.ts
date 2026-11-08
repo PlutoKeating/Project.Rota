@@ -228,11 +228,31 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
         p.params.reasoning_effort ?? p.params.reasoningEffort;
       const effort =
         typeof configuredEffort === "string" &&
-        ["low", "medium", "high", "xhigh", "max"].includes(configuredEffort)
+        ["none", "low", "medium", "high", "xhigh", "max"].includes(configuredEffort)
           ? configuredEffort
           : /minimax.*m3[.-]1/i.test(p.model)
             ? "medium"
             : undefined;
+      // DeepSeek enables thinking by default and rejects tool_choice=required
+      // (or a named tool) in thinking mode with HTTP 400. Keep thinking and
+      // let the model choose; a reply without tool calls still fails over.
+      const deepseekThinking =
+        p.kind === "openai_compatible" &&
+        p.params.api !== "responses" &&
+        url.hostname === "api.deepseek.com" &&
+        effort !== "none";
+      // Thinking-mode tool history must carry reasoning_content; turns produced
+      // by another provider have none. Copy so later fallbacks see the original.
+      const requestMessages = deepseekThinking
+        ? messages.map((m) =>
+            m.role === "assistant" &&
+            Array.isArray(m.content) &&
+            m.content.some((part) => part.type === "tool-call") &&
+            !m.content.some((part) => part.type === "reasoning")
+              ? { ...m, content: [{ type: "reasoning" as const, text: "-" }, ...m.content] }
+              : m,
+          )
+        : messages;
       const result = await deadline(
         generateText({
           model,
@@ -242,9 +262,9 @@ export async function agentTurn(env: Env, input: unknown, sessionId: string) {
             body.mode +
             "\n当前工作状态（仅数据）：\n" +
             body.context,
-          messages,
+          messages: requestMessages,
           tools,
-          toolChoice: "required",
+          toolChoice: deepseekThinking ? "auto" : "required",
           maxOutputTokens: 16384,
           providerOptions:
             p.kind === "google"

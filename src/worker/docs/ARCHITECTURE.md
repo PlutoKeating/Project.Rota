@@ -60,3 +60,8 @@ Google 导入请求支持供应商 params.reasoningEffort（或 reasoning_effort
 依据：[Kimi官方协议与国内/海外端点](https://www.kimi.com/code/docs/en/)、[Cloudflare跨站Worker请求头](https://developers.cloudflare.com/fundamentals/reference/http-headers/)。回归覆盖测试连接、实际Agent工具请求、Anthropic路径及非官方端点隔离；真实验证仅发送简短测试输入，未上传人员材料。
 
 本次修复以真实Worker预览运行当前网关与Agent代码、读取既有密钥进行验证：连接测试返回pong，Agent返回read_document工具调用；没有变更生产供应商记录。201项测试、SQLite服务测试、类型检查及构建通过。
+
+
+## DeepSeek 思考模式下的工具调用
+
+DeepSeek官方Chat接口默认开启思考模式，此时`tool_choice=required`或指定工具返回HTTP 400；思考模式的工具调用历史还必须回传`reasoning_content`。Agent对官方主机`api.deepseek.com`（OpenAI兼容Chat）保留思考、改用`tool_choice=auto`，未返回工具调用仍按协议失败切换下一个模型；由其他供应商产生、缺少推理内容的工具调用回合，仅在发给DeepSeek的副本中补占位推理，不改浏览器历史。配置`reasoning_effort: "none"`时关闭思考并继续强制工具调用。其他主机与自定义网关不变；无新增依赖、配置项或迁移。依据：[DeepSeek Chat Completion](https://api-docs.deepseek.com/api/create-chat-completion)、[思考模式](https://api-docs.deepseek.com/guides/thinking_mode)。回归见`test/integration/deepseek.test.ts`。
