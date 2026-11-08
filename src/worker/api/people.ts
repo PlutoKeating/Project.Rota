@@ -28,6 +28,7 @@ import type {
   UnavailabilityKind,
 } from "../../shared/types";
 import type { BusyInfo, BusyReason } from "../domain/availability";
+import { forEachEventSlot } from "../domain/availability";
 import {
   freeMinutes,
   loadAvailability,
@@ -405,15 +406,11 @@ async function computeFreeMinutesBatch(
 
   const occurrenceSlots = new Map<string, Set<string>>();
   const personal = await dbAll<{personId:string;startsAt:string;endsAt:string}>(db, "select person_id,starts_at,ends_at from timetable_event where term_id=? and person_id in (select value from json_each(?))",termId,JSON.stringify(personIds));
-  for (const e of personal) {
-    for (const slot of slots) {
-      if (Date.parse(e.startsAt) < Date.parse(slot.endsAt) && Date.parse(e.endsAt) > Date.parse(slot.startsAt)) {
-        const set = occurrenceSlots.get(e.personId) ?? new Set<string>();
-        set.add(slot.id);
-        occurrenceSlots.set(e.personId, set);
-      }
-    }
-  }
+  forEachEventSlot(personal, slots, (e, slotId) => {
+    const set = occurrenceSlots.get(e.personId);
+    if (set) set.add(slotId);
+    else occurrenceSlots.set(e.personId, new Set([slotId]));
+  });
   const leaves = new Map<string, IntervalRow[]>();
   const assignments = new Map<string, IntervalRow[]>();
 
@@ -476,6 +473,14 @@ async function computeFreeMinutesBatch(
     }
   }
 
+  // Parse each slot once; per-person free time = all slot time minus busy slot time.
+  const span = new Map<string, number>();
+  let totalMs = 0;
+  for (const slot of slots) {
+    const ms = Math.max(0, Date.parse(slot.endsAt) - Date.parse(slot.startsAt));
+    span.set(slot.id, ms);
+    totalMs += ms;
+  }
   for (const personId of personIds) {
     const busy = new Map<string, BusyInfo>();
     for (const slotId of occurrenceSlots.get(personId) ?? []) {
@@ -497,7 +502,10 @@ async function computeFreeMinutesBatch(
         }
       }
     }
-    result.set(personId, freeMinutes(slots, busy));
+    let busyMs = 0;
+    for (const id of busy.keys()) busyMs += span.get(id) ?? 0;
+    // Same as freeMinutes(slots, busy) without re-parsing every slot per person.
+    result.set(personId, Math.round((totalMs - busyMs) / 60_000));
   }
   return result;
 }

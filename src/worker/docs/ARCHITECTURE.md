@@ -77,3 +77,7 @@ DeepSeek官方Chat接口默认开启思考模式，此时`tool_choice=required`�
 ## 共享单轮执行（2026-11-08）
 
 `agentTurn` 只负责读取启用的服务器模型、解密密钥并构造 Workers AI 绑定，单轮执行交给共享的 `src/shared/agent-import/turn.ts`（`runTurn`、`createChatModel`、`orderCandidates`、`TurnFailure`）。浏览器本机直连模式使用同一模块，因此两条路径的工具、回退与错误规则一致。
+
+## 课表事件与时段的重叠计算（2026-11-08）
+
+一次 19 人导入会产生约 1 万条 `timetable_event`，学期时段格子约 1500 个。人员列表的学期可排时长、单人可用性和批量可用性原先把每条事件与每个格子两两比较并反复解析日期，生产上触发 Cloudflare 1102（503）。现在统一用 `domain/availability.ts` 的 `forEachEventSlot`：格子只解析一次并按 UTC 日分桶，每条事件只比较相邻日期的格子；人员列表的空闲分钟按“全部格子时长减去占用格子时长”计算。结果与逐对比较一致，由 `test/integration/agent-import-scale.test.ts` 校验，本地该接口从约 4.4 秒降到约 35 毫秒。

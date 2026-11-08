@@ -27,6 +27,33 @@ function toMs(iso: string): number {
   return Date.parse(iso);
 }
 
+const DAY_MS = 86_400_000;
+/**
+ * Calls visit(event, slotId) for every overlapping event/slot pair. Slots are parsed
+ * once and bucketed by UTC day, so a full term (~10k events × ~1.5k slots) costs
+ * thousands of comparisons instead of tens of millions (Worker CPU limit).
+ */
+export function forEachEventSlot<E extends { startsAt: string; endsAt: string }>(
+  events: E[],
+  slots: { id: string; startsAt: string; endsAt: string }[],
+  visit: (event: E, slotId: string) => void,
+) {
+  const byDay = new Map<number, { id: string; start: number; end: number }[]>();
+  for (const slot of slots) {
+    const start = toMs(slot.startsAt), end = toMs(slot.endsAt);
+    const day = Math.floor(start / DAY_MS);
+    const list = byDay.get(day);
+    if (list) list.push({ id: slot.id, start, end });
+    else byDay.set(day, [{ id: slot.id, start, end }]);
+  }
+  for (const event of events) {
+    const start = toMs(event.startsAt), end = toMs(event.endsAt);
+    for (let day = Math.floor(start / DAY_MS) - 1; day <= Math.floor(end / DAY_MS) + 1; day++)
+      for (const slot of byDay.get(day) ?? [])
+        if (start < slot.end && end > slot.start) visit(event, slot.id);
+  }
+}
+
 interface OccurrenceRow {
   slotId: string;
   courseName: string;
@@ -70,12 +97,8 @@ export async function loadAvailability(
   const personal = await dbAll<{ id: string; startsAt: string; endsAt: string; name: string }>(db,
     `select e.id,e.starts_at,e.ends_at,t.name from timetable_event e
      join timetable_entry t on t.id=e.entry_id where e.person_id=? and e.term_id=?`, personId, termId);
-  for (const event of personal) {
-    for (const slot of slots) {
-      if (toMs(event.startsAt) < toMs(slot.endsAt) && toMs(event.endsAt) > toMs(slot.startsAt))
-        busy.set(slot.id, { reason: "course", refId: event.id, label: event.name });
-    }
-  }
+  forEachEventSlot(personal, slots, (event, slotId) =>
+    busy.set(slotId, { reason: "course", refId: event.id, label: event.name }));
   for (const row of occurrences) {
     if (!busy.has(row.slotId)) busy.set(row.slotId, { reason: "course", label: row.courseName });
   }
@@ -245,12 +268,8 @@ export async function loadAvailabilityBatch(
     `select e.id,e.person_id,e.starts_at,e.ends_at,t.name from timetable_event e
      join timetable_entry t on t.id=e.entry_id where e.term_id=? and e.person_id in (select value from json_each(?))`,
     termId, JSON.stringify(personIds));
-  for (const event of personal) {
-    for (const slot of slots) {
-      if (toMs(event.startsAt) < toMs(slot.endsAt) && toMs(event.endsAt) > toMs(slot.startsAt))
-        byPerson.get(event.personId)?.set(slot.id, { reason: "course", refId: event.id, label: event.name });
-    }
-  }
+  forEachEventSlot(personal, slots, (event, slotId) =>
+    byPerson.get(event.personId)?.set(slotId, { reason: "course", refId: event.id, label: event.name }));
 
   // 先按人分组，避免「格子 × 人 × 全部请假记录」的三重循环
   const leavesByPerson = new Map<string, typeof leaveRows>();
