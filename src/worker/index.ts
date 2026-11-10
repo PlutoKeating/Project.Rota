@@ -6,6 +6,7 @@ import { auth } from "./api/auth";
 import { courses } from "./api/courses";
 import { exportApi } from "./api/export";
 import { fairness } from "./api/fairness";
+import { freeWindows } from "./api/free-windows";
 import { imports } from "./api/imports";
 import { people } from "./api/people";
 import { schedule } from "./api/schedule";
@@ -70,6 +71,7 @@ app.route("/api/auth", auth);
 app.route("/api", tasks);
 app.route("/api", schedule);
 app.route("/api", fairness);
+app.route("/api", freeWindows);
 app.route("/api", exportApi);
 
 app.notFound((c) => {

@@ -1,4 +1,5 @@
 import { WorkComposer } from "../components/WorkComposer";
+import { FreeWindowFinder, type WorkDraft } from "../components/FreeWindowFinder";
 import { FairnessPage } from "./FairnessPage";
 import { TasksPage } from "./TasksPage";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -307,6 +308,8 @@ export function SchedulePage() {
     rows: { s: ShiftView; p: PreviewResult }[];
   } | null>(null);
   const [creating, setCreating] = useState(false);
+  const [finding, setFinding] = useState(false);
+  const [draft, setDraft] = useState<WorkDraft | null>(null);
   const [detailTask, setDetailTask] = useState<string | null>(null);
   useEffect(() => {
     const open = () => setCreating(true);
@@ -418,7 +421,12 @@ export function SchedulePage() {
             </Button>
           ))}
         </nav>
-        <Button onClick={() => setCreating(true)}>安排工作</Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" onClick={() => setFinding(true)}>
+            找共同空闲
+          </Button>
+          <Button onClick={() => setCreating(true)}>安排工作</Button>
+        </div>
       </div>
       {tab === "tasks" && <TasksPage taskId={null} />}
       {tab === "fairness" && <FairnessPage />}
@@ -651,9 +659,23 @@ export function SchedulePage() {
           <TasksPage taskId={detailTask} />
         </Modal>
       )}
+      {finding && (
+        <FreeWindowFinder
+          onClose={() => setFinding(false)}
+          onArrange={(next) => {
+            setFinding(false);
+            setDraft(next);
+            setCreating(true);
+          }}
+        />
+      )}
       {creating && (
         <WorkComposer
-          onClose={() => setCreating(false)}
+          initial={draft ?? undefined}
+          onClose={() => {
+            setCreating(false);
+            setDraft(null);
+          }}
           onCreated={(date) => {
             setFrom(date);
             setTo(addDays(date, 6));

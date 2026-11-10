@@ -7,21 +7,25 @@ import { Modal } from "./Modal";
 import { TermsPage } from "../pages/TermsPage";
 import { PeoplePage } from "../pages/PeoplePage";
 import { isoDate } from "../lib/format";
+import type { WorkDraft } from "./FreeWindowFinder";
 export function WorkComposer({
   onClose,
   onCreated,
+  initial,
 }: {
   onClose: () => void;
   onCreated: (date: string) => void;
+  /** 从「找共同空闲」带入的时间、部门与人数。 */
+  initial?: WorkDraft;
 }) {
   const orgs = useOrgsState(),
     terms = useTermsState();
   const [title, setTitle] = useState(""),
-    [org, setOrg] = useState(""),
-    [date, setDate] = useState(isoDate()),
-    [start, setStart] = useState("09:00"),
-    [end, setEnd] = useState("10:00"),
-    [count, setCount] = useState(1),
+    [org, setOrg] = useState(initial?.orgId ?? ""),
+    [date, setDate] = useState(initial?.date ?? isoDate()),
+    [start, setStart] = useState(initial?.start ?? "09:00"),
+    [end, setEnd] = useState(initial?.end ?? "10:00"),
+    [count, setCount] = useState(initial?.count ?? 1),
     [repeat, setRepeat] = useState(false),
     [weeks, setWeeks] = useState(4),
     [busy, setBusy] = useState(false),
