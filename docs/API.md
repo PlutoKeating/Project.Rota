@@ -106,6 +106,35 @@
 
 `windowKey` 规则：`<termName>-W<周次>`。不传时返回所有窗口。`carryOver` 为该周开始前同组织的历史有效分配次数；试排计入跨窗口历史。
 
+## 共同空闲时段
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `POST` | `/free-windows` | **只算不写**：接下来 N 天内最多人整段有空的 M 个不重叠时段，附名单与热力图 |
+
+请求体 `FreeWindowsInput`（类型见 `src/shared/types.ts`）：
+
+| 字段 | 默认 | 约束 |
+| --- | --- | --- |
+| `personIds` | 必填 | 1–300 个已存在的人员 ID；前端由「所选部门的有效成员 ∪ 额外添加 − 勾掉的人」得出 |
+| `requiredPersonIds` | `[]` | 须包含在 `personIds` 中；任一必到者不是整段有空的时段不返回 |
+| `days` | 7 | 1–28；从此刻向上取整到 15 分钟开始，今天已过去的部分跳过 |
+| `count` | 5 | 1–20，返回的时段互不重叠 |
+| `dayStart` / `dayEnd` | `08:00` / `22:00` | `HH:mm`，15 分钟对齐，`dayEnd` 可为 `24:00`，至少相隔 1 小时 |
+| `weekdays` | 1–7 全选 | 1=周一 … 7=周日 |
+| `bufferMinutes` | 0 | 0–120，每段忙碌前后各加此分钟数 |
+
+规则：
+
+- 「有空」= 整段时段内没有任何忙碌。忙碌来源：课程 occurrence（停课除外）、个人课表事件、已批准请假/黑名单、任意部门 `proposed/confirmed/completed` 的排班（班次未取消）。
+- 当天没有学期覆盖（`start_date` + `week_count` 周），或此人在覆盖学期没有任何选课/个人课表条目时记为**未知**：不计入有空人数，必到者未知视为不满足。
+- 开始时间按 15 分钟对齐；时长为 30 分钟的整数倍且 ≥ 60 分钟，不设上限。先保证人数最多，再在同一批人都有空的前提下尽量延长。
+- 排序：有空人数↓ → 时长↓ → 开始时间↑，按此顺序贪心选取不重叠的前 `count` 个；与已选时段重叠的候选会截到其之前（仍需 ≥ 1 小时）后继续参与排序。
+
+返回 `FreeWindowsResult`：`windows[]` 含 `startsAt/endsAt/minutes` 与 `free`（人员 ID）、`busy`（`{personId, reason: course|leave|blacklist|assignment, label}`，取时段内第一条冲突）、`unknown`；`heatmap[]` 每天一行，`free`/`unknown` 为每 15 分钟整格有空/未知人数；`people` 为参与人员及是否必到。无结果时 `emptyReason` 为 `no_days` / `window_too_short` / `required_unavailable` / `no_free_time`。
+
+固定北京时间（+08:00）；接口只读，不写审计。
+
 ## 旧单文件导入兼容接口
 
 新导入界面使用下文浏览器 Agent API，不调用此固定解析流程。
