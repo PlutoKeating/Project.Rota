@@ -300,6 +300,16 @@ describe("管理后台", () => {
     expect(saved.status).toBe(200);
     expect(saved.data.defaultCooldownDays).toBe(5);
     expect(saved.data.weights.fairness).toBe(0.6);
+    expect(current.data.mealBlocks).toEqual([
+      { label: "午饭", start: "12:00", end: "13:30" },
+      { label: "晚饭", start: "17:30", end: "18:30" },
+    ]);
+    const meals = [{ label: "午饭", start: "11:45", end: "13:00" }];
+    const withMeals = await call(env, "PUT", "/api/admin/settings", { ...next, mealBlocks: meals });
+    expect(withMeals.data.mealBlocks).toEqual(meals);
+    expect((await call(env, "GET", "/api/meal-blocks")).data.items).toEqual(meals);
+    const bad = await call(env, "PUT", "/api/admin/settings", { ...next, mealBlocks: [{ label: "午饭", start: "13:00", end: "12:00" }] });
+    expect(bad.status).toBe(400);
   });
 });
 

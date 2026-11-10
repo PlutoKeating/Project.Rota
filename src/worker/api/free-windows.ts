@@ -1,6 +1,7 @@
 import { Hono } from "hono";
-import { parseClock } from "../../shared/free-windows";
-import { loadFreeWindows } from "../domain/free-windows";
+import { MAX_DURATION_MINUTES, MIN_DURATION_MINUTES, parseClock } from "../../shared/free-windows";
+import type { FreeWindowMode } from "../../shared/types";
+import { loadFreeWindows, loadMealBlocks } from "../domain/free-windows";
 import type { Env } from "../env";
 import { badRequest, readJson } from "../lib/core";
 
@@ -29,7 +30,12 @@ function clock(value: unknown, field: string, fallback: string): number {
   return minutes;
 }
 
-/** 只读计算：接下来 N 天内最多人整段有空的 M 个不重叠时段。不写库、不审计。 */
+const MODES: readonly FreeWindowMode[] = ["all", "quorum", "meal"];
+
+/** 全组织统一的饭点（只读）；排班课表视图与找时间面板用来画饭点。 */
+freeWindows.get("/meal-blocks", async (c) => c.json({ items: await loadMealBlocks(c.env.CONFIG) }));
+
+/** 只读计算：给定时长的活动在接下来几天里最合适的 M 个时间。不写库、不审计。 */
 freeWindows.post("/free-windows", async (c) => {
   const body = await readJson<Record<string, unknown>>(c);
   const personIds = idList(body.personIds, "personIds");
@@ -40,7 +46,6 @@ freeWindows.post("/free-windows", async (c) => {
 
   const dayStartMinutes = clock(body.dayStart, "dayStart", "08:00");
   const dayEndMinutes = clock(body.dayEnd, "dayEnd", "22:00");
-  if (dayEndMinutes - dayStartMinutes < 60) throw badRequest("每日窗口至少 1 小时");
 
   let weekdays = [1, 2, 3, 4, 5, 6, 7];
   if (body.weekdays !== undefined && body.weekdays !== null) {
@@ -50,9 +55,27 @@ freeWindows.post("/free-windows", async (c) => {
     if (weekdays.length === 0) throw badRequest("至少选择一个星期");
   }
 
+  const durationMinutes = intIn(body.durationMinutes, "durationMinutes", MIN_DURATION_MINUTES, MAX_DURATION_MINUTES, 60);
+  if (durationMinutes % 15 !== 0) throw badRequest("durationMinutes 须为 15 的整数倍");
+  if (dayEndMinutes - dayStartMinutes < durationMinutes) throw badRequest("每日范围短于活动时长");
+  const mode = (body.mode ?? "all") as FreeWindowMode;
+  if (!MODES.includes(mode)) throw badRequest("mode 须为 all / quorum / meal");
+  const minAttendees = mode === "quorum" ? intIn(body.minAttendees, "minAttendees", 1, personIds.length, 1) : null;
+  let fromDate: string | undefined;
+  if (body.fromDate !== undefined && body.fromDate !== null) {
+    if (typeof body.fromDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(body.fromDate) || Number.isNaN(Date.parse(body.fromDate)))
+      throw badRequest("fromDate 须为 YYYY-MM-DD");
+    fromDate = body.fromDate;
+  }
+
   const result = await loadFreeWindows(c.env.DB, {
     personIds,
     requiredPersonIds,
+    durationMinutes,
+    mode,
+    minAttendees,
+    mealBlocks: await loadMealBlocks(c.env.CONFIG),
+    fromDate,
     days: intIn(body.days, "days", 1, 28, 7),
     count: intIn(body.count, "count", 1, 20, 5),
     dayStartMinutes,

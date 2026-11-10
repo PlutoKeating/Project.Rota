@@ -7,6 +7,7 @@ import type {
   AuditEvent,
   ListResponse,
   LlmProvider,
+  MealBlock,
   ScoreWeights,
 } from "../../shared/types";
 import { Button } from "../components/Button";
@@ -53,6 +54,11 @@ const WEIGHT_FIELDS: {
   },
 ];
 
+const DEFAULT_MEALS: MealBlock[] = [
+  { label: "午饭", start: "12:00", end: "13:30" },
+  { label: "晚饭", start: "17:30", end: "18:30" },
+];
+
 const DEFAULT_WEIGHTS: ScoreWeights = {
   fairness: 0.45,
   starvation: 0.3,
@@ -92,6 +98,7 @@ export function SettingsPage() {
       defaultCooldownDays: data.defaultCooldownDays ?? 3,
       exportIncludePhone: data.exportIncludePhone ?? false,
       importProviderId: data.importProviderId ?? null,
+      mealBlocks: data.mealBlocks ?? DEFAULT_MEALS,
       weights: {
         fairness: data.weights?.fairness ?? DEFAULT_WEIGHTS.fairness,
         starvation: data.weights?.starvation ?? DEFAULT_WEIGHTS.starvation,
@@ -101,6 +108,16 @@ export function SettingsPage() {
       },
     });
   }, [settings.data]);
+
+  function updateMeal(index: number, patch: Partial<MealBlock> | null): void {
+    setDraft((previous) => {
+      if (!previous) return previous;
+      const mealBlocks = [...previous.mealBlocks];
+      if (patch) mealBlocks[index] = { ...mealBlocks[index]!, ...patch };
+      else mealBlocks.splice(index, 1);
+      return { ...previous, mealBlocks };
+    });
+  }
 
   function updateWeight(key: keyof ScoreWeights, value: number): void {
     setDraft((previous) =>
@@ -333,6 +350,46 @@ export function SettingsPage() {
                   />
                 </div>
               </div>
+
+              <section className="space-y-2 rounded-xl border border-slate-200 p-3 dark:border-slate-800">
+                <div>
+                  <h3 className="text-xs font-medium text-slate-700 dark:text-slate-200">饭点</h3>
+                  <p className="mt-0.5 text-[11px] text-slate-500">
+                    全组织统一。「找时间」安排普通活动时不占用这些时段，选「聚餐」时只在这附近找；课表视图中以斜纹标出。
+                  </p>
+                </div>
+                {draft.mealBlocks.map((meal, index) => (
+                  <div key={index} className="grid grid-cols-[1fr_auto_auto_auto] items-end gap-2">
+                    <Field label="名称">
+                      <TextInput value={meal.label} maxLength={20} onChange={(e) => updateMeal(index, { label: e.target.value })} />
+                    </Field>
+                    <Field label="开始">
+                      <TextInput type="time" step={900} value={meal.start} onChange={(e) => updateMeal(index, { start: e.target.value })} />
+                    </Field>
+                    <Field label="结束">
+                      <TextInput type="time" step={900} value={meal.end} onChange={(e) => updateMeal(index, { end: e.target.value })} />
+                    </Field>
+                    <Button variant="ghost" size="sm" onClick={() => updateMeal(index, null)} aria-label={`删除${meal.label || "饭点"}`}>
+                      删除
+                    </Button>
+                  </div>
+                ))}
+                {draft.mealBlocks.length < 6 && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() =>
+                      setDraft((previous) =>
+                        previous
+                          ? { ...previous, mealBlocks: [...previous.mealBlocks, { label: "饭点", start: "11:30", end: "12:00" }] }
+                          : previous,
+                      )
+                    }
+                  >
+                    添加饭点
+                  </Button>
+                )}
+              </section>
             </div>
           ) : (
             <EmptyState

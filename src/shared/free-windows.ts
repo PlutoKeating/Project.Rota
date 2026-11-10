@@ -3,28 +3,43 @@ import type {
   FreeWindowBusyReason,
   FreeWindowEmptyReason,
   FreeWindowHeatRow,
+  FreeWindowMode,
   FreeWindowPerson,
+  MealBlock,
 } from "./types";
 
 /**
- * 共同空闲时段：在接下来 N 天内找出最多人整段有空的 M 个不重叠时段。
+ * 给一个已知时长的活动挑时间。
  *
- * 做法与 LeetCode 759 Employee Free Time / 扫描线一致，只是把时间离散成 15 分钟格：
- * 从每个起点向后延伸时「整段有空的人」只会收缩，人群每变一次就产生一个候选——
- * 同一批人能一起待多久就多长（向下取整到 30 分钟，至少 60 分钟）。候选按人数↓、时长↓、开始时间↑排序后贪心取不重叠的前 M 个。
+ * 时间离散成 15 分钟格。对每个可能的开始格 s，活动占 [s, s+D)：
+ *   1. 硬条件：不碰饭点（聚餐反过来：必须覆盖饭点）；必到者整段有空；
+ *      「至少 K 人」模式下到场人数 ≥ K。
+ *   2. 同一天里连续可行、到场名单完全相同的开始时间合成一个「可挪动区间」，
+ *      只推荐区间里最舒服的那个开始时间（聚餐最贴合饭点；前后紧挨课的人最少；整点/半点优先；越早越好）。
+ *   3. 排序：全员/聚餐 → 到场人数↓、时段舒适度↑、紧挨人数↑、时间↑；
+ *      至少 K 人 → 达标后先看舒适度（工作日白天优先），再看人数。
+ *   4. 贪心取不重叠的前 M 个，每天最多 2 个，避免推荐都挤在同一天。
  *
  * 纯函数，不依赖运行时；Worker 负责取数，前端与测试可直接调用。
  */
 
 export const CELL_MINUTES = 15;
-export const UNIT_MINUTES = 30;
-export const MIN_WINDOW_MINUTES = 60;
+export const MIN_DURATION_MINUTES = 30;
+export const MAX_DURATION_MINUTES = 480;
+export const MAX_PER_DAY = 2;
+/** 聚餐至少要与饭点重叠的分钟数（活动更短时取活动时长）。 */
+export const MEAL_OVERLAP_MINUTES = 30;
+
+export const DEFAULT_MEAL_BLOCKS: MealBlock[] = [
+  { label: "午饭", start: "12:00", end: "13:30" },
+  { label: "晚饭", start: "17:30", end: "18:30" },
+];
 
 const MINUTE_MS = 60_000;
 const CELL_MS = CELL_MINUTES * MINUTE_MS;
-const UNIT_CELLS = UNIT_MINUTES / CELL_MINUTES;
-const MIN_CELLS = MIN_WINDOW_MINUTES / CELL_MINUTES;
 const DAY_MS = 86_400_000;
+const EARLY_MINUTES = 8 * 60;
+const LATE_MINUTES = 21 * 60 + 30;
 
 export interface TimeInterval {
   start: number;
@@ -49,6 +64,11 @@ export interface FindFreeWindowsParams {
   busy: Map<string, BusyInterval[]>;
   unknown: Map<string, TimeInterval[]>;
   count: number;
+  durationMinutes: number;
+  mode?: FreeWindowMode;
+  /** 「至少 K 人」模式的 K。 */
+  minAttendees?: number;
+  meals?: MealBlock[];
   offsetMinutes?: number;
 }
 
@@ -56,6 +76,8 @@ export interface FindFreeWindowsOutput {
   windows: FreeWindow[];
   heatmap: FreeWindowHeatRow[];
   emptyReason: FreeWindowEmptyReason | null;
+  /** 满足其他条件时最多能到场的人数（用于「凑不够 K 人」时的提示）。 */
+  bestAttendees: number;
 }
 
 /** `HH:mm` → 分钟；允许 `24:00`。非法返回 null。 */
@@ -65,6 +87,32 @@ export function parseClock(value: string): number | null {
   const minutes = Number(match[1]) * 60 + Number(match[2]);
   if (Number(match[2]) > 59 || minutes > 1440) return null;
   return minutes;
+}
+
+/**
+ * 校验并规整饭点配置：最多 6 段，名称 1–20 字，15 分钟对齐，结束晚于开始，互不重叠。
+ * 返回错误信息字符串表示不合法。
+ */
+export function normalizeMealBlocks(value: unknown): MealBlock[] | string {
+  if (!Array.isArray(value)) return "饭点须为数组";
+  if (value.length > 6) return "饭点最多 6 段";
+  const result: MealBlock[] = [];
+  for (const item of value) {
+    if (typeof item !== "object" || item === null) return "饭点格式无效";
+    const record = item as Record<string, unknown>;
+    const label = typeof record.label === "string" ? record.label.trim() : "";
+    if (!label || label.length > 20) return "饭点名称须为 1–20 字";
+    const start = typeof record.start === "string" ? parseClock(record.start) : null;
+    const end = typeof record.end === "string" ? parseClock(record.end) : null;
+    if (start === null || end === null || start % 15 !== 0 || end % 15 !== 0)
+      return `「${label}」的时间须为 15 分钟对齐的 HH:mm`;
+    if (end <= start) return `「${label}」的结束时间须晚于开始时间`;
+    result.push({ label, start: record.start as string, end: record.end as string });
+  }
+  const sorted = [...result].sort((a, b) => parseClock(a.start)! - parseClock(b.start)!);
+  for (let i = 1; i < sorted.length; i += 1)
+    if (parseClock(sorted[i]!.start)! < parseClock(sorted[i - 1]!.end)!) return "饭点时段不能重叠";
+  return sorted;
 }
 
 /** 毫秒时间戳 → 带固定偏移的本地 ISO，如 `2026-11-10T14:00:00+08:00`。 */
@@ -84,8 +132,8 @@ function weekdayOf(date: string): number {
 }
 
 /**
- * 从此刻起的 N 个本地日期，按星期筛选，每天截取 [dayStart, dayEnd)；
- * 今天从此刻向上取整到 15 分钟。偏移须是 15 分钟的整数倍。
+ * 从 fromDate（默认今天）起的 N 个本地日期，按星期筛选，每天截取 [dayStart, dayEnd)；
+ * 早于此刻的部分跳过（今天从此刻向上取整到 15 分钟）。偏移须是 15 分钟的整数倍。
  */
 export function buildDays(options: {
   now: number;
@@ -93,11 +141,14 @@ export function buildDays(options: {
   dayStartMinutes: number;
   dayEndMinutes: number;
   weekdays: number[];
+  fromDate?: string;
   offsetMinutes?: number;
 }): FreeWindowDay[] {
   const offset = (options.offsetMinutes ?? 480) * MINUTE_MS;
   const allowed = new Set(options.weekdays);
-  const firstMidnight = Math.floor((options.now + offset) / DAY_MS) * DAY_MS - offset;
+  const today = Math.floor((options.now + offset) / DAY_MS) * DAY_MS - offset;
+  const requested = options.fromDate ? Date.parse(`${options.fromDate}T00:00:00Z`) - offset : today;
+  const firstMidnight = Math.max(today, requested);
   const earliest = Math.ceil(options.now / CELL_MS) * CELL_MS;
   const result: FreeWindowDay[] = [];
   for (let i = 0; i < options.days; i += 1) {
@@ -111,24 +162,39 @@ export function buildDays(options: {
   return result;
 }
 
-interface Candidate {
-  /** 全局格索引（跨天连续编号）。 */
-  cell: number;
-  cells: number;
-  count: number;
-  day: number;
-}
-
 const FREE = 0;
 const BUSY = 1;
 const UNKNOWN = 2;
 
+interface Option {
+  /** 当天格下标。 */
+  s: number;
+  attendees: number;
+  comfort: number;
+  tight: number;
+  aligned: boolean;
+  /** 聚餐：与饭点重叠越多、开始越贴近饭点越好（越小越好）；其他模式为 0。 */
+  fit: number;
+}
+
+interface Group {
+  day: number;
+  first: number;
+  last: number;
+  /** 区间内按「舒适度、紧挨人数、整点、越早」排好的候选开始格。 */
+  options: Option[];
+}
+
 export function findFreeWindows(params: FindFreeWindowsParams): FindFreeWindowsOutput {
   const { people, days } = params;
   const offsetMinutes = params.offsetMinutes ?? 480;
-  if (days.length === 0) return { windows: [], heatmap: [], emptyReason: "no_days" };
+  const mode = params.mode ?? "all";
+  const D = Math.max(1, Math.round(params.durationMinutes / CELL_MINUTES));
+  const minAttendees = mode === "quorum" ? Math.max(1, params.minAttendees ?? 1) : 1;
+  const meals = (params.meals ?? []).map((m) => ({ start: parseClock(m.start) ?? 0, end: parseClock(m.end) ?? 0 }));
+  if (days.length === 0) return { windows: [], heatmap: [], emptyReason: "no_days", bestAttendees: 0 };
 
-  // 每天的格数与全局起始格。
+  // 每天的格数、全局起始格与窗口起点在当天的分钟数。
   const dayCells = days.map((day) => Math.max(0, Math.floor((day.end - day.start) / CELL_MS)));
   const dayOffset: number[] = [];
   let totalCells = 0;
@@ -136,12 +202,13 @@ export function findFreeWindows(params: FindFreeWindowsParams): FindFreeWindowsO
     dayOffset.push(totalCells);
     totalCells += cells;
   }
+  const dayStartMinute = days.map((day) => Math.round(((day.start + offsetMinutes * MINUTE_MS) % DAY_MS) / MINUTE_MS));
+  const weekend = days.map((day) => weekdayOf(day.date) >= 6);
 
-  // status[cell * P + person]：0 有空，1 忙，2 未知（忙优先于未知）。按格连续存放，扫描起点时访问连续。
+  // status[cell * P + person]：0 有空，1 忙，2 未知（忙优先于未知）。
   const P = people.length;
   const status = new Uint8Array(P * totalCells);
   const mark = (personIndex: number, interval: TimeInterval, value: number) => {
-    // 天按时间升序：二分找到第一个可能重叠的天，再顺序向后。
     let lo = 0;
     let hi = days.length;
     while (lo < hi) {
@@ -154,8 +221,6 @@ export function findFreeWindows(params: FindFreeWindowsParams): FindFreeWindowsO
       const cells = dayCells[d]!;
       const from = Math.max(0, Math.floor((interval.start - day.start) / CELL_MS));
       const to = Math.min(cells, Math.ceil((interval.end - day.start) / CELL_MS));
-      if (from >= to) continue;
-      // 先标未知、再标忙，后写覆盖前写即可得到「忙优先」。
       for (let c = dayOffset[d]! + from; c < dayOffset[d]! + to; c += 1) status[c * P + personIndex] = value;
     }
   };
@@ -164,7 +229,7 @@ export function findFreeWindows(params: FindFreeWindowsParams): FindFreeWindowsO
     for (const interval of params.busy.get(person.id) ?? []) mark(index, interval, BUSY);
   });
 
-  // 热力图计数，以及 next[c, p]：从格 c 起此人第一个不空闲的当天格（没有则为当天格数，≤ 96）。
+  // 热力图，以及 next[c, p]：从格 c 起此人第一个不空闲的当天格（没有则为当天格数，≤ 96）。
   const heatFree = new Uint16Array(totalCells);
   const heatUnknown = new Uint16Array(totalCells);
   const next = new Uint8Array(P * totalCells);
@@ -189,165 +254,183 @@ export function findFreeWindows(params: FindFreeWindowsParams): FindFreeWindowsO
       heatUnknown[cell] = unknown;
     }
   }
-  const requiredIndexes = people.flatMap((person, index) => (person.required ? [index] : []));
-  const isRequired = new Uint8Array(P);
-  for (const index of requiredIndexes) isRequired[index] = 1;
-
   const heatmap: FreeWindowHeatRow[] = days.map((day, d) => ({
     date: day.date,
     startsAt: toLocalIso(day.start, offsetMinutes),
     free: Array.from(heatFree.subarray(dayOffset[d]!, dayOffset[d]! + dayCells[d]!)),
     unknown: Array.from(heatUnknown.subarray(dayOffset[d]!, dayOffset[d]! + dayCells[d]!)),
   }));
+  if (dayCells.every((cells) => cells < D)) return { windows: [], heatmap, emptyReason: "window_too_short", bestAttendees: 0 };
 
-  if (dayCells.every((cells) => cells < MIN_CELLS)) {
-    return { windows: [], heatmap, emptyReason: "window_too_short" };
-  }
-
-  /**
-   * 候选可能有数十万个；编码成一个数字键（人数 → 时长 → 越早越大）用 Float64Array 排序，
-   * 比排序对象数组快一个数量级（Worker CPU 预算）。
-   */
-  const maxDayCells = Math.max(...dayCells);
-  const LEN_BASE = maxDayCells + 1;
-  const CELL_BASE = totalCells + 1;
-  const dayOfCell = new Uint16Array(totalCells);
-  dayCells.forEach((cells, d) => dayOfCell.fill(d, dayOffset[d]!, dayOffset[d]! + cells));
-  const decode = (key: number): Candidate => {
-    const reversed = key % CELL_BASE;
-    const rest = (key - reversed) / CELL_BASE;
-    const cells = rest % LEN_BASE;
-    const cell = totalCells - reversed;
-    return { cell, cells, count: (rest - cells) / LEN_BASE, day: dayOfCell[cell]! };
+  const required = people.flatMap((person, index) => (person.required ? [index] : []));
+  const durationMinutes = D * CELL_MINUTES;
+  const mealOk = (m0: number): boolean => {
+    const m1 = m0 + durationMinutes;
+    if (mode === "meal") {
+      const need = Math.min(durationMinutes, MEAL_OVERLAP_MINUTES);
+      return meals.some((meal) => Math.min(m1, meal.end) - Math.max(m0, meal.start) >= need);
+    }
+    return meals.every((meal) => m1 <= meal.start || m0 >= meal.end);
   };
 
-  /**
-   * 对每个起点 s：在 s 有空的人按「第一次不空闲的格」分桶。窗口 [s, v) 的人群
-   * = next ≥ v 的人，只在有人掉出的 v 处变化；在每个变化点产生一个候选，
-   * 即同一批人能一起待的最长时段。必到者全部在场时才有效。每个起点 O(人数 + 格数)。
-   */
-  const generate = (useRequired: boolean): number[] => {
-    const out: number[] = [];
-    const bucket = new Uint16Array(maxDayCells + 1);
-    for (let d = 0; d < days.length; d += 1) {
-      const n = dayCells[d]!;
-      const o = dayOffset[d]!;
-      starts: for (let s = 0; s + MIN_CELLS <= n; s += 1) {
-        let count = 0;
-        let limit = n;
+  const mealFit = (m0: number): number => {
+    if (mode !== "meal") return 0;
+    let best = Number.POSITIVE_INFINITY;
+    for (const meal of meals) {
+      const overlap = Math.min(m0 + durationMinutes, meal.end) - Math.max(m0, meal.start);
+      if (overlap > 0) best = Math.min(best, -overlap * 1000 + Math.abs(m0 - meal.start));
+    }
+    return best;
+  };
+
+  // 逐个开始格判断，连续可行且名单相同的合成一组。
+  let timeValid = 0;
+  let requiredValid = 0;
+  let bestAttendees = 0;
+  const groups: Group[] = [];
+  const present = new Uint8Array(P);
+  const previous = new Uint8Array(P);
+  for (let d = 0; d < days.length; d += 1) {
+    const n = dayCells[d]!;
+    const o = dayOffset[d]!;
+    let group: Group | null = null;
+    for (let s = 0; s + D <= n; s += 1) {
+      const m0 = dayStartMinute[d]! + s * CELL_MINUTES;
+      let ok = mealOk(m0);
+      if (ok) timeValid += 1;
+      if (ok) {
+        for (const p of required) {
+          if (next[(o + s) * P + p]! < s + D) {
+            ok = false;
+            break;
+          }
+        }
+        if (ok) requiredValid += 1;
+      }
+      let attendees = 0;
+      if (ok) {
         for (let p = 0; p < P; p += 1) {
-          const index = (o + s) * P + p;
-          if (status[index] !== FREE) {
-            if (useRequired && isRequired[p]) {
-              bucket.fill(0);
-              continue starts;
-            }
-            continue;
-          }
-          const stop = next[index]!;
-          bucket[stop] = bucket[stop]! + 1;
-          count += 1;
-          if (useRequired && isRequired[p] && stop < limit) limit = stop;
+          const here = next[(o + s) * P + p]! >= s + D ? 1 : 0;
+          present[p] = here;
+          attendees += here;
         }
-        let remaining = count;
-        for (let v = s + 1; v <= n && remaining > 0; v += 1) {
-          const leaving = bucket[v]!;
-          if (leaving === 0) continue;
-          bucket[v] = 0;
-          if (v <= limit) {
-            const cells = Math.floor((v - s) / UNIT_CELLS) * UNIT_CELLS;
-            if (cells >= MIN_CELLS) out.push((remaining * LEN_BASE + cells) * CELL_BASE + (totalCells - (o + s)));
+        bestAttendees = Math.max(bestAttendees, attendees);
+        if (attendees < minAttendees) ok = false;
+      }
+      if (!ok) {
+        group = null;
+        continue;
+      }
+      // 紧挨：到场者在活动前一格或后一格有确定的安排（刚下课赶来 / 结束就要走）。
+      let tight = 0;
+      for (let p = 0; p < P; p += 1) {
+        if (!present[p]) continue;
+        if ((s > 0 && status[(o + s - 1) * P + p] === BUSY) || (s + D < n && status[(o + s + D) * P + p] === BUSY)) tight += 1;
+      }
+      const m1 = m0 + durationMinutes;
+      const comfort = (weekend[d] ? 1 : 0) + (m0 < EARLY_MINUTES ? 1 : 0) + (m1 > LATE_MINUTES ? 1 : 0);
+      const option: Option = { s, attendees, comfort, tight, aligned: m0 % 30 === 0, fit: mealFit(m0) };
+      let same = group !== null && group.last === s - 1;
+      if (same) {
+        for (let p = 0; p < P; p += 1) {
+          if (present[p] !== previous[p]) {
+            same = false;
+            break;
           }
-          remaining -= leaving;
         }
       }
-    }
-    return out;
-  };
-
-  const candidates = generate(true);
-  if (candidates.length === 0) {
-    const anyRequired = people.some((person) => person.required);
-    const emptyReason = anyRequired && generate(false).length > 0 ? "required_unavailable" : "no_free_time";
-    return { windows: [], heatmap, emptyReason };
-  }
-
-  /**
-   * 贪心选取：与已选时段重叠的候选不直接丢弃，而是截到下一个已选时段之前
-   * （按 30 分钟向下取整，仍 ≥ 1 小时才保留），以新键放回大顶堆继续竞争。
-   * 起点落在已选时段内的候选无需处理：更晚的起点自有候选。
-   */
-  const keys = Float64Array.from(candidates).sort();
-  const heap: number[] = [];
-  const push = (key: number) => {
-    let i = heap.push(key) - 1;
-    while (i > 0) {
-      const parent = (i - 1) >> 1;
-      if (heap[parent]! >= heap[i]!) break;
-      [heap[parent], heap[i]] = [heap[i]!, heap[parent]!];
-      i = parent;
-    }
-  };
-  const pop = (): number => {
-    const top = heap[0]!;
-    const last = heap.pop()!;
-    if (heap.length > 0) {
-      heap[0] = last;
-      let i = 0;
-      for (;;) {
-        const l = 2 * i + 1;
-        const r = l + 1;
-        let m = i;
-        if (l < heap.length && heap[l]! > heap[m]!) m = l;
-        if (r < heap.length && heap[r]! > heap[m]!) m = r;
-        if (m === i) break;
-        [heap[m], heap[i]] = [heap[i]!, heap[m]!];
-        i = m;
+      if (same && group) {
+        group.last = s;
+        group.options.push(option);
+      } else {
+        group = { day: d, first: s, last: s, options: [option] };
+        groups.push(group);
       }
+      previous.set(present);
     }
-    return top;
-  };
-  const chosen: Candidate[] = [];
-  let k = keys.length - 1;
-  while (chosen.length < params.count && (k >= 0 || heap.length > 0)) {
-    const key = heap.length > 0 && (k < 0 || heap[0]! > keys[k]!) ? pop() : keys[k--]!;
-    const candidate = decode(key);
-    if (chosen.some((other) => other.cell <= candidate.cell && candidate.cell < other.cell + other.cells)) continue;
-    let end = candidate.cell + candidate.cells;
-    for (const other of chosen) if (other.cell > candidate.cell && other.cell < end) end = other.cell;
-    if (end === candidate.cell + candidate.cells) {
-      chosen.push(candidate);
-      continue;
-    }
-    const cells = Math.floor((end - candidate.cell) / UNIT_CELLS) * UNIT_CELLS;
-    if (cells >= MIN_CELLS) push((candidate.count * LEN_BASE + cells) * CELL_BASE + (totalCells - candidate.cell));
   }
 
-  const windows = chosen.map((candidate): FreeWindow => {
-    const day = days[candidate.day]!;
-    const local = candidate.cell - dayOffset[candidate.day]!;
-    const start = day.start + local * CELL_MS;
-    const end = start + candidate.cells * CELL_MS;
+  if (groups.length === 0) {
+    const anyRequired = required.length > 0;
+    const emptyReason: FreeWindowEmptyReason =
+      timeValid === 0
+        ? "meal_conflict"
+        : anyRequired && requiredValid === 0
+          ? "required_unavailable"
+          : mode === "quorum" && bestAttendees > 0
+            ? "quorum_unreachable"
+            : "no_free_time";
+    return { windows: [], heatmap, emptyReason, bestAttendees };
+  }
+
+  const inGroup = (a: Option, b: Option) =>
+    a.comfort - b.comfort || a.fit - b.fit || a.tight - b.tight || Number(b.aligned) - Number(a.aligned) || a.s - b.s;
+  for (const group of groups) group.options.sort(inGroup);
+  const absolute = (g: Group) => dayOffset[g.day]! + g.options[0]!.s;
+  const rank = (a: Group, b: Group): number => {
+    const x = a.options[0]!;
+    const y = b.options[0]!;
+    if (mode === "quorum")
+      return x.comfort - y.comfort || y.attendees - x.attendees || x.tight - y.tight || absolute(a) - absolute(b);
+    return y.attendees - x.attendees || x.comfort - y.comfort || x.tight - y.tight || absolute(a) - absolute(b);
+  };
+  groups.sort(rank);
+
+  const chosen: { group: Group; option: Option }[] = [];
+  const perDay = new Map<number, number>();
+  for (const group of groups) {
+    if (chosen.length >= params.count) break;
+    if ((perDay.get(group.day) ?? 0) >= MAX_PER_DAY) continue;
+    const option = group.options.find((candidate) =>
+      chosen.every(
+        (other) => other.group.day !== group.day || candidate.s + D <= other.option.s || candidate.s >= other.option.s + D,
+      ),
+    );
+    if (!option) continue;
+    chosen.push({ group, option });
+    perDay.set(group.day, (perDay.get(group.day) ?? 0) + 1);
+  }
+
+  const windows = chosen.map(({ group, option }): FreeWindow => {
+    const day = days[group.day]!;
+    const o = dayOffset[group.day]!;
+    const start = day.start + option.s * CELL_MS;
+    const end = start + D * CELL_MS;
+    const n = dayCells[group.day]!;
     const window: FreeWindow = {
       startsAt: toLocalIso(start, offsetMinutes),
       endsAt: toLocalIso(end, offsetMinutes),
-      minutes: candidate.cells * CELL_MINUTES,
+      minutes: durationMinutes,
+      flexStart: toLocalIso(day.start + group.first * CELL_MS, offsetMinutes),
+      flexEnd: toLocalIso(day.start + (group.last + D) * CELL_MS, offsetMinutes),
       free: [],
       busy: [],
       unknown: [],
+      tight: [],
+      notes: [
+        ...(weekend[group.day] ? (["weekend"] as const) : []),
+        ...(dayStartMinute[group.day]! + option.s * CELL_MINUTES < EARLY_MINUTES ? (["early"] as const) : []),
+        ...(dayStartMinute[group.day]! + (option.s + D) * CELL_MINUTES > LATE_MINUTES ? (["late"] as const) : []),
+      ],
     };
     people.forEach((person, index) => {
+      if (next[(o + option.s) * P + index]! >= option.s + D) {
+        window.free.push(person.id);
+        const before = option.s > 0 && status[(o + option.s - 1) * P + index] === BUSY;
+        const after = option.s + D < n && status[(o + option.s + D) * P + index] === BUSY;
+        if (before || after) window.tight.push(person.id);
+        return;
+      }
       let state = FREE;
-      for (let c = 0; c < candidate.cells; c += 1) {
-        const value = status[(candidate.cell + c) * P + index]!;
+      for (let c = option.s; c < option.s + D; c += 1) {
+        const value = status[(o + c) * P + index]!;
         if (value === BUSY) {
           state = BUSY;
           break;
         }
         if (value === UNKNOWN) state = UNKNOWN;
       }
-      if (state === FREE) window.free.push(person.id);
-      else if (state === UNKNOWN) window.unknown.push(person.id);
+      if (state === UNKNOWN) window.unknown.push(person.id);
       else {
         const hit = (params.busy.get(person.id) ?? [])
           .filter((item) => item.start < end && item.end > start)
@@ -358,5 +441,5 @@ export function findFreeWindows(params: FindFreeWindowsParams): FindFreeWindowsO
     return window;
   });
 
-  return { windows, heatmap, emptyReason: null };
+  return { windows, heatmap, emptyReason: null, bestAttendees };
 }

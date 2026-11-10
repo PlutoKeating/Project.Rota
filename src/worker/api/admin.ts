@@ -1,4 +1,5 @@
 import { seal } from "../llm/secrets";
+import { DEFAULT_MEAL_BLOCKS, normalizeMealBlocks } from "../../shared/free-windows";
 import { catalog } from "../llm/catalog";
 import { requireOwner } from "../auth";
 import { Hono } from "hono";
@@ -67,6 +68,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   },
   importProviderId: null,
   exportIncludePhone: false,
+  mealBlocks: DEFAULT_MEAL_BLOCKS,
 };
 
 interface ProviderRow {
@@ -128,6 +130,7 @@ admin.put("/settings", async (c) => {
     defaultCooldownDays: next.defaultCooldownDays,
     importProviderId: next.importProviderId,
     exportIncludePhone: next.exportIncludePhone,
+    mealBlocks: next.mealBlocks,
   });
   return c.json(next);
 });
@@ -482,6 +485,7 @@ function cloneDefaults(): AppSettings {
   return {
     ...DEFAULT_SETTINGS,
     weights: { ...DEFAULT_SETTINGS.weights },
+    mealBlocks: DEFAULT_SETTINGS.mealBlocks.map((m) => ({ ...m })),
   };
 }
 
@@ -513,6 +517,12 @@ function normalizeSettings(value: unknown): AppSettings {
 
   if (input.exportIncludePhone !== undefined) {
     settings.exportIncludePhone = asBool(input.exportIncludePhone);
+  }
+
+  if (input.mealBlocks !== undefined && input.mealBlocks !== null) {
+    const meals = normalizeMealBlocks(input.mealBlocks);
+    if (typeof meals === "string") throw badRequest(meals);
+    settings.mealBlocks = meals;
   }
 
   return settings;

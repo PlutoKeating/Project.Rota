@@ -7,6 +7,7 @@ import { Modal } from "./Modal";
 import { TermsPage } from "../pages/TermsPage";
 import { PeoplePage } from "../pages/PeoplePage";
 import { isoDate } from "../lib/format";
+import { useToast } from "./Toast";
 import type { WorkDraft } from "./FreeWindowFinder";
 export function WorkComposer({
   onClose,
@@ -15,11 +16,13 @@ export function WorkComposer({
 }: {
   onClose: () => void;
   onCreated: (date: string) => void;
-  /** 从「找共同空闲」带入的时间、部门与人数。 */
+  /** 从「找时间」带入的时间、部门、人数与能到的人。 */
   initial?: WorkDraft;
 }) {
   const orgs = useOrgsState(),
-    terms = useTermsState();
+    terms = useTermsState(),
+    toast = useToast();
+  const attendees = initial?.attendees ?? [];
   const [title, setTitle] = useState(""),
     [org, setOrg] = useState(initial?.orgId ?? ""),
     [date, setDate] = useState(initial?.date ?? isoDate()),
@@ -27,6 +30,7 @@ export function WorkComposer({
     [end, setEnd] = useState(initial?.end ?? "10:00"),
     [count, setCount] = useState(initial?.count ?? 1),
     [repeat, setRepeat] = useState(false),
+    [assignNow, setAssignNow] = useState(attendees.length > 0),
     [weeks, setWeeks] = useState(4),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
@@ -35,7 +39,7 @@ export function WorkComposer({
     setBusy(true);
     setError("");
     try {
-      await api.post("/work", {
+      const created = await api.post<{ taskId: string; shiftIds: string[] }>("/work", {
         title,
         orgId: org,
         startsAt: `${date}T${start}:00+08:00`,
@@ -43,6 +47,23 @@ export function WorkComposer({
         requiredHeadcount: count,
         repeatWeeks: repeat ? weeks : 1,
       });
+      if (assignNow && attendees.length > 0) {
+        // 逐个直接安排；服务端照常检查部门成员、冲突与人数上限，失败的人留给候选列表处理。
+        let assigned = 0;
+        const failed: string[] = [];
+        for (const shiftId of created.shiftIds) {
+          for (const person of attendees) {
+            try {
+              await api.post(`/shifts/${encodeURIComponent(shiftId)}/assign`, { personId: person.id });
+              assigned += 1;
+            } catch (e) {
+              failed.push(`${person.name}：${messageOf(e)}`);
+            }
+          }
+        }
+        if (failed.length === 0) toast.success(`已直接安排 ${assigned} 人次`);
+        else toast.error(`已安排 ${assigned} 人次，${failed.length} 人次未安排（${failed.slice(0, 3).join("；")}${failed.length > 3 ? "…" : ""}）`);
+      }
       onCreated(date);
       onClose();
     } catch (e) {
@@ -145,6 +166,18 @@ export function WorkComposer({
               onChange={(e) => setCount(Number(e.target.value))}
             />
           </Field>
+          {attendees.length > 0 && (
+            <div className="space-y-1 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+              <Checkbox
+                label={`创建后直接安排这 ${attendees.length} 位能到的人`}
+                checked={assignNow}
+                onChange={(e) => setAssignNow(e.target.checked)}
+              />
+              <p className="text-xs text-slate-500">
+                {attendees.map((a) => a.name).join("、")}。只能安排所选部门的成员；重复的周次照常检查冲突，未能安排的人可在候选列表里处理。
+              </p>
+            </div>
+          )}
           <Checkbox
             label="每周重复"
             checked={repeat}

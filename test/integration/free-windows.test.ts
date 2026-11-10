@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import guards from "../../migrations/0003_assignment_guards.sql?raw";
 import ddl from "../../migrations/0001_init.sql?raw";
 import { loadFreeWindows } from "../../src/worker/domain/free-windows";
+import { DEFAULT_MEAL_BLOCKS } from "../../src/shared/free-windows";
 import app from "../../src/worker/index";
 import type { Env } from "../../src/worker/env";
 import { createFiles, createKv, D1Stub } from "../helpers/d1";
@@ -49,6 +50,10 @@ async function seed(): Promise<D1Stub> {
 const QUERY = {
   personIds: ["p1", "p2", "p3", "p4"],
   requiredPersonIds: [] as string[],
+  durationMinutes: 60,
+  mode: "all" as const,
+  minAttendees: null,
+  mealBlocks: DEFAULT_MEAL_BLOCKS,
   days: 1,
   count: 4,
   dayStartMinutes: 8 * 60,
@@ -64,9 +69,10 @@ describe("loadFreeWindows", () => {
     const db = await seed();
     const result = await loadFreeWindows(db as unknown as D1Database, QUERY, now);
     expect(result.emptyReason).toBeNull();
-    expect(result.windows.map(span)).toEqual(["12:00-14:00", "15:00-16:00", "17:00-18:00", "08:00-10:00"]);
-    expect(result.windows[0]).toMatchObject({ free: ["p1", "p2", "p4"], unknown: ["p3"], busy: [], minutes: 120 });
-    expect(result.windows[3]).toMatchObject({
+    // 唯一三人都在的是 15:00–16:00（李四刚请完假、赵六 16:00 要值班，都算紧挨）；每天最多两个推荐。
+    expect(result.windows.map(span)).toEqual(["15:00-16:00", "08:00-09:00"]);
+    expect(result.windows[0]).toMatchObject({ free: ["p1", "p2", "p4"], unknown: ["p3"], busy: [], tight: ["p2", "p4"], minutes: 60 });
+    expect(result.windows[1]).toMatchObject({
       free: ["p2", "p4"],
       busy: [{ personId: "p1", reason: "course", label: "高等数学" }],
       unknown: ["p3"],
@@ -80,8 +86,10 @@ describe("loadFreeWindows", () => {
   it("applies buffers and reports busy reasons", async () => {
     const db = await seed();
     const result = await loadFreeWindows(db as unknown as D1Database, { ...QUERY, bufferMinutes: 15, count: 2, personIds: ["p2", "p4"] }, now);
-    // 李四 09:45–12:15、13:45–15:15 忙（含缓冲），赵六 15:45 起忙 → 08:00–09:30、12:15–13:45 各 90 分钟。
-    expect(result.windows.map(span)).toEqual(["08:00-09:30", "12:15-13:45"]);
+    // 李四 09:45–12:15、13:45–15:15 忙（含缓冲），赵六 15:45 起忙 → 两人都在只有 08:00–09:45 可挪动。
+    expect(result.windows.map(span)).toEqual(["08:00-09:00", "09:00-10:00"]);
+    expect(result.windows[0]!.flexEnd).toBe("2026-11-10T09:45:00+08:00");
+    expect(result.windows[1]!.free).toEqual(["p4"]);
   });
 
   it("enforces required people and marks days outside any term as unknown", async () => {
@@ -119,10 +127,30 @@ describe("POST /api/free-windows", () => {
     expect((await post(e, { personIds: ["p1"], dayStart: "08:10" })).status).toBe(400);
     expect((await post(e, { personIds: ["p1"], days: 29 })).status).toBe(400);
     expect((await post(e, { personIds: ["nobody"] })).status).toBe(400);
+    expect((await post(e, { personIds: ["p1"], durationMinutes: 20 })).status).toBe(400);
+    expect((await post(e, { personIds: ["p1"], durationMinutes: 50 })).status).toBe(400);
+    expect((await post(e, { personIds: ["p1"], mode: "party" })).status).toBe(400);
+    expect((await post(e, { personIds: ["p1", "p2"], mode: "quorum", minAttendees: 3 })).status).toBe(400);
+    expect((await post(e, { personIds: ["p1"], fromDate: "11/16" })).status).toBe(400);
+    expect((await post(e, { personIds: ["p1"], dayStart: "08:00", dayEnd: "09:00", durationMinutes: 90 })).status).toBe(400);
     const ok = await post(e, { personIds: ["p1", "p2"], days: 3, count: 2 });
     expect(ok.status).toBe(200);
-    const data = (await ok.json()) as { people: unknown[]; cellMinutes: number };
+    const data = (await ok.json()) as { people: unknown[]; cellMinutes: number; mealBlocks: unknown[]; mode: string };
     expect(data.people).toHaveLength(2);
     expect(data.cellMinutes).toBe(15);
+    expect(data.mode).toBe("all");
+    expect(data.mealBlocks).toEqual(DEFAULT_MEAL_BLOCKS);
+  });
+
+  it("uses meal blocks configured in settings", async () => {
+    const e = env(await seed());
+    const meals = await app.request("/api/meal-blocks", {}, e);
+    expect(((await meals.json()) as { items: unknown[] }).items).toEqual(DEFAULT_MEAL_BLOCKS);
+    await e.CONFIG.put("settings", JSON.stringify({ mealBlocks: [{ label: "午饭", start: "11:30", end: "12:30" }] }));
+    const ok = await post(e, { personIds: ["p1"], days: 1 });
+    expect(((await ok.json()) as { mealBlocks: unknown[] }).mealBlocks).toEqual([{ label: "午饭", start: "11:30", end: "12:30" }]);
+    await e.CONFIG.put("settings", "{broken");
+    const fallback = await app.request("/api/meal-blocks", {}, e);
+    expect(((await fallback.json()) as { items: unknown[] }).items).toEqual(DEFAULT_MEAL_BLOCKS);
   });
 });

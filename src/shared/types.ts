@@ -461,6 +461,8 @@ export interface AppSettings {
   importProviderId: Id | null;
   /** 导出文件里是否包含手机号 */
   exportIncludePhone: boolean;
+  /** 全组织统一的饭点；找时间时普通活动避开、聚餐只在附近找。 */
+  mealBlocks: MealBlock[];
 }
 
 export interface HealthResponse {
@@ -487,21 +489,47 @@ export interface ProviderTestResult {
 /** 忙碌来源：课程/个人课表、请假、黑名单、已排班（任何部门）。 */
 export type FreeWindowBusyReason = "course" | "leave" | "blacklist" | "assignment";
 
+/**
+ * 活动类型：all 尽量全员（按到场人数排序）；quorum 至少 K 人即可（达标后优先舒适时段）；
+ * meal 聚餐（只在饭点附近找）。
+ */
+export type FreeWindowMode = "all" | "quorum" | "meal";
+
 /** 无结果时的原因，参考 Graph findMeetingTimes 的 emptySuggestionsReason。 */
 export type FreeWindowEmptyReason =
   | "no_days"
   | "window_too_short"
+  | "meal_conflict"
   | "required_unavailable"
+  | "quorum_unreachable"
   | "no_free_time";
+
+/** 推荐时段的舒适度提示：周末、早于 08:00 开始、晚于 21:30 结束。 */
+export type FreeWindowNote = "weekend" | "early" | "late";
+
+/** 全组织统一的饭点（`HH:mm`，15 分钟对齐）；普通活动不占用，聚餐只在这附近找。 */
+export interface MealBlock {
+  label: string;
+  start: string;
+  end: string;
+}
 
 export interface FreeWindowsInput {
   /** 参与统计的人员，1–300。 */
   personIds: Id[];
   /** 必到人员，须包含在 personIds 中；任一必到者没空的时段不返回。 */
   requiredPersonIds?: Id[];
-  /** 从此刻起的天数（含今天剩余部分），1–28，默认 7。 */
+  /** 活动时长（分钟），30–480，15 分钟的整数倍，默认 60。 */
+  durationMinutes?: number;
+  /** 默认 all。 */
+  mode?: FreeWindowMode;
+  /** quorum 模式至少到场人数，1–人数。 */
+  minAttendees?: number;
+  /** 从哪天开始（`YYYY-MM-DD`，北京时间），默认今天；早于今天按今天。 */
+  fromDate?: string;
+  /** 从 fromDate 起的天数，1–28，默认 7。 */
   days?: number;
-  /** 返回的不重叠时段数，1–20，默认 5。 */
+  /** 返回的不重叠推荐数，1–20，默认 5；每天最多 2 个。 */
   count?: number;
   /** 每日可用窗口，`HH:mm`，15 分钟对齐，默认 08:00–22:00。 */
   dayStart?: string;
@@ -525,15 +553,22 @@ export interface FreeWindowBusy {
 }
 
 export interface FreeWindow {
+  /** 推荐的开始与结束（时长 = 活动时长）。 */
   startsAt: string;
   endsAt: string;
   minutes: number;
+  /** 同一批人都能到的可挪动范围：活动可以放在 [flexStart, flexEnd] 内任意位置。 */
+  flexStart: string;
+  flexEnd: string;
   /** 整段全程有空的人。 */
   free: Id[];
   /** 时段内有安排的人，带第一条冲突原因。 */
   busy: FreeWindowBusy[];
   /** 当天没有学期覆盖或未导入课表，无法判断。 */
   unknown: Id[];
+  /** 到场者中前后紧挨其他安排的人（刚下课赶来或结束就要走）。 */
+  tight: Id[];
+  notes: FreeWindowNote[];
 }
 
 export interface FreeWindowHeatRow {
@@ -550,8 +585,14 @@ export interface FreeWindowsResult {
   rangeStart: string;
   rangeEnd: string;
   cellMinutes: number;
+  durationMinutes: number;
+  mode: FreeWindowMode;
+  minAttendees: number | null;
+  mealBlocks: MealBlock[];
   people: FreeWindowPerson[];
   windows: FreeWindow[];
   heatmap: FreeWindowHeatRow[];
   emptyReason: FreeWindowEmptyReason | null;
+  /** 满足饭点与必到条件时最多能到场的人数。 */
+  bestAttendees: number;
 }

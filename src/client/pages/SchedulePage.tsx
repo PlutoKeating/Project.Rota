@@ -7,6 +7,7 @@ import type {
   CandidateView,
   ExcludedView,
   ListResponse,
+  MealBlock,
   PreviewResult,
   ShiftView,
 } from "../../shared/types";
@@ -35,7 +36,14 @@ import {
   shiftStatusLabel,
   shiftStatusTone,
 } from "../lib/labels";
-import { useOrgsState } from "../lib/resources";
+import { useOrgsState, usePeriodsState, useTermsState } from "../lib/resources";
+import {
+  clockToMinutes,
+  isoToMinutes,
+  WeekTimetable,
+  type TimetableBlock,
+  type TimetableDay,
+} from "../components/WeekTimetable";
 
 interface ShiftGroup {
   taskId: string;
@@ -301,6 +309,77 @@ function PreviewModal({ shift, onClose, onAssigned }: PreviewModalProps) {
   );
 }
 
+/** 排班的课表视图：从开始日期起 7 天，班次按真实时间落在节次网格上，饭点画斜纹。 */
+function ScheduleWeek({
+  from,
+  to,
+  shifts,
+  onOpen,
+}: {
+  from: string;
+  to: string;
+  shifts: ShiftView[];
+  onOpen: (shift: ShiftView) => void;
+}) {
+  const terms = useTermsState();
+  const periods = usePeriodsState(terms.current?.id ?? null);
+  const meals = useAsync(() => api.get<{ items: MealBlock[] }>("/meal-blocks"), []);
+  const today = isoDate();
+  const days: TimetableDay[] = Array.from({ length: 7 }, (_, i) => {
+    const date = addDays(from, i);
+    const day = new Date(`${date}T00:00:00Z`).getUTCDay();
+    return { date, weekday: day === 0 ? 7 : day, today: date === today };
+  });
+  const index = new Map(days.map((d, i) => [d.date!, i]));
+  const blocks: TimetableBlock[] = shifts.flatMap((shift) => {
+    const date = dateFull(shift.startsAt);
+    const day = index.get(date);
+    if (day === undefined) return [];
+    const assigned = shift.assignments?.length ?? 0;
+    const missing = Math.max(0, shift.requiredHeadcount - assigned);
+    const cancelled = shift.status === "cancelled";
+    const title = shift.taskTitle ?? "未命名任务";
+    return [
+      {
+        id: shift.id,
+        day,
+        start: isoToMinutes(shift.startsAt),
+        end: isoToMinutes(shift.endsAt, date),
+        title,
+        detail: cancelled ? "已取消" : missing ? `${assigned}/${shift.requiredHeadcount} 人 · 缺 ${missing}` : `${assigned}/${shift.requiredHeadcount} 人`,
+        colorKey: shift.taskId,
+        ...(cancelled ? { variant: "outline" as const, color: "#8a8178" } : missing ? { variant: "outline" as const } : {}),
+        label: `查看与安排：${title} ${date} ${timeRange(shift.startsAt, shift.endsAt)}，已排 ${assigned}/${shift.requiredHeadcount} 人`,
+        onClick: cancelled ? undefined : () => onOpen(shift),
+      },
+    ];
+  });
+  return (
+    <WeekTimetable
+      caption="排班课表"
+      days={days}
+      periods={(periods.data?.items ?? []).map((p) => ({ index: p.periodIndex, start: clockToMinutes(p.startTime), end: clockToMinutes(p.endTime) }))}
+      blocks={blocks}
+      bands={(meals.data?.items ?? []).map((m, i) => ({
+        id: `meal${i}`,
+        start: clockToMinutes(m.start),
+        end: clockToMinutes(m.end),
+        label: m.label,
+        kind: "meal" as const,
+      }))}
+      toolbar={
+        <p className="text-xs text-slate-500">
+          实心为已排满，虚线框为仍缺人；斜纹为饭点。点班次查看候选并安排。
+          {to > addDays(from, 6) ? ` 课表视图只显示 ${from.slice(5)} 起 7 天，翻周或切到列表查看其余日期。` : ""}
+        </p>
+      }
+      footer={
+        blocks.length === 0 ? <p className="text-center text-xs text-slate-500">这 7 天没有班次。</p> : null
+      }
+    />
+  );
+}
+
 export function SchedulePage() {
   const [tab, setTab] = useState("shifts");
   const [batch, setBatch] = useState<{
@@ -317,6 +396,21 @@ export function SchedulePage() {
     return () => window.removeEventListener("rota:create-work", open);
   }, []);
   const [missingOnly, setMissingOnly] = useState(false);
+  const [view, setView] = useState<"week" | "list">(() => {
+    try {
+      return localStorage.getItem("rota:schedule-view") === "list" ? "list" : "week";
+    } catch {
+      return "week";
+    }
+  });
+  function changeView(next: "week" | "list"): void {
+    setView(next);
+    try {
+      localStorage.setItem("rota:schedule-view", next);
+    } catch {
+      // 不可写时只在本次生效。
+    }
+  }
   const [taskQuery, setTaskQuery] = useState("");
   const toast = useToast();
   const orgsState = useOrgsState();
@@ -423,7 +517,7 @@ export function SchedulePage() {
         </nav>
         <div className="flex flex-wrap gap-2">
           <Button variant="secondary" onClick={() => setFinding(true)}>
-            找共同空闲
+            找时间
           </Button>
           <Button onClick={() => setCreating(true)}>安排工作</Button>
         </div>
@@ -469,6 +563,14 @@ export function SchedulePage() {
           >
             只看缺员
           </Button>
+          <div className="flex gap-1" role="group" aria-label="显示方式">
+            <Button size="sm" variant={view === "week" ? "secondary" : "ghost"} aria-pressed={view === "week"} onClick={() => changeView("week")}>
+              课表
+            </Button>
+            <Button size="sm" variant={view === "list" ? "secondary" : "ghost"} aria-pressed={view === "list"} onClick={() => changeView("list")}>
+              列表
+            </Button>
+          </div>
           <a
             className="ml-auto text-sm underline"
             href={`/api/export/schedule.csv?${new URLSearchParams({ from: from + "T00:00:00+08:00", to: to + "T23:59:59+08:00", ...(orgId ? { orgId } : {}) })}`}
@@ -531,6 +633,15 @@ export function SchedulePage() {
           ) : null}
         </Card>
 
+        {view === "week" ? (
+          shifts.error ? (
+            <ListState loading={false} error={shifts.error} empty={false} onRetry={shifts.reload}>
+              <div />
+            </ListState>
+          ) : (
+            <ScheduleWeek from={from} to={to} shifts={shiftList} onOpen={setPreviewShift} />
+          )
+        ) : (
         <ListState
           loading={shifts.loading}
           error={shifts.error}
@@ -653,6 +764,7 @@ export function SchedulePage() {
             })}
           </div>
         </ListState>
+        )}
       </div>
       {detailTask && (
         <Modal side title="任务详情" onClose={() => setDetailTask(null)}>

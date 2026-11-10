@@ -4,7 +4,7 @@
 
 Hono 统一提供认证、业务 API、目录代理与模型网关。继续使用 ECS 数据服务的 SQL/KV 兼容接口，没有新增 Cloudflare 数据绑定；浏览器 Agent 导入需要增量迁移 0005。
 
-共同空闲：`POST /free-windows` 只读计算 N 天内最多人整段有空的 M 个不重叠时段（`api/free-windows.ts` 校验参数，`domain/free-windows.ts` 取数，算法在 `src/shared/free-windows.ts`）。
+找时间：`POST /free-windows` 只读计算给定时长的活动在所选范围内最合适的 M 个时间（全员 / 至少 K 人 / 聚餐，避开或围绕统一饭点）；`GET /meal-blocks` 只读返回饭点。`api/free-windows.ts` 校验参数，`domain/free-windows.ts` 取数并读取设置中的饭点，算法在 `src/shared/free-windows.ts`。饭点在 `/admin/settings` 的 `mealBlocks` 维护。
 
 新增能力：`POST /work` 原子创建任务与重复班次；`POST /persons/import` 原子导入人员与部门关系；管理端 models.dev 目录、模型优先顺序与加密 API 密钥。
 

@@ -1,7 +1,9 @@
-import type { FreeWindowPerson, FreeWindowsResult } from "../../shared/types";
+import type { FreeWindowMode, FreeWindowPerson, FreeWindowsResult, MealBlock } from "../../shared/types";
 import {
   CELL_MINUTES,
+  DEFAULT_MEAL_BLOCKS,
   buildDays,
+  normalizeMealBlocks,
   findFreeWindows,
   toLocalIso,
   type BusyInterval,
@@ -17,6 +19,11 @@ const MINUTE_MS = 60_000;
 export interface FreeWindowsQuery {
   personIds: string[];
   requiredPersonIds: string[];
+  durationMinutes: number;
+  mode: FreeWindowMode;
+  minAttendees: number | null;
+  mealBlocks: MealBlock[];
+  fromDate?: string;
   days: number;
   count: number;
   dayStartMinutes: number;
@@ -29,6 +36,20 @@ interface TermRow {
   id: string;
   startDate: string | null;
   weekCount: number | null;
+}
+
+/** 管理 → 规则里配置的饭点；没配置或配置损坏时用默认值。 */
+export async function loadMealBlocks(config: KVNamespace): Promise<MealBlock[]> {
+  const raw = await config.get("settings");
+  if (!raw) return DEFAULT_MEAL_BLOCKS;
+  try {
+    const parsed = JSON.parse(raw) as { mealBlocks?: unknown };
+    if (parsed.mealBlocks === undefined) return DEFAULT_MEAL_BLOCKS;
+    const meals = normalizeMealBlocks(parsed.mealBlocks);
+    return typeof meals === "string" ? DEFAULT_MEAL_BLOCKS : meals;
+  } catch {
+    return DEFAULT_MEAL_BLOCKS;
+  }
 }
 
 /**
@@ -63,12 +84,22 @@ export async function loadFreeWindows(
     dayStartMinutes: query.dayStartMinutes,
     dayEndMinutes: query.dayEndMinutes,
     weekdays: query.weekdays,
+    fromDate: query.fromDate,
     offsetMinutes: OFFSET_MINUTES,
   });
   const rangeStart = days[0]?.start ?? now;
   const rangeEnd = days.at(-1)?.end ?? now;
-  const base = { rangeStart: toLocalIso(rangeStart), rangeEnd: toLocalIso(rangeEnd), cellMinutes: CELL_MINUTES, people };
-  if (days.length === 0) return { ...base, windows: [], heatmap: [], emptyReason: "no_days" };
+  const base = {
+    rangeStart: toLocalIso(rangeStart),
+    rangeEnd: toLocalIso(rangeEnd),
+    cellMinutes: CELL_MINUTES,
+    durationMinutes: query.durationMinutes,
+    mode: query.mode,
+    minAttendees: query.mode === "quorum" ? query.minAttendees : null,
+    mealBlocks: query.mealBlocks,
+    people,
+  };
+  if (days.length === 0) return { ...base, windows: [], heatmap: [], emptyReason: "no_days", bestAttendees: 0 };
 
   const buffer = query.bufferMinutes * MINUTE_MS;
   const from = toLocalIso(rangeStart - buffer);
@@ -167,6 +198,17 @@ export async function loadFreeWindows(
     }
   }
 
-  const result = findFreeWindows({ people, days, busy, unknown, count: query.count, offsetMinutes: OFFSET_MINUTES });
+  const result = findFreeWindows({
+    people,
+    days,
+    busy,
+    unknown,
+    count: query.count,
+    durationMinutes: query.durationMinutes,
+    mode: query.mode,
+    minAttendees: query.minAttendees ?? undefined,
+    meals: query.mealBlocks,
+    offsetMinutes: OFFSET_MINUTES,
+  });
   return { ...base, ...result };
 }
