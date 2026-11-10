@@ -10,7 +10,6 @@ import type {
   TimetableWeek,
   WeekPatternKind,
 } from "../../shared/types";
-import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
 import { Card } from "../components/Card";
 import { Checkbox, Field, Select, TextInput } from "../components/Field";
@@ -19,10 +18,77 @@ import { ListState } from "../components/ListState";
 import { Spinner } from "../components/Spinner";
 import { useToast } from "../components/Toast";
 import { api, messageOf } from "../lib/api";
-import { WEEKDAYS, weekdayName } from "../lib/format";
+import { addDays, isoDate, timeRange, WEEKDAYS, weekdayName } from "../lib/format";
+import {
+  clockToMinutes,
+  isoToMinutes,
+  mondayOf,
+  WeekNav,
+  WeekTimetable,
+  weekDays,
+  type TimetableBlock,
+  type TimetablePeriod,
+} from "../components/WeekTimetable";
 import { useAsync } from "../lib/hooks";
 import { WEEK_PATTERN_OPTIONS } from "../lib/labels";
 import { usePeriodsState, useTermsState } from "../lib/resources";
+
+const UNAVAILABLE_TEXT = { leave: "请假", blacklist: "不可排" } as const;
+
+/** 按节次的格子合并成课表色块：同一门课连续节次合成一块，请假同理。 */
+function timetableBlocks(cells: TimetableCell[]): TimetableBlock[] {
+  interface Draft {
+    block: TimetableBlock;
+    lastPeriod: number;
+    startsAt: string;
+    endsAt: string;
+  }
+  const sorted = [...cells].sort((a, b) => a.weekday - b.weekday || a.periodIndex - b.periodIndex);
+  const open = new Map<string, Draft>();
+  const done: Draft[] = [];
+  const add = (key: string, cell: TimetableCell, make: () => Omit<TimetableBlock, "start" | "end" | "day">) => {
+    const end = isoToMinutes(cell.endsAt, cell.startsAt.slice(0, 10));
+    const current = open.get(key);
+    if (current && current.lastPeriod === cell.periodIndex - 1 && current.block.day === cell.weekday - 1) {
+      current.lastPeriod = cell.periodIndex;
+      current.block.end = end;
+      current.endsAt = cell.endsAt;
+      return;
+    }
+    if (current) done.push(current);
+    open.set(key, {
+      block: { ...make(), day: cell.weekday - 1, start: isoToMinutes(cell.startsAt), end },
+      lastPeriod: cell.periodIndex,
+      startsAt: cell.startsAt,
+      endsAt: cell.endsAt,
+    });
+  };
+  for (const cell of sorted) {
+    for (const course of cell.courses) {
+      add(`c:${course.courseId}`, cell, () => ({
+        id: `${course.courseId}-${cell.slotId}`,
+        title: course.courseName,
+        detail: course.location ? `@${course.location}` : undefined,
+        colorKey: course.courseName,
+      }));
+    }
+    if (cell.unavailable) {
+      const kind = cell.unavailable.kind;
+      add(`u:${kind}`, cell, () => ({
+        id: `u-${cell.slotId}`,
+        title: kind === "leave" || kind === "blacklist" ? UNAVAILABLE_TEXT[kind] : "不可用",
+        detail: cell.unavailable?.reason ?? undefined,
+        color: kind === "blacklist" ? "#b4233c" : "#946200",
+        variant: "outline",
+      }));
+    }
+  }
+  done.push(...open.values());
+  return done.map(({ block, startsAt, endsAt }) => ({
+    ...block,
+    label: `${block.title} ${timeRange(startsAt, endsAt)}${block.detail ? ` ${block.detail}` : ""}`,
+  }));
+}
 
 export function TimetablePage({
   initialPersonId = "",
@@ -39,12 +105,17 @@ export function TimetablePage({
     if (!termId && terms.current) setTermId(terms.current.id);
   }, [terms.current, termId]);
 
-  useEffect(() => {
-    setWeek(1);
-  }, [termId]);
-
   const selectedTerm =
     terms.terms.find((term) => term.id === termId) ?? terms.current;
+
+  // 切学期时定位到今天所在的周（不在学期内则第 1 周），打开即看到本周课表。
+  useEffect(() => {
+    const start = selectedTerm?.startDate;
+    if (!start) return setWeek(1);
+    const days = Math.floor((Date.parse(isoDate()) - Date.parse(start)) / 86_400_000);
+    const current = Math.floor(days / 7) + 1;
+    setWeek(current >= 1 && current <= (selectedTerm?.weekCount ?? 20) ? current : 1);
+  }, [termId, selectedTerm?.startDate, selectedTerm?.weekCount]);
   const weekCount = selectedTerm?.weekCount ?? 20;
 
   const persons = useAsync(
@@ -83,6 +154,20 @@ export function TimetablePage({
     [periods.data],
   );
   const periodCount = periodList.length > 0 ? periodList.length : 12;
+  const axisPeriods = useMemo<TimetablePeriod[]>(
+    () =>
+      periodList.map((p) => ({
+        index: p.periodIndex,
+        start: clockToMinutes(p.startTime),
+        end: clockToMinutes(p.endTime),
+      })),
+    [periodList],
+  );
+  const days = useMemo(() => {
+    if (!selectedTerm?.startDate) return WEEKDAYS.map((weekday) => ({ weekday }));
+    return weekDays(mondayOf(addDays(selectedTerm.startDate, (week - 1) * 7)), isoDate());
+  }, [selectedTerm?.startDate, week]);
+  const blocks = useMemo(() => timetableBlocks(timetable.data?.cells ?? []), [timetable.data]);
 
   // 添加课程表单
   const [courseName, setCourseName] = useState("");
@@ -241,112 +326,36 @@ export function TimetablePage({
     }
 
     return (
-      <div className="-mx-4 overflow-x-auto sm:mx-0">
-        <table className="w-full min-w-[880px] border-separate border-spacing-0 text-xs">
-          <thead>
-            <tr>
-              <th className="sticky left-0 z-10 w-20 border-b border-slate-200 bg-white px-2 py-2 text-left text-[11px] font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
-                节次
-              </th>
-              {WEEKDAYS.map((day) => (
-                <th
-                  key={day}
-                  className="border-b border-l border-slate-200 px-2 py-2 text-left text-[11px] font-medium text-slate-500 dark:border-slate-700 dark:text-slate-400"
-                >
-                  {weekdayName(day)}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {periodList.map((period) => (
-              <tr key={period.id}>
-                <th className="sticky left-0 z-10 border-b border-slate-100 bg-white px-2 py-2 text-left align-top dark:border-slate-800 dark:bg-slate-900">
-                  <span className="font-medium text-slate-700 dark:text-slate-200">
-                    {period.periodIndex}
-                  </span>
-                  {period.label ? (
-                    <span className="ml-1 text-[10px] text-slate-400">
-                      {period.label}
-                    </span>
-                  ) : null}
-                  <p className="mt-0.5 text-[10px] text-slate-400 tabular-nums">
-                    {period.startTime.slice(0, 5)}–{period.endTime.slice(0, 5)}
-                  </p>
-                </th>
-                {WEEKDAYS.map((day) => {
-                  const cell = cellMap.get(`${day}-${period.periodIndex}`);
-                  const courses = cell?.courses ?? [];
-                  return (
-                    <td
-                      key={day}
-                      className="min-w-[104px] border-b border-l border-slate-100 p-1 align-top dark:border-slate-800"
-                    >
-                      {courses.map((course) => (
-                        <div
-                          key={course.courseId}
-                          className="mb-1 rounded-md bg-indigo-50 px-1.5 py-1 text-indigo-900 dark:bg-indigo-500/15 dark:text-indigo-200"
-                        >
-                          <p className="text-[11px] leading-tight font-medium">
-                            {course.courseName}
-                          </p>
-                          {course.location ? (
-                            <p className="mt-0.5 text-[10px] text-indigo-700/70 dark:text-indigo-300/70">
-                              {course.location}
-                            </p>
-                          ) : null}
-                        </div>
-                      ))}
-                      {cell?.unavailable ? (
-                        <Badge
-                          tone={
-                            cell.unavailable.kind === "blacklist"
-                              ? "danger"
-                              : "warning"
-                          }
-                        >
-                          {cell.unavailable.kind === "leave"
-                            ? "请假"
-                            : cell.unavailable.kind === "blacklist"
-                              ? "黑名单"
-                              : "不可用"}
-                        </Badge>
-                      ) : null}
-                      {courses.length === 0 && !cell?.unavailable ? (
-                        <span className="text-[10px] text-slate-300 dark:text-slate-600">
-                          空闲
-                        </span>
-                      ) : null}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <WeekTimetable
+        caption={`第 ${week} 周课表`}
+        days={days}
+        periods={axisPeriods}
+        blocks={blocks}
+        toolbar={
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-slate-500">
+              {selectedTerm?.name ?? ""} · 课程与请假会直接进入可用性计算
+            </p>
+            <WeekNav
+              label={`第 ${week} 周`}
+              prevDisabled={week <= 1}
+              nextDisabled={week >= weekCount}
+              onPrev={() => setWeek((w) => Math.max(1, w - 1))}
+              onNext={() => setWeek((w) => Math.min(weekCount, w + 1))}
+            />
+          </div>
+        }
+        footer={
+          blocks.length === 0 ? (
+            <p className="text-center text-xs text-slate-500">这一周没有课程或请假，整周空闲。</p>
+          ) : null
+        }
+      />
     );
   })();
 
   return (
     <div className="space-y-4 sm:space-y-5">
-      {termId && personId && <PersonalTimetable key={`${personId}-${termId}-${version}`} personId={personId} termId={termId} week={week} onChanged={()=>setVersion(v=>v+1)}/>}
-      {termId && personId && (
-        <CourseAdjustments
-          key={`${termId}-${personId}-${version}`}
-          termId={termId}
-          personId={personId}
-          week={week}
-          onChanged={() => setVersion((v) => v + 1)}
-        />
-      )}
-      {personId && (
-        <UnavailabilityEditor
-          key={personId}
-          personId={personId}
-          onChanged={() => setVersion((v) => v + 1)}
-        />
-      )}
       <Card
         title="周课表"
         description="按人、按周查看；课程与请假会直接进入可用性计算。"
@@ -422,6 +431,23 @@ export function TimetablePage({
 
         <div className="mt-4">{gridContent}</div>
       </Card>
+      {termId && personId && <PersonalTimetable key={`${personId}-${termId}-${version}`} personId={personId} termId={termId} week={week} onChanged={()=>setVersion(v=>v+1)}/>}
+      {termId && personId && (
+        <CourseAdjustments
+          key={`${termId}-${personId}-${version}`}
+          termId={termId}
+          personId={personId}
+          week={week}
+          onChanged={() => setVersion((v) => v + 1)}
+        />
+      )}
+      {personId && (
+        <UnavailabilityEditor
+          key={personId}
+          personId={personId}
+          onChanged={() => setVersion((v) => v + 1)}
+        />
+      )}
 
       <Card
         title="添加课程"

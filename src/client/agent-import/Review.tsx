@@ -18,6 +18,7 @@ import {
   type Evidence,
 } from "../../shared/agent-import/model";
 import { ProposalEntryEditor } from "./ProposalEntryEditor";
+import { ReviewWeek } from "./ReviewWeek";
 import type { TimetableProposal } from "../../shared/agent-import/timetable";
 import { Button } from "../components/Button";
 import { Field, TextInput, Select } from "../components/Field";
@@ -174,7 +175,10 @@ export function Review({
   };
   const evidence = (entity: Entity, id: string) =>
     evidenceList(job.evidence[entity + ":" + id]);
-  const editButton = (entity: Entity, row: Row) => {
+  const locked =
+    !job.session || ["running", "applied", "cancelled"].includes(job.status);
+  /** 可修改时返回打开编辑器的动作；不可修改的条目返回 null。 */
+  const editAction = (entity: Entity, row: Row): (() => void) | null => {
     if (entity === "timetable_entry") {
       if (
         !Object.values(job.timetables ?? {}).some((t) =>
@@ -187,34 +191,31 @@ export function Review({
       job.base[entity].some((r) => r.id === row.id)
     )
       return null;
-    return (
-      <Button
-        size="sm"
-        variant="ghost"
-        disabled={
-          !job.session ||
-          ["running", "applied", "cancelled"].includes(job.status)
+    return () => {
+      if (entity === "timetable_entry") {
+        const plan = Object.values(job.timetables ?? {}).find((t) =>
+          t.entryIds.includes(row.id),
+        );
+        const index =
+          plan?.entries.findIndex((_, i) => `${plan.id}:${i}` === row.id) ??
+          -1;
+        if (plan && index >= 0) {
+          setProposalEditor({
+            id: plan.id,
+            index,
+            entry: plan.entries[index],
+          });
+          return;
         }
-        onClick={() => {
-          if (entity === "timetable_entry") {
-            const plan = Object.values(job.timetables ?? {}).find((t) =>
-              t.entryIds.includes(row.id),
-            );
-            const index =
-              plan?.entries.findIndex((_, i) => `${plan.id}:${i}` === row.id) ??
-              -1;
-            if (plan && index >= 0) {
-              setProposalEditor({
-                id: plan.id,
-                index,
-                entry: plan.entries[index],
-              });
-              return;
-            }
-          }
-          open(entity, row);
-        }}
-      >
+      }
+      open(entity, row);
+    };
+  };
+  const editButton = (entity: Entity, row: Row) => {
+    const action = editAction(entity, row);
+    if (!action) return null;
+    return (
+      <Button size="sm" variant="ghost" disabled={locked} onClick={action}>
         修改
       </Button>
     );
@@ -367,35 +368,18 @@ export function Review({
         {all.timetable_entry.some(
           (e) => e.person_id === p.id && e.term_id === activeTerm,
         ) && (
-          <div className="grid grid-cols-1 gap-px border border-slate-200 bg-slate-200 sm:grid-cols-7 dark:border-slate-700 dark:bg-slate-700">
-            {["一", "二", "三", "四", "五", "六", "日"].map((day, i) => (
-              <div key={day} className="min-w-0 bg-white p-3 dark:bg-slate-900">
-                <p className="mb-3 text-xs text-slate-500">周{day}</p>
-                {all.timetable_entry
-                  .filter(
-                    (e) =>
-                      e.person_id === p.id &&
-                      e.term_id === activeTerm &&
-                      e.weekday === i + 1 &&
-                      (JSON.parse(String(e.weeks)) as number[]).includes(week),
-                  )
-                  .map((e) => (
-                    <div key={e.id} className="mb-4 text-sm">
-                      <p className="font-medium break-words">{display(e)}</p>
-                      <p className="text-xs text-slate-500">
-                        第 {e.period_from}–{e.period_to} 节
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {String(e.location ?? "")}
-                        {String(e.teacher ?? "")}
-                      </p>
-                      {editButton("timetable_entry", e)}
-                      {evidence("timetable_entry", e.id)}
-                    </div>
-                  ))}
-              </div>
-            ))}
-          </div>
+          <ReviewWeek
+            entries={all.timetable_entry.filter(
+              (e) =>
+                e.person_id === p.id &&
+                e.term_id === activeTerm &&
+                (JSON.parse(String(e.weeks)) as number[]).includes(week),
+            )}
+            profiles={all.timetable_profile}
+            week={week}
+            title={(e) => display(e)}
+            onEdit={(e) => (locked ? null : editAction("timetable_entry", e))}
+          />
         )}
         {!all.timetable_entry.some((e) => e.person_id === p.id) &&
           !Object.values(job.timetables ?? {}).some(
@@ -434,6 +418,7 @@ export function Review({
                 {display(all.term.find((t) => t.id === e.term_id) ?? e)} · 周
                 {e.weekday} · {e.weeks}周 · {e.period_from}–{e.period_to}节{" "}
                 {editButton("timetable_entry", e)}
+                {evidence("timetable_entry", e.id)}
               </p>
             ))}
         </details>

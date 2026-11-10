@@ -33,6 +33,7 @@
   font-family: var(--font-sans);
   color-scheme: light;
   -webkit-text-size-adjust: 100%;
+  --tt-outline-bg: rgb(255 255 255 / 0.88);
 }
 [data-theme="dark"] {
   color-scheme: dark;
@@ -41,6 +42,7 @@
   --color-indigo-600: #f0a35e;
   --color-indigo-500: #f5b67c;
   --color-indigo-700: #e29651;
+  --tt-outline-bg: rgb(23 24 28 / 0.88);
 }
 body {
   margin: 0;
