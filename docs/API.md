@@ -110,28 +110,34 @@
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| `POST` | `/free-windows` | **只算不写**：接下来 N 天内最多人整段有空的 M 个不重叠时段，附名单与热力图 |
+| `POST` | `/free-windows` | **只算不写**：给定时长的活动，在所选日期范围内最合适的 M 个时间，附到场/缺席名单与热力图 |
+| `GET` | `/meal-blocks` | 全组织统一的饭点（只读，`{ items: MealBlock[] }`），排班课表与找时间面板用来画斜纹 |
 
 请求体 `FreeWindowsInput`（类型见 `src/shared/types.ts`）：
 
 | 字段 | 默认 | 约束 |
 | --- | --- | --- |
 | `personIds` | 必填 | 1–300 个已存在的人员 ID；前端由「所选部门的有效成员 ∪ 额外添加 − 勾掉的人」得出 |
-| `requiredPersonIds` | `[]` | 须包含在 `personIds` 中；任一必到者不是整段有空的时段不返回 |
-| `days` | 7 | 1–28；从此刻向上取整到 15 分钟开始，今天已过去的部分跳过 |
-| `count` | 5 | 1–20，返回的时段互不重叠 |
-| `dayStart` / `dayEnd` | `08:00` / `22:00` | `HH:mm`，15 分钟对齐，`dayEnd` 可为 `24:00`，至少相隔 1 小时 |
+| `requiredPersonIds` | `[]` | 须包含在 `personIds` 中；任一必到者不是整段有空的时间不返回 |
+| `durationMinutes` | 60 | 30–480，15 的整数倍；每日范围不得短于此值 |
+| `mode` | `all` | `all` 尽量全员；`quorum` 至少 `minAttendees` 人；`meal` 聚餐 |
+| `minAttendees` | 1 | 仅 `quorum`，1–人数 |
+| `fromDate` | 今天 | `YYYY-MM-DD`（北京时间）；早于今天按今天，今天从此刻向上取整到 15 分钟开始 |
+| `days` | 7 | 1–28，从 `fromDate` 起 |
+| `count` | 5 | 1–20，互不重叠，每天最多 2 个 |
+| `dayStart` / `dayEnd` | `08:00` / `22:00` | `HH:mm`，15 分钟对齐，`dayEnd` 可为 `24:00` |
 | `weekdays` | 1–7 全选 | 1=周一 … 7=周日 |
 | `bufferMinutes` | 0 | 0–120，每段忙碌前后各加此分钟数 |
 
 规则：
 
-- 「有空」= 整段时段内没有任何忙碌。忙碌来源：课程 occurrence（停课除外）、个人课表事件、已批准请假/黑名单、任意部门 `proposed/confirmed/completed` 的排班（班次未取消）。
-- 当天没有学期覆盖（`start_date` + `week_count` 周），或此人在覆盖学期没有任何选课/个人课表条目时记为**未知**：不计入有空人数，必到者未知视为不满足。
-- 开始时间按 15 分钟对齐；时长为 30 分钟的整数倍且 ≥ 60 分钟，不设上限。先保证人数最多，再在同一批人都有空的前提下尽量延长。
-- 排序：有空人数↓ → 时长↓ → 开始时间↑，按此顺序贪心选取不重叠的前 `count` 个；与已选时段重叠的候选会截到其之前（仍需 ≥ 1 小时）后继续参与排序。
+- 「能到」= 活动整段内没有任何忙碌。忙碌来源：课程 occurrence（停课除外）、个人课表事件、已批准请假/黑名单、任意部门 `proposed/confirmed/completed` 的排班（班次未取消）。
+- 当天没有学期覆盖（`start_date` + `week_count` 周），或此人在覆盖学期没有任何选课/个人课表条目时记为**未知**：不算能到，必到者未知视为不满足。
+- 饭点读取 `/admin/settings` 的 `mealBlocks`（缺省午饭 12:00–13:30、晚饭 17:30–18:30）。`all` / `quorum` 的活动不得与任何饭点重叠；`meal` 的活动须与某个饭点重叠至少 30 分钟（活动更短时为整段），并优先最贴合饭点的开始时间。
+- 开始时间按 15 分钟对齐。同一天里连续可行、到场名单完全相同的开始时间合并为一个可挪动区间（`flexStart`–`flexEnd`），只推荐区间内最舒服的开始时间：前后紧挨其他安排的到场者最少、整点/半点优先、越早越好。
+- 排序：`all` / `meal` 为到场人数↓ → 舒适度 → 紧挨人数↑ → 时间↑；`quorum` 为舒适度 → 到场人数↓ → 紧挨人数↑ → 时间↑。舒适度按周末、早于 08:00 开始、晚于 21:30 结束各计 1。按此顺序贪心选取不重叠、每天最多 2 个的前 `count` 个。
 
-返回 `FreeWindowsResult`：`windows[]` 含 `startsAt/endsAt/minutes` 与 `free`（人员 ID）、`busy`（`{personId, reason: course|leave|blacklist|assignment, label}`，取时段内第一条冲突）、`unknown`；`heatmap[]` 每天一行，`free`/`unknown` 为每 15 分钟整格有空/未知人数；`people` 为参与人员及是否必到。无结果时 `emptyReason` 为 `no_days` / `window_too_short` / `required_unavailable` / `no_free_time`。
+返回 `FreeWindowsResult`：`windows[]` 含 `startsAt/endsAt/minutes`（活动时长）、`flexStart/flexEnd`、`free`（能到的人员 ID）、`busy`（`{personId, reason: course|leave|blacklist|assignment, label}`，取时段内第一条冲突）、`unknown`、`tight`（能到但前后紧挨其他安排）、`notes`（`weekend|early|late`）；`heatmap[]` 每天一行，`free`/`unknown` 为每 15 分钟整格有空/未知人数；另回显 `durationMinutes`、`mode`、`minAttendees`、`mealBlocks` 与 `people`。无结果时 `emptyReason` 为 `no_days` / `window_too_short` / `meal_conflict`（扣除饭点放不下，或聚餐时范围不含饭点）/ `required_unavailable` / `quorum_unreachable` / `no_free_time`；`bestAttendees` 为满足饭点与必到条件时最多能到的人数。
 
 固定北京时间（+08:00）；接口只读，不写审计。
 
@@ -169,8 +175,8 @@
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| `GET` | `/admin/settings` | 权重、冷却、导入默认 provider |
-| `PUT` | `/admin/settings` | 覆盖写 |
+| `GET` | `/admin/settings` | 权重、冷却、导入默认 provider、导出是否含手机号、饭点 `mealBlocks` |
+| `PUT` | `/admin/settings` | 覆盖写；`mealBlocks` 最多 6 段，名称 1–20 字，15 分钟对齐，结束晚于开始且互不重叠 |
 | `GET` | `/admin/llm-providers` | 列表（密钥只回名字） |
 | `POST` | `/admin/llm-providers` | 新增 |
 | `PATCH` | `/admin/llm-providers/:id` | 改配置，写 SQLite 设置版本号即时生效 |
